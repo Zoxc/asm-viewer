@@ -2046,7 +2046,8 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
 /// two of them on the export and the entry point and the third on a function nothing names;
 /// a Mach-O executable whose entry point is its `LC_MAIN`, beside the one function its
 /// symbol table names; and the images whose functions' stated addresses are not their code's:
-/// an ARM one with Thumb functions, a PPC64 ELFv1 one and two XCOFF ones with descriptors.
+/// an ARM ELF, two MIPS ones, an ARMNT DLL and two armv7 Mach-O ones whose addresses carry a
+/// mode bit, and a PPC64 ELFv1 one and two XCOFF ones with descriptors.
 /// An `.o` declares none of these, so a corpus of relocatable objects leaves the export,
 /// entry-point and unwind paths unexercised entirely.
 pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
@@ -2115,6 +2116,11 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
             2,
         ),
         ("arm thumb", arm_thumb_image(), 5),
+        ("mips32 compressed", mips_compressed_image(false), 5),
+        ("mips64 compressed", mips_compressed_image(true), 5),
+        ("armnt dll", armnt_dll(), 2),
+        ("armv7 mach-o, LC_MAIN", macho_arm_executable(false), 3),
+        ("armv7 mach-o, LC_UNIXTHREAD", macho_arm_executable(true), 3),
         ("ppc64 elfv1", ppc64_elfv1_image(), 3),
         ("xcoff32", xcoff_image(false, XCOFF_DATA), 1),
         ("xcoff64", xcoff_image(true, XCOFF_DATA), 1),
@@ -2341,44 +2347,89 @@ pub const ARM_TEXT: u64 = 0x8000;
 /// function at an even address, and a data symbol at an odd one in `.text`, which is
 /// exported and not a function, so its address is not tagged.
 pub fn arm_thumb_image() -> Vec<u8> {
+    tagged_elf_image(
+        ["thumb_fn", "arm_fn", "thumb_export"],
+        ElfImage {
+            is_64: false,
+            big_endian: false,
+            machine: 40,        // EM_ARM
+            flags: 0x0500_0000, // EABI version 5
+            entry: 0,
+            sections: &[],
+            symbols: &[],
+            dynamic: &[],
+        },
+        ARM_TEXT,
+    )
+}
+
+/// Where [`mips_compressed_image`] puts its code.
+pub const MIPS_TEXT: u64 = 0x40_0000;
+
+/// A MIPS executable, 32-bit big-endian or 64-bit little-endian, whose MIPS16 and microMIPS
+/// functions state their addresses with bit 0 set: `mips16_fn` at `.text + 1` in `.symtab`,
+/// an odd `STT_FUNC` that binutils reads as compressed; `micromips_export` at `.text + 9`
+/// in `.dynsym`, where GNU ld and lld both keep the bit; and the entry point at
+/// `.text + 0x11`, as both linkers write it. Beside them, a MIPS function at an even
+/// address, and a data symbol at an odd one in `.text`, which is not tagged.
+pub fn mips_compressed_image(is_64: bool) -> Vec<u8> {
+    tagged_elf_image(
+        ["mips16_fn", "mips_fn", "micromips_export"],
+        ElfImage {
+            is_64,
+            big_endian: !is_64,
+            machine: 8, // EM_MIPS
+            // EF_MIPS_ARCH_32 or EF_MIPS_ARCH_64.
+            flags: if is_64 { 0x6000_0000 } else { 0x5000_0000 },
+            entry: 0,
+            sections: &[],
+            symbols: &[],
+            dynamic: &[],
+        },
+        MIPS_TEXT,
+    )
+}
+
+/// The image [`arm_thumb_image`] and [`mips_compressed_image`] both are, for `machine`'s
+/// header and with `names` for the tagged function, the untagged one and the tagged
+/// export: `.text` at `text`, `.data` a page after it, and every address stated as the
+/// linker writes it.
+fn tagged_elf_image(names: [&str; 3], machine: ElfImage, text: u64) -> Vec<u8> {
+    let [tagged, untagged, export] = names;
     elf_image(ElfImage {
-        is_64: false,
-        big_endian: false,
-        machine: 40,        // EM_ARM
-        flags: 0x0500_0000, // EABI version 5
-        entry: ARM_TEXT + 0x11,
+        entry: text + 0x11,
         sections: &[
             ImageSection {
                 name: ".text",
-                address: ARM_TEXT,
+                address: text,
                 code: true,
                 bytes: &[0; 0x14],
             },
             ImageSection {
                 name: ".data",
-                address: 0x9000,
+                address: text + 0x1000,
                 code: false,
                 bytes: &[0; 8],
             },
         ],
         symbols: &[
             ImageSymbol {
-                name: "thumb_fn",
-                value: ARM_TEXT + 1,
+                name: tagged,
+                value: text + 1,
                 size: 4,
                 kind: STT_FUNC,
                 section: 0,
             },
             ImageSymbol {
-                name: "arm_fn",
-                value: ARM_TEXT + 4,
+                name: untagged,
+                value: text + 4,
                 size: 4,
                 kind: STT_FUNC,
                 section: 0,
             },
             ImageSymbol {
                 name: "a_datum",
-                value: 0x9001,
+                value: text + 0x1001,
                 size: 1,
                 kind: STT_OBJECT,
                 section: 1,
@@ -2386,21 +2437,254 @@ pub fn arm_thumb_image() -> Vec<u8> {
         ],
         dynamic: &[
             ImageSymbol {
-                name: "thumb_export",
-                value: ARM_TEXT + 9,
+                name: export,
+                value: text + 9,
                 size: 4,
                 kind: STT_FUNC,
                 section: 0,
             },
             ImageSymbol {
                 name: "odd_datum",
-                value: ARM_TEXT + 0xd,
+                value: text + 0xd,
                 size: 1,
                 kind: STT_OBJECT,
                 section: 0,
             },
         ],
+        ..machine
     })
+}
+
+/// Where [`armnt_dll`] is loaded and puts its code.
+pub const ARMNT_BASE: u64 = 0x1000_0000;
+pub const ARMNT_TEXT: u64 = ARMNT_BASE + 0x1000;
+
+/// An ARMNT (32-bit ARM Windows) PE32 DLL whose export table and entry point state Thumb
+/// code with bit 0 set, as `link.exe` and `lld-link` write them: `thumb_fn` at `.text + 1`
+/// and the entry point at `.text + 5`. `odd_datum` is exported at an odd address in
+/// `.rdata`. No symbol table, as such a DLL ships.
+pub fn armnt_dll() -> Vec<u8> {
+    const TEXT_RVA: u32 = 0x1000;
+    const RDATA_RVA: u32 = 0x2000;
+    const OPTIONAL: usize = 224;
+    let put16 = |out: &mut [u8], at: usize, value: u16| {
+        out[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    };
+    let put32 = |out: &mut [u8], at: usize, value: u32| {
+        out[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    };
+
+    // The export directory, its three arrays, then the names; each name's ordinal is its
+    // function's index, and the names are in sorted order as a linker writes them.
+    let mut rdata = vec![0u8; 0x100];
+    let functions = 40;
+    let names = functions + 8;
+    let ordinals = names + 8;
+    let strings = ordinals + 4;
+    let text = b"fixture.dll\0odd_datum\0thumb_fn\0";
+    rdata[strings..strings + text.len()].copy_from_slice(text);
+    let string = |offset: usize| RDATA_RVA + (strings + offset) as u32;
+    put32(&mut rdata, 12, string(0)); // Name
+    put32(&mut rdata, 16, 1); // Base
+    put32(&mut rdata, 20, 2); // NumberOfFunctions
+    put32(&mut rdata, 24, 2); // NumberOfNames
+    put32(&mut rdata, 28, RDATA_RVA + functions as u32);
+    put32(&mut rdata, 32, RDATA_RVA + names as u32);
+    put32(&mut rdata, 36, RDATA_RVA + ordinals as u32);
+    put32(&mut rdata, functions, TEXT_RVA + 1); // thumb_fn
+    put32(&mut rdata, functions + 4, RDATA_RVA + 0xc1); // odd_datum
+    put32(&mut rdata, names, string(12));
+    put32(&mut rdata, names + 4, string(22));
+    put16(&mut rdata, ordinals, 1);
+    put16(&mut rdata, ordinals + 2, 0);
+
+    let mut out = vec![0u8; 0x600];
+    out[..2].copy_from_slice(b"MZ");
+    put32(&mut out, 0x3c, 0x40); // e_lfanew
+    out[0x40..0x44].copy_from_slice(b"PE\0\0");
+    // The COFF header: Machine, NumberOfSections, then SizeOfOptionalHeader and
+    // Characteristics (EXECUTABLE_IMAGE | 32BIT_MACHINE | DLL).
+    put16(&mut out, 0x44, 0x1c4);
+    put16(&mut out, 0x46, 2);
+    put16(&mut out, 0x54, OPTIONAL as u16);
+    put16(&mut out, 0x56, 0x2102);
+    // The PE32 optional header.
+    let opt = 0x58;
+    put16(&mut out, opt, 0x10b);
+    put32(&mut out, opt + 16, TEXT_RVA + 5); // AddressOfEntryPoint
+    put32(&mut out, opt + 20, TEXT_RVA); // BaseOfCode
+    put32(&mut out, opt + 24, RDATA_RVA); // BaseOfData
+    put32(&mut out, opt + 28, ARMNT_BASE as u32);
+    put32(&mut out, opt + 32, 0x1000); // SectionAlignment
+    put32(&mut out, opt + 36, 0x200); // FileAlignment
+    put32(&mut out, opt + 56, 0x3000); // SizeOfImage
+    put32(&mut out, opt + 60, 0x200); // SizeOfHeaders
+    put32(&mut out, opt + 92, 16); // NumberOfRvaAndSizes
+    put32(&mut out, opt + 96, RDATA_RVA); // the export directory
+    put32(&mut out, opt + 100, rdata.len() as u32);
+    // Two section headers: name, VirtualSize, VirtualAddress, SizeOfRawData,
+    // PointerToRawData, then Characteristics.
+    for (index, (name, rva, pointer, characteristics)) in [
+        (&b".text"[..], TEXT_RVA, 0x200, 0x6000_0020),
+        (&b".rdata"[..], RDATA_RVA, 0x400, 0x4000_0040),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let header = opt + OPTIONAL + 40 * index;
+        out[header..header + name.len()].copy_from_slice(name);
+        put32(&mut out, header + 8, 0x100);
+        put32(&mut out, header + 12, rva);
+        put32(&mut out, header + 16, 0x200);
+        put32(&mut out, header + 20, pointer);
+        put32(&mut out, header + 36, characteristics);
+    }
+    // Thumb `nop`s, then `bx lr`.
+    for at in (0x200..0x210).step_by(2) {
+        put16(&mut out, at, 0xbf00);
+    }
+    put16(&mut out, 0x210, 0x4770);
+    out[0x400..0x400 + rdata.len()].copy_from_slice(&rdata);
+    out
+}
+
+/// Where [`macho_arm_executable`] puts its code: `__TEXT` at [`MACHO_ARM_BASE`], holding
+/// the file from its first byte, and `__text` at [`MACHO_CODE_OFFSET`] into it.
+pub const MACHO_ARM_BASE: u64 = 0x4000;
+pub const MACHO_ARM_TEXT: u64 = MACHO_ARM_BASE + MACHO_CODE_OFFSET;
+
+/// An armv7 Mach-O executable, stated as `ld64` writes one with Thumb code. `_thumb_fn`
+/// at `__text`'s first byte is in the symbol table at its even address, flagged
+/// `N_ARM_THUMB_DEF`, and in the export trie with bit 0 set; `_only_exported`, at 8, is in
+/// the trie alone, also with bit 0 set. The entry point is at 4, with bit 0 set: in
+/// `LC_MAIN`'s `entryoff`, or, with `thread`, in the PC of an `LC_UNIXTHREAD` instead.
+pub fn macho_arm_executable(thread: bool) -> Vec<u8> {
+    use object::macho;
+    use object::write::macho::{
+        Encoder, MachHeader, Nlist, SectionHeader, SegmentCommand, SymtabCommand,
+    };
+
+    const CODE_LEN: u64 = 0x20;
+    const TRIE: u64 = MACHO_CODE_OFFSET + CODE_LEN;
+    const NAMES: &[u8] = b"\0_thumb_fn\0";
+    let name = |name: &[u8]| {
+        let mut padded = [0; 16];
+        padded[..name.len()].copy_from_slice(name);
+        padded
+    };
+    // Thumb `nop`s.
+    let code = [0x00, 0xbf].repeat(CODE_LEN as usize / 2);
+
+    // The export trie: a root with an edge to each name, and a terminal node under each
+    // holding its flags (0, a regular export) and its offset from `__TEXT` as a ULEB128.
+    let mut trie = vec![0, 2];
+    let edges = [&b"_thumb_fn\0"[..], &b"_only_exported\0"[..]];
+    let first = trie.len() + edges.iter().map(|edge| edge.len() + 1).sum::<usize>();
+    for (index, edge) in edges.iter().enumerate() {
+        trie.extend_from_slice(edge);
+        trie.push((first + 5 * index) as u8);
+    }
+    for offset in [MACHO_CODE_OFFSET + 1, MACHO_CODE_OFFSET + 9] {
+        trie.extend_from_slice(&[3, 0, (offset & 0x7f) as u8 | 0x80, (offset >> 7) as u8, 0]);
+    }
+    let symbols = TRIE + trie.len().next_multiple_of(4) as u64;
+
+    let encoder = Encoder::new(Endianness::Little, false);
+    let mut commands = Vec::new();
+    let segment = |commands: &mut Vec<u8>, segname, vmaddr, vmsize, filesize, nsects| {
+        let prot = if nsects == 0 {
+            macho::VmProt(0)
+        } else {
+            macho::VM_PROT_READ | macho::VM_PROT_EXECUTE
+        };
+        encoder.segment_command(
+            commands,
+            &SegmentCommand {
+                segname: name(segname),
+                vmaddr,
+                vmsize,
+                fileoff: 0,
+                filesize,
+                maxprot: prot,
+                initprot: prot,
+                nsects,
+                flags: macho::SegmentFlags(0),
+            },
+        );
+    };
+    segment(&mut commands, b"__PAGEZERO", 0, MACHO_ARM_BASE, 0, 0);
+    segment(&mut commands, b"__TEXT", MACHO_ARM_BASE, TRIE, TRIE, 1);
+    encoder.section_header(
+        &mut commands,
+        &SectionHeader {
+            sectname: name(b"__text"),
+            segname: name(b"__TEXT"),
+            addr: MACHO_ARM_TEXT,
+            size: CODE_LEN,
+            offset: MACHO_CODE_OFFSET as u32,
+            align: 1,
+            reloff: 0,
+            nreloc: 0,
+            flags: macho::S_ATTR_PURE_INSTRUCTIONS | macho::S_ATTR_SOME_INSTRUCTIONS,
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: 0,
+        },
+    );
+    if thread {
+        // ARM_THREAD_STATE and its 17 words: r0 to r12, sp, lr, pc and cpsr.
+        let mut state = [1u32, 17].to_vec();
+        state.extend([0; 17]);
+        state[2 + 15] = (MACHO_ARM_TEXT + 5) as u32;
+        let state: Vec<u8> = state.iter().flat_map(|word| word.to_le_bytes()).collect();
+        encoder.load_command(&mut commands, macho::LC_UNIXTHREAD, &state);
+    } else {
+        let mut main = (MACHO_CODE_OFFSET + 5).to_le_bytes().to_vec();
+        main.extend_from_slice(&[0; 8]);
+        encoder.load_command(&mut commands, macho::LC_MAIN, &main);
+    }
+    let mut exports = (TRIE as u32).to_le_bytes().to_vec();
+    exports.extend_from_slice(&(trie.len() as u32).to_le_bytes());
+    encoder.load_command(&mut commands, macho::LC_DYLD_EXPORTS_TRIE, &exports);
+    encoder.symtab_command(
+        &mut commands,
+        &SymtabCommand {
+            symoff: symbols as u32,
+            nsyms: 1,
+            stroff: symbols as u32 + encoder.nlist_size() as u32,
+            strsize: NAMES.len() as u32,
+        },
+    );
+
+    let mut file = Vec::new();
+    encoder.mach_header(
+        &mut file,
+        &MachHeader {
+            cputype: macho::CPU_TYPE_ARM,
+            cpusubtype: macho::CPU_SUBTYPE_ARM_V7.into(),
+            filetype: macho::MH_EXECUTE,
+            ncmds: 5,
+            sizeofcmds: commands.len() as u32,
+            flags: macho::FileFlags(0),
+        },
+    );
+    file.extend_from_slice(&commands);
+    file.resize(MACHO_CODE_OFFSET as usize, 0);
+    file.extend_from_slice(&code);
+    file.extend_from_slice(&trie);
+    file.resize(symbols as usize, 0);
+    encoder.nlist(
+        &mut file,
+        &Nlist {
+            n_strx: 1,
+            n_type: macho::N_SECT | macho::N_EXT,
+            n_sect: 1,
+            n_desc: macho::N_ARM_THUMB_DEF,
+            n_value: MACHO_ARM_TEXT,
+        },
+    );
+    file.extend_from_slice(NAMES);
+    file
 }
 
 /// Where [`ppc64_elfv1_image`] puts its code and its descriptors.

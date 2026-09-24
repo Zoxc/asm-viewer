@@ -1,5 +1,5 @@
 use super::{read_uint, relocate, write_uint};
-use crate::sections::section_biases;
+use crate::sections::{bias_of, section_biases};
 use crate::SectionAddress;
 use gimli::RunTimeEndian::{Big, Little};
 use object::{
@@ -176,4 +176,65 @@ fn a_mach_o_section_relocation_counts_the_section_address_once() {
     relocate(&mut data, &file, &section, Little, &biases);
     let placed = SectionAddress::new(init.address() + 2).placed(biases[&init.index()]);
     assert_eq!(read_uint(&data, Little), placed.get());
+}
+
+/// A 32-bit ARM relocatable object states a Thumb function's value with bit 0 set, so a
+/// debug field relocated against it would read one byte past the function the parse puts at
+/// the even address. Here `thumb_fn` at 1 in `.text` and `odd_datum`, data at 1 in `.data`:
+/// the first field comes out at `.text`'s placed start, and the second, whose symbol is no
+/// function, a byte into `.data`.
+#[test]
+fn a_relocation_against_a_thumb_function_resolves_to_its_code() {
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::Arm, Endianness::Little);
+    let text = obj.section_id(write::StandardSection::Text);
+    obj.append_section_data(text, &[0; 8], 4);
+    let data = obj.section_id(write::StandardSection::Data);
+    obj.append_section_data(data, &[0; 8], 4);
+    let mut symbol = |name: &[u8], kind, section| {
+        obj.add_symbol(write::Symbol {
+            name: name.to_vec(),
+            value: 1,
+            size: 4,
+            kind,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(section),
+            flags: SymbolFlags::None,
+        })
+    };
+    let thumb_fn = symbol(b"thumb_fn", SymbolKind::Text, text);
+    let odd_datum = symbol(b"odd_datum", SymbolKind::Data, data);
+    let debug = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);
+    obj.append_section_data(debug, &[0; 8], 1);
+    for (offset, symbol) in [(0, thumb_fn), (4, odd_datum)] {
+        obj.add_relocation(
+            debug,
+            write::Relocation {
+                offset,
+                symbol,
+                addend: 0,
+                flags: RelocationFlags::Elf {
+                    r_type: object::elf::R_ARM_ABS32,
+                },
+            },
+        )
+        .expect("adding a relocation");
+    }
+    let bytes = obj.write().expect("writing the fixture object");
+
+    let file = object::File::parse(&*bytes).expect("parsing the fixture object");
+    let section = file
+        .section_by_name(".debug_info")
+        .expect("the fixture has a debug section");
+    let mut data = section.data().expect("the debug section reads").to_vec();
+    let biases = section_biases(&file).biases;
+    relocate(&mut data, &file, &section, Little, &biases);
+    let placed = |name, offset| {
+        let section = file.section_by_name(name).expect("the fixture's section");
+        SectionAddress::new(offset)
+            .placed(bias_of(&biases, Some(section.index())))
+            .get()
+    };
+    assert_eq!(read_uint(&data[..4], Little), placed(".text", 0));
+    assert_eq!(read_uint(&data[4..], Little), placed(".data", 1));
 }

@@ -127,15 +127,25 @@ it. `known` holds placed addresses, so a name at the same offset of another sect
 relocatable object is another place and claims nothing. Not quite always: a claimant outside every
 code section's bytes drops the symbol without taking its place, and the symbol below then runs on to
 the next one listed. It takes an unreadable name to get there. The section comes from looking the address up in the kept **text** sections, which
-doubles as the filter keeping exported *data* out. A relocatable object is skipped entirely:
+doubles as the filter keeping exported *data* out. A bad export is skipped and the walk reads on,
+except in a Mach-O's export trie, where `object` answers the same error forever and the first one
+ends the walk (`notes/upstream/object.md`). A relocatable object is skipped entirely:
 `entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. For a Mach-O,
 `entry()` answers an `LC_MAIN` as a file offset, so `macho_entry` walks the load commands
 itself and is not asked at all: an `LC_MAIN`'s offset is placed through the segment whose file
 bytes hold it (no such segment, no entry point), and an `LC_UNIXTHREAD`'s PC is read as
 `object` reads it (`notes/upstream/object.md`). **A function's stated address is read through to
-its code** (`CodeAddresses`), on the three formats where `object` hands over a number that is not
-the code's. On 32-bit ARM ELF, bit 0 of an `STT_FUNC`'s value and of `e_entry` is the Thumb flag,
-and is cleared; only functions carry it, and the parse takes no other kind. On PPC64 ELFv1 a
+its code** (`CodeAddresses`), on the formats where `object` hands over a number that is not the
+code's. Where bit 0 says which instruction set the code is in, it is cleared, and `ModeBit` says
+which addresses carry it. On 32-bit ARM ELF (Thumb) and MIPS ELF (MIPS16, microMIPS) it is an
+`STT_FUNC`'s value and `e_entry`; only functions carry it, and the parse takes no other kind. MIPS
+toolchains differ: GNU ld and lld set it in `.dynsym` and `e_entry` and clear it in `.symtab`, which
+flags `st_other` instead, and binutils reads an odd `STT_FUNC` as tagged anyway, so every function's
+is cleared. On an ARMNT PE and an armv7 Mach-O it is the entry point and the exports (`ld64` and
+`lld-link` both set it); a Mach-O symbol's value is even, `ld64` flagging a Thumb one in `n_desc`.
+An export table says nothing of what an export is, so a data export is cleared too, and dropped
+anyway for being in no code section. A DWARF relocation against a tagged function in a `.o` takes
+the same address (`symbol_address`), so its line info starts where its symbol does. On PPC64 ELFv1 a
 function's symbol and `e_entry` name a descriptor in `.opd`, whose first doubleword is the code's
 address; the symbol's size is the descriptor's, so none is kept. In a relocatable object that
 doubleword is 0 until the linker writes it, so the relocation that fills it is read instead. A
@@ -957,7 +967,7 @@ the sidebar's question.
 **"Never panic on any file input" is tested two ways, and they are different jobs.**
 `tests/mutations.rs` is the **search**. It takes every fixture the suite builds (both committed gcc
 objects and gcc's stripped `.so`, the synthesized DWARF one, the ELF `.so`, the PE DLL and the same
-DLL naming a `.pdb` that is nowhere, the Mach-O executable, the ARM, PPC64 and XCOFF images whose
+DLL naming a `.pdb` that is nowhere, the Mach-O executable, the ARM, MIPS, ARMNT, armv7 Mach-O, PPC64 and XCOFF images whose
 functions' stated addresses are not their code's, and a PPC64 `.o` whose descriptor only a
 relocation fills) and the six that are files on disk, the linker's three DLLs
 each parsed **beside its PDB** and those PDBs themselves. It truncates each at every length; writes

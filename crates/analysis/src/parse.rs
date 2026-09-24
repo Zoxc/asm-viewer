@@ -78,9 +78,9 @@ struct SymbolTable {
 /// (`unwind`, out of [`unwind::entries`]). A stripped shared library is otherwise a file with
 /// nothing in it, and a `/DEBUG` image has no symbol table at all.
 /// Every address here is one the file — or the debug file matched to it by GUID and age —
-/// states outright, so the "nothing is scanned for" rule still holds. A function's and the
-/// entry point's are read through to the code first, where the format tags them or points
-/// at a descriptor ([`CodeAddresses`]).
+/// states outright, so the "nothing is scanned for" rule still holds. A function's, an
+/// export's and the entry point's are read through to the code first, where the format
+/// tags them or points at a descriptor ([`CodeAddresses`]).
 ///
 /// Three decisions the caller depends on:
 ///
@@ -180,17 +180,25 @@ fn declared_code(
     }
 
     // `exports` reports one entry at a time, so a malformed one is skipped rather than
-    // taken as the end of the table. An export names a place in this image only when it
-    // has a name and an address: one identified by ordinal has nothing to draw, and a
-    // forwarder or a re-export names a place in another image. The name is the file's, and
-    // on a Windows DLL very often MSVC-mangled.
-    for export in file.exports().into_iter().flatten().flatten() {
+    // taken as the end of the table. Not in a Mach-O export trie: past a bad node `object`
+    // hands back the same error forever (`notes/upstream/object.md`), so there the first
+    // error ends the walk. An export names a place in this image only when it has a name
+    // and an address: one identified by ordinal has nothing to draw, and a forwarder or a
+    // re-export names a place in another image. The name is the file's, and on a Windows
+    // DLL very often MSVC-mangled.
+    let stuck_at_error = file.format() == BinaryFormat::MachO;
+    for export in file.exports().into_iter().flatten() {
+        let export = match export {
+            Ok(export) => export,
+            Err(_) if stuck_at_error => break,
+            Err(_) => continue,
+        };
         let ExportTarget::Address { address } = export.target() else {
             continue;
         };
         // An ELF's exports are its `.dynsym` again. One whose code the walk above found
         // elsewhere is that function, and taken as stated it would be a byte into it
-        // (Thumb) or its descriptor.
+        // (a mode bit) or its descriptor.
         if moved.contains(&address) {
             continue;
         }
@@ -202,7 +210,7 @@ fn declared_code(
         }
         take(
             Name::Symbol(String::from_utf8_lossy(name).into_owned()),
-            SectionAddress::new(address),
+            SectionAddress::new(addresses.export(address)),
             None,
         );
     }
@@ -306,9 +314,9 @@ struct Code {
     size: Option<u64>,
 }
 
-/// How the numbers a file states for its functions and its entry point become the addresses
-/// of their code. On most formats they already are. On three, `object` hands them over as
-/// the file states them, and they are not (`notes/upstream/object.md`).
+/// How the numbers a file states for its functions, its exports and its entry point become
+/// the addresses of their code. On most formats they already are. On some, `object` hands
+/// them over as the file states them, and they are not (`notes/upstream/object.md`).
 struct CodeAddresses<'data, 'file> {
     rule: Rule<'data, 'file>,
     /// How many functions were left out because their descriptor could not be read.
@@ -318,8 +326,8 @@ struct CodeAddresses<'data, 'file> {
 enum Rule<'data, 'file> {
     /// Each number is the code's address.
     Direct,
-    /// 32-bit ARM ELF: bit 0 of a function's address is the Thumb flag ([`thumb_code`]).
-    Thumb,
+    /// Bit 0 of a code address is an instruction-set flag ([`ModeBit`]).
+    ModeBit(ModeBit),
     /// PPC64 ELFv1: a function's symbol and the entry point name its descriptor in `.opd`
     /// ([`opd_code`]).
     Opd(Opd<'data, 'file>),
@@ -354,10 +362,15 @@ impl<'data, 'file> Opd<'data, 'file> {
 
 impl<'data, 'file> CodeAddresses<'data, 'file> {
     fn of(file: &'file object::File<'data>) -> Self {
-        let rule = match (file.format(), file.architecture(), file.flags()) {
-            (BinaryFormat::Elf, Architecture::Arm, _) => Rule::Thumb,
+        let rule = match (
+            ModeBit::of(file),
+            file.format(),
+            file.architecture(),
+            file.flags(),
+        ) {
+            (Some(mode_bit), ..) => Rule::ModeBit(mode_bit),
             // ABI 2 has no descriptors; 0 is "unstated", and has them where there is an `.opd`.
-            (BinaryFormat::Elf, Architecture::PowerPc64, FileFlags::Elf { e_flags, .. })
+            (_, BinaryFormat::Elf, Architecture::PowerPc64, FileFlags::Elf { e_flags, .. })
                 if e_flags.ppc64_abi() != 2 =>
             {
                 match file.section_by_name(".opd") {
@@ -365,7 +378,7 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
                     None => Rule::Direct,
                 }
             }
-            (BinaryFormat::Xcoff, _, _) => Rule::Xcoff,
+            (_, BinaryFormat::Xcoff, _, _) => Rule::Xcoff,
             _ => Rule::Direct,
         };
         CodeAddresses {
@@ -378,8 +391,8 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
     /// cannot be read. Only a function's: a data symbol's address is never tagged.
     fn function(&self, file: &object::File<'data>, symbol: Code) -> Option<Code> {
         match &self.rule {
-            Rule::Thumb => Some(Code {
-                address: thumb_code(symbol.address),
+            Rule::ModeBit(ModeBit::Functions) => Some(Code {
+                address: mode_bit_cleared(symbol.address),
                 ..symbol
             }),
             // A symbol outside `.opd` names code already: older toolchains' `.foo`.
@@ -396,7 +409,7 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
     /// descriptor that cannot be read.
     fn entry(&self, file: &object::File<'data>, entry: u64) -> Option<u64> {
         let code = match &self.rule {
-            Rule::Thumb => return Some(thumb_code(entry)),
+            Rule::ModeBit(_) => return Some(mode_bit_cleared(entry)),
             Rule::Opd(opd) if at(&opd.section, entry).is_some() => {
                 opd_code(file, opd, entry).map(|code| code.address)
             }
@@ -405,6 +418,15 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
         };
         self.count(code.is_none());
         code
+    }
+
+    /// The code at an address the export table states. Only a PE's and a Mach-O's: an
+    /// ELF's exports are its `.dynsym`, read through [`function`](Self::function).
+    fn export(&self, address: u64) -> u64 {
+        match self.rule {
+            Rule::ModeBit(ModeBit::EntryAndExports) => mode_bit_cleared(address),
+            _ => address,
+        }
     }
 
     fn count(&self, unread: bool) {
@@ -420,11 +442,59 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
     }
 }
 
-/// A 32-bit ARM function's code address. The ARM ELF ABI sets bit 0 of a Thumb function's
-/// `st_value`, and of `e_entry`, to say the code is Thumb; the code starts a byte lower.
-/// Only `STT_FUNC` has the flag, and the parse takes no other kind: a label (`STT_NOTYPE`),
-/// the `$a`/`$t`/`$d` mapping symbols among them, is never a function here.
-fn thumb_code(address: u64) -> u64 {
+/// Which of a file's code addresses have bit 0 set to say which instruction set the code
+/// is in: Thumb on 32-bit ARM, MIPS16 or microMIPS on MIPS. No code on either starts at an
+/// odd address, so the code starts a byte lower ([`mode_bit_cleared`]). A data address is
+/// never tagged.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModeBit {
+    /// ELF on 32-bit ARM and on MIPS: a function symbol's value, in either symbol table, and
+    /// `e_entry`. The ARM ELF ABI sets it on every Thumb function. On MIPS, GNU ld and lld
+    /// set it in `.dynsym` and `e_entry`; in `.symtab` both clear it and flag `st_other`
+    /// instead, and binutils reads an odd `STT_FUNC` as tagged all the same. Only
+    /// `STT_FUNC` carries it, and the parse takes no other kind: a label (`STT_NOTYPE`), the
+    /// ARM `$a`/`$t`/`$d` mapping symbols among them, is never a function here.
+    Functions,
+    /// An ARMNT PE and an ARM Mach-O: the entry point and each export, as `lld-link` and
+    /// `ld64` write them. A symbol's value is taken as stated: `ld64` writes a Thumb one even
+    /// and flags it in `n_desc` (`N_ARM_THUMB_DEF`). Neither export table says what an export
+    /// is, so a data export is cleared too; it is left out all the same, being in no code
+    /// section.
+    EntryAndExports,
+}
+
+impl ModeBit {
+    /// Where `file` tags its code addresses, if it does.
+    fn of(file: &object::File<'_>) -> Option<ModeBit> {
+        match (file.format(), file.architecture()) {
+            (
+                BinaryFormat::Elf,
+                Architecture::Arm
+                | Architecture::Mips
+                | Architecture::Mips64
+                | Architecture::Mips64_N32,
+            ) => Some(ModeBit::Functions),
+            (BinaryFormat::Pe | BinaryFormat::MachO, Architecture::Arm) => {
+                Some(ModeBit::EntryAndExports)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A symbol's value as the address it names: the code's for a function whose value is
+/// tagged ([`ModeBit::Functions`]), and the value as it is for anything else. What a
+/// relocation against the symbol resolves to.
+pub(crate) fn symbol_address(file: &object::File<'_>, symbol: &object::Symbol<'_, '_>) -> u64 {
+    let address = symbol.address();
+    match ModeBit::of(file) {
+        Some(ModeBit::Functions) if symbol.kind() == SymbolKind::Text => mode_bit_cleared(address),
+        _ => address,
+    }
+}
+
+/// A tagged code address with its tag cleared ([`ModeBit`]).
+fn mode_bit_cleared(address: u64) -> u64 {
     address & !1
 }
 

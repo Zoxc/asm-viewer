@@ -44,19 +44,34 @@ handed back a later `LC_MAIN`'s raw offset. Pinned by `declared_code.rs`' three
 
 Not reported.
 
-**Three formats' function addresses are handed over as the file states them, not as code
+**Some formats' function addresses are handed over as the file states them, not as code
 addresses.** On 32-bit ARM ELF, `ElfSymbol::address` and `ElfFile::entry` answer `st_value` and
-`e_entry` with bit 0 still set on a Thumb function, and so do the ELF exports. On PPC64 ELFv1, an
-`STT_FUNC`'s value and `e_entry` are the address of a function descriptor in `.opd`. On XCOFF,
-`entry()` answers `o_entry`, which is also a descriptor's address. The trait's docs say only
+`e_entry` with bit 0 still set on a Thumb function, and so do the ELF exports; on MIPS ELF, the
+same on a MIPS16 or microMIPS one. On an ARMNT PE and an armv7 Mach-O, the exports and the entry
+point (`AddressOfEntryPoint`; `LC_MAIN`, `LC_UNIXTHREAD`) have bit 0 set on Thumb code. On PPC64
+ELFv1, an `STT_FUNC`'s value and `e_entry` are the address of a function descriptor in `.opd`. On
+XCOFF, `entry()` answers `o_entry`, which is also a descriptor's address. The trait's docs say only
 "address" and "the virtual address of the entry point", and nothing marks these as different.
 
-**What it cost**: a Thumb function and its entry point sat one byte into the code, and each
-exported one was listed twice, once a byte in. A PPC64 ELFv1 function's symbol and every ELFv1 or
-XCOFF entry point landed in no code section and were dropped without a word. The fix is
-`CodeAddresses` in `crates/analysis/src/parse.rs`, which clears the Thumb bit and reads a
-descriptor's first word, through its relocation in a relocatable object. Pinned by
+**What it cost**: a Thumb, MIPS16 or microMIPS function and its entry point sat one byte into the
+code, and each exported one was listed twice, once a byte in. A PPC64 ELFv1 function's symbol and
+every ELFv1 or XCOFF entry point landed in no code section and were dropped without a word. The fix
+is `CodeAddresses` in `crates/analysis/src/parse.rs`, which clears the mode bit (`ModeBit`) and
+reads a descriptor's first word, through its relocation in a relocatable object. Pinned by
 `tests/code_addresses.rs`.
 
 Not reported. `object` 0.40 has no helper for any of it. The one piece it offers is
 `FileFlags::ppc64_abi`, which reads the ABI version.
+
+**A Mach-O export trie's walk never ends past a bad node.** `ExportsTrieIterator` (and so
+`MachOExportIterator`) hands back an error for a node it cannot read and does not move past it:
+where an edge's name has no terminating NUL, `read_string` fails without advancing and without
+counting the child off, so every later `next` answers the same error. A caller that skips errors,
+as a per-entry iterator invites, loops forever.
+
+**What it cost**: a hang on file input. `declared_code` skipped a bad export and read on, which is
+right for a PE, whose iterator moves on first; an armv7 Mach-O fixture with a splatted trie hung
+the mutations sweep. On a Mach-O the first error now ends the export walk. Pinned by
+`declared_code.rs`' `a_macho_export_trie_cut_inside_an_edge_ends_the_export_walk`.
+
+Not reported.

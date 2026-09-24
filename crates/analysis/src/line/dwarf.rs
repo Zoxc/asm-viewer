@@ -11,6 +11,7 @@
 //! question whichever backend answers it.
 
 use super::{recovered, LineBackend, RowCollector};
+use crate::parse::symbol_address;
 use crate::sections::{bias_of, runtime_endian, section_biases, section_data};
 use crate::{Bias, PlacedAddress, SectionAddress};
 use gimli::{EndianArcSlice, Endianity as _, RunTimeEndian};
@@ -399,8 +400,10 @@ fn load_section(
 ///
 /// The value written is `symbol/section address + addend`, plus the bytes already there when
 /// the format keeps the addend in the section (ELF `REL`, COFF) rather than in the relocation
-/// (ELF `RELA`), plus the target section's bias. A Mach-O relocation against a section
-/// already holds the section's address in its bytes, so that address is not added again. A
+/// (ELF `RELA`), plus the target section's bias. A symbol's address is the one the parse
+/// takes, so a function tagged with a mode bit is at its code ([`symbol_address`]). A Mach-O
+/// relocation against a section already holds the section's address in its bytes, so that
+/// address is not added again. A
 /// Mach-O `SUBTRACTOR` pair states the difference of two symbols, so the second symbol's
 /// address, bias included, is taken off; a pair whose second symbol does not resolve is
 /// skipped. Every step wraps and every write is bounds-checked, so no relocation table,
@@ -419,12 +422,12 @@ fn relocate<'data, 'file>(
 
         // A target's address is its section's address plus its offset in it, and in a
         // relocatable object that section address is the bias rather than the 0 the file
-        // states.
+        // states. A function's is its code's, as the parse takes it: a Thumb one's is even.
         let bias = |index| bias_of(biases, index);
         let symbol = |index| {
-            file.symbol_by_index(index)
-                .ok()
-                .map(|s| SectionAddress::new(s.address()).placed(bias(s.section_index())))
+            file.symbol_by_index(index).ok().map(|s| {
+                SectionAddress::new(symbol_address(file, &s)).placed(bias(s.section_index()))
+            })
         };
         let target = match relocation.target() {
             RelocationTarget::Symbol(index) => symbol(index),

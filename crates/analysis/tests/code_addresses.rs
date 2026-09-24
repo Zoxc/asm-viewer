@@ -1,13 +1,15 @@
-//! The formats whose stated function addresses are not the addresses of the code: a Thumb
-//! function's has bit 0 set, and a PPC64 ELFv1 or XCOFF one names a function descriptor
-//! whose first word is the code's address. Each is read through to the code.
+//! The formats whose stated function addresses are not the addresses of the code: a Thumb,
+//! MIPS16 or microMIPS function's has bit 0 set, and a PPC64 ELFv1 or XCOFF one names a
+//! function descriptor whose first word is the code's address. Each is read through to the
+//! code.
 
 mod common;
 
 use analysis::LoadMessage;
 use common::{
-    arm_thumb_image, at, named, parse, ppc64_elfv1_image, ppc64_elfv1_object, xcoff_image,
-    ARM_TEXT, PPC64_TEXT, XCOFF_DATA, XCOFF_TEXT,
+    arm_thumb_image, armnt_dll, at, macho_arm_executable, mips_compressed_image, named, parse,
+    ppc64_elfv1_image, ppc64_elfv1_object, xcoff_image, ARMNT_TEXT, ARM_TEXT, MACHO_ARM_TEXT,
+    MIPS_TEXT, PPC64_TEXT, XCOFF_DATA, XCOFF_TEXT,
 };
 
 fn sorted_names(object: &analysis::Object) -> Vec<&str> {
@@ -43,6 +45,73 @@ fn a_thumb_function_is_at_its_code_and_a_data_symbol_is_left_alone() {
     assert_eq!(named(&object, "<entry point>").address, at(ARM_TEXT + 0x10));
     assert_eq!(named(&object, "thumb_fn").size, Some(4));
     assert_eq!(object.messages, []);
+}
+
+#[test]
+fn a_mips16_or_micromips_function_is_at_its_code_and_a_data_symbol_is_left_alone() {
+    for is_64 in [false, true] {
+        let object = parse(&mips_compressed_image(is_64));
+
+        assert_eq!(
+            sorted_names(&object),
+            [
+                "<entry point>",
+                "micromips_export",
+                "mips16_fn",
+                "mips_fn",
+                "odd_datum"
+            ],
+            "64-bit: {is_64}"
+        );
+        assert_eq!(named(&object, "mips16_fn").address, at(MIPS_TEXT));
+        assert_eq!(named(&object, "mips_fn").address, at(MIPS_TEXT + 4));
+        assert_eq!(
+            named(&object, "micromips_export").address,
+            at(MIPS_TEXT + 8)
+        );
+        assert_eq!(named(&object, "odd_datum").address, at(MIPS_TEXT + 0xd));
+        assert_eq!(
+            named(&object, "<entry point>").address,
+            at(MIPS_TEXT + 0x10)
+        );
+        assert_eq!(object.messages, [], "64-bit: {is_64}");
+    }
+}
+
+#[test]
+fn an_armnt_export_and_entry_point_are_at_their_code() {
+    let object = parse(&armnt_dll());
+
+    // `odd_datum` is in `.rdata`, and not listed.
+    assert_eq!(sorted_names(&object), ["<entry point>", "thumb_fn"]);
+    assert_eq!(named(&object, "thumb_fn").address, at(ARMNT_TEXT));
+    assert_eq!(named(&object, "<entry point>").address, at(ARMNT_TEXT + 4));
+    assert_eq!(object.messages, []);
+}
+
+#[test]
+fn an_armv7_mach_o_export_and_entry_point_are_at_their_code() {
+    for thread in [false, true] {
+        let object = parse(&macho_arm_executable(thread));
+
+        // `_thumb_fn` once: the export trie's bit 0 does not make it a second place.
+        assert_eq!(
+            sorted_names(&object),
+            ["<entry point>", "_only_exported", "_thumb_fn"],
+            "LC_UNIXTHREAD: {thread}"
+        );
+        assert_eq!(named(&object, "_thumb_fn").address, at(MACHO_ARM_TEXT));
+        assert_eq!(
+            named(&object, "_only_exported").address,
+            at(MACHO_ARM_TEXT + 8)
+        );
+        assert_eq!(
+            named(&object, "<entry point>").address,
+            at(MACHO_ARM_TEXT + 4),
+            "LC_UNIXTHREAD: {thread}"
+        );
+        assert_eq!(object.messages, [], "LC_UNIXTHREAD: {thread}");
+    }
 }
 
 #[test]

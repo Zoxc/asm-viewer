@@ -7,9 +7,12 @@
 mod common;
 
 use common::{
-    at, elf_shared_object, macho_executable, named, parse, pe_dll, ExportedSymbol, SharedObject,
-    MACHO_CODE_OFFSET, TEXT_ADDRESS,
+    at, elf_shared_object, macho_arm_executable, macho_executable, named, parse, pe_dll,
+    ExportedSymbol, SharedObject, MACHO_ARM_TEXT, MACHO_CODE_OFFSET, TEXT_ADDRESS,
 };
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 /// Four functions back to back, each `nop`s then a `ret`, so every offset below is a real
 /// instruction boundary and a listing decoded from it terminates.
@@ -289,4 +292,28 @@ fn a_macho_thread_state_without_a_pc_leaves_the_entry_point_to_lc_main() {
     let entry = MACHO_CODE_OFFSET + 0x180;
     let object = parse(&macho_executable(TEXT, entry, true));
     assert_eq!(named(&object, "<entry point>").address, at(TEXT + entry));
+}
+
+#[test]
+fn a_macho_export_trie_cut_inside_an_edge_ends_the_export_walk() {
+    // The trie's size is cut to 4 bytes: the root's two children and the first two bytes
+    // of the first edge's name, which has no end. `object` then answers the same error
+    // forever, and a walk that skipped it never returned.
+    let mut data = macho_arm_executable(false);
+    let command = data
+        .windows(8)
+        .position(|window| window == [0x33, 0, 0, 0x80, 16, 0, 0, 0])
+        .expect("the fixture has an LC_DYLD_EXPORTS_TRIE");
+    data[command + 12..command + 16].copy_from_slice(&4u32.to_le_bytes());
+
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || sender.send(parse(&data)));
+    let object = receiver
+        .recv_timeout(Duration::from_secs(20))
+        .expect("the parse returns");
+    assert_eq!(named(&object, "_thumb_fn").address, at(MACHO_ARM_TEXT));
+    assert_eq!(
+        named(&object, "<entry point>").address,
+        at(MACHO_ARM_TEXT + 4)
+    );
 }
