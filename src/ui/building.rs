@@ -121,7 +121,8 @@ impl Builds {
     /// the app, so two generations of one file cannot both be in the objects list; but a
     /// file the reader opened by hand is theirs, even where a build has just written the
     /// same path. So what is replaced is what the build before listed, this one wrote again,
-    /// and the project has open.
+    /// and the project has open. cargo lists every artifact, written or up to date, so one it
+    /// calls fresh is left open: its bytes are the same.
     ///
     /// **A build that failed replaces nothing.** A compile error leaves the previous build's
     /// files as they were, so closing them would take every tab into them for nothing. The
@@ -132,26 +133,30 @@ impl Builds {
         sources: HashMap<String, PathBuf>,
         open: &[PathBuf],
     ) -> Vec<PathBuf> {
-        let produced: Option<Vec<PathBuf>> = match &run {
-            cargo::Run::Built { artifacts, .. } => Some(
+        let produced: Option<(Vec<PathBuf>, Vec<PathBuf>)> = match &run {
+            cargo::Run::Built { artifacts, .. } => Some((
                 artifacts
                     .iter()
                     .map(|artifact| artifact.path.clone())
                     .collect(),
-            ),
+                artifacts
+                    .iter()
+                    .filter(|artifact| !artifact.fresh)
+                    .map(|artifact| artifact.path.clone())
+                    .collect(),
+            )),
             _ => None,
         };
         self.building = false;
         self.built = Some(Arc::new(run));
         self.sources = Arc::new(sources);
-        let Some(produced) = produced else {
+        let Some((produced, written)) = produced else {
             return Vec::new();
         };
         let before = std::mem::replace(&mut self.previous, produced);
-        self.previous
-            .iter()
+        written
+            .into_iter()
             .filter(|path| before.contains(path) && open.contains(path))
-            .cloned()
             .collect()
     }
 

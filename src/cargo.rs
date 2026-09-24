@@ -71,6 +71,9 @@ pub struct Artifact {
     pub target: String,
     /// `bin`, `lib`, `test` — the first of cargo's kinds for that target.
     pub kind: String,
+    /// cargo found it up to date and did not write it. It reports every unit of the graph,
+    /// written or not.
+    pub fresh: bool,
 }
 
 /// What a build came back with. Three answers, not two.
@@ -550,6 +553,8 @@ struct ArtifactMessage {
     executable: Option<PathBuf>,
     #[serde(default)]
     filenames: Vec<PathBuf>,
+    #[serde(default)]
+    fresh: bool,
 }
 
 #[derive(Deserialize)]
@@ -590,6 +595,7 @@ impl ArtifactMessage {
                 path,
                 target: self.target.name.clone(),
                 kind: kind.clone(),
+                fresh: self.fresh,
             })
             .collect()
     }

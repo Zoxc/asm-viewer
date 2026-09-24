@@ -98,6 +98,7 @@ fn a_successful_build_reports_the_artifact_and_its_warnings() {
             path: PathBuf::from("/work/app/target/debug/sketch"),
             target: "sketch".to_owned(),
             kind: "bin".to_owned(),
+            fresh: false,
         }]
     );
     assert_eq!(diagnostics.len(), 1);
@@ -253,8 +254,28 @@ fn a_library_contributes_its_archive_and_not_its_metadata() {
             path: PathBuf::from("/work/app/target/debug/libanalysis-4039b956ee59af9d.rlib"),
             target: "analysis".to_owned(),
             kind: "lib".to_owned(),
+            fresh: false,
         }]
     );
+}
+
+/// cargo reports an artifact it did not rebuild too, as `"fresh":true`. The flag is kept, so
+/// a build that wrote nothing is not taken to have written everything.
+#[test]
+fn an_artifact_cargo_found_up_to_date_is_marked_fresh() {
+    let stdout = concat!(
+        r#"{"reason":"compiler-artifact","manifest_path":"/work/app/Cargo.toml","#,
+        r#""target":{"name":"sketch","kind":["bin"]},"#,
+        r#""executable":"/work/app/target/debug/sketch","fresh":true}"#,
+        "\n",
+    );
+
+    let Run::Built { artifacts, .. } = outcome(stdout, "", true, &workspace()) else {
+        panic!("a build");
+    };
+
+    assert_eq!(artifacts.len(), 1);
+    assert!(artifacts[0].fresh);
 }
 
 /// A `reason` this module has never heard of is skipped, and the artifact after it still

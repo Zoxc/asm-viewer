@@ -11,6 +11,7 @@ fn built(paths: &[&str]) -> cargo::Run {
                 path: PathBuf::from(path),
                 target: "viewer".to_owned(),
                 kind: "bin".to_owned(),
+                fresh: false,
             })
             .collect(),
         diagnostics: Vec::new(),
@@ -81,6 +82,30 @@ fn a_build_replaces_only_what_the_build_before_produced() {
             PathBuf::from("target/debug/theirs")
         ],
     );
+}
+
+/// **An artifact cargo found up to date is not reopened.** cargo lists it all the same,
+/// but did not write it, so a close would take every tab into it for the same bytes. It is
+/// still in the list the next build replaces.
+#[test]
+fn an_artifact_cargo_did_not_write_is_not_reopened() {
+    let mut state = Builds {
+        building: true,
+        previous: vec![
+            PathBuf::from("target/debug/viewer"),
+            PathBuf::from("target/debug/libanalysis.rlib"),
+        ],
+        ..Builds::default()
+    };
+    let open = state.previous.clone();
+    let mut run = built(&["target/debug/viewer", "target/debug/libanalysis.rlib"]);
+    if let cargo::Run::Built { artifacts, .. } = &mut run {
+        artifacts[1].fresh = true;
+    }
+    let reopening = state.finished(run, HashMap::new(), &open);
+
+    assert_eq!(reopening, vec![PathBuf::from("target/debug/viewer")]);
+    assert_eq!(state.previous, open);
 }
 
 #[test]

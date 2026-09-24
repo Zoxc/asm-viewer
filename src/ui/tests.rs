@@ -20009,6 +20009,7 @@ fn pad_built(executable: PathBuf, diagnostics: Vec<Diagnostic>) -> Result<Build,
                 path: executable.clone(),
                 target: "pad".to_owned(),
                 kind: "bin".to_owned(),
+                fresh: false,
             }],
             diagnostics,
         },
@@ -33209,6 +33210,7 @@ fn built(artifacts: &[PathBuf]) -> cargo::Run {
                 path: path.clone(),
                 target: "fixture".to_owned(),
                 kind: "bin".to_owned(),
+                fresh: false,
             })
             .collect(),
         diagnostics: Vec::new(),
@@ -33380,6 +33382,7 @@ fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
                 path: path.to_path_buf(),
                 target: path.to_string_lossy().into_owned(),
                 kind: "bin".to_owned(),
+                fresh: false,
             })
             .collect(),
         diagnostics: Vec::new(),
