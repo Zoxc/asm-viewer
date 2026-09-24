@@ -9,12 +9,13 @@ use crate::{
     Import, LoadMessage, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress,
     SymbolData,
 };
-use object::macho;
 use object::read::macho::{MachHeader, MachOFile};
+use object::read::pe::ImageNtHeaders as _;
+use object::{macho, pe};
 use object::{
     Architecture, BigEndian, BinaryFormat, Endian, Endianness, ExportTarget, FileFlags,
-    Object as _, ObjectKind, ObjectSection, ObjectSegment, ObjectSymbol, ReadRef, RelocationTarget,
-    SectionIndex, SectionKind, SymbolIndex, SymbolKind, SymbolSection,
+    LittleEndian, Object as _, ObjectKind, ObjectSection, ObjectSegment, ObjectSymbol, ReadRef,
+    RelocationTarget, SectionIndex, SectionKind, SymbolIndex, SymbolKind, SymbolSection,
 };
 use std::{
     cell::Cell,
@@ -157,7 +158,7 @@ fn declared_code(
         if symbol.is_undefined() {
             let name = String::from_utf8_lossy(name).into_owned();
             if imported.insert(name.clone()) {
-                imports.push(import(name, symbol.address()));
+                imports.push(import(name, addresses.import(symbol.address())));
             }
             continue;
         }
@@ -429,6 +430,15 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
         }
     }
 
+    /// The address an ELF symbol table states for an import: its PLT entry, where it has one.
+    /// On MIPS, GNU ld and lld both set bit 0 on a MIPS16 or microMIPS entry.
+    fn import(&self, address: u64) -> u64 {
+        match self.rule {
+            Rule::ModeBit(ModeBit::Functions) => mode_bit_cleared(address),
+            _ => address,
+        }
+    }
+
     fn count(&self, unread: bool) {
         if unread {
             self.unread.set(self.unread.get().saturating_add(1));
@@ -447,15 +457,17 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
 /// odd address, so the code starts a byte lower ([`mode_bit_cleared`]). A data address is
 /// never tagged.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ModeBit {
+pub(crate) enum ModeBit {
     /// ELF on 32-bit ARM and on MIPS: a function symbol's value, in either symbol table, and
     /// `e_entry`. The ARM ELF ABI sets it on every Thumb function. On MIPS, GNU ld and lld
     /// set it in `.dynsym` and `e_entry`; in `.symtab` both clear it and flag `st_other`
     /// instead, and binutils reads an odd `STT_FUNC` as tagged all the same. Only
     /// `STT_FUNC` carries it, and the parse takes no other kind: a label (`STT_NOTYPE`), the
-    /// ARM `$a`/`$t`/`$d` mapping symbols among them, is never a function here.
+    /// ARM `$a`/`$t`/`$d` mapping symbols among them, is never a function here. Also an
+    /// import's PLT entry ([`CodeAddresses::import`]) and both ends of an `.eh_frame` FDE
+    /// (`unwind.rs`), which are code addresses too.
     Functions,
-    /// An ARMNT PE and an ARM Mach-O: the entry point and each export, as `lld-link` and
+    /// A 32-bit ARM PE and an ARM Mach-O: the entry point and each export, as `lld-link` and
     /// `ld64` write them. A symbol's value is taken as stated: `ld64` writes a Thumb one even
     /// and flags it in `n_desc` (`N_ARM_THUMB_DEF`). Neither export table says what an export
     /// is, so a data export is cleared too; it is left out all the same, being in no code
@@ -465,7 +477,7 @@ enum ModeBit {
 
 impl ModeBit {
     /// Where `file` tags its code addresses, if it does.
-    fn of(file: &object::File<'_>) -> Option<ModeBit> {
+    pub(crate) fn of(file: &object::File<'_>) -> Option<ModeBit> {
         match (file.format(), file.architecture()) {
             (
                 BinaryFormat::Elf,
@@ -477,9 +489,26 @@ impl ModeBit {
             (BinaryFormat::Pe | BinaryFormat::MachO, Architecture::Arm) => {
                 Some(ModeBit::EntryAndExports)
             }
+            (BinaryFormat::Pe, Architecture::Unknown) if old_arm_pe(file) => {
+                Some(ModeBit::EntryAndExports)
+            }
             _ => None,
         }
     }
+}
+
+/// Whether `file` is a PE for Windows CE on ARM, `IMAGE_FILE_MACHINE_ARM` or
+/// `IMAGE_FILE_MACHINE_THUMB`, which `object` calls an unknown architecture. Its code may be
+/// Thumb, which only an odd address tells a `bx` to switch to, so its exports and entry point
+/// are read as an ARMNT PE's are. An ARM-mode address is even, so clearing it changes nothing.
+fn old_arm_pe(file: &object::File<'_>) -> bool {
+    let object::File::Pe32(image) = file else {
+        return false;
+    };
+    matches!(
+        image.nt_headers().file_header().machine.get(LittleEndian),
+        pe::IMAGE_FILE_MACHINE_ARM | pe::IMAGE_FILE_MACHINE_THUMB
+    )
 }
 
 /// A symbol's value as the address it names: the code's for a function whose value is
@@ -494,7 +523,7 @@ pub(crate) fn symbol_address(file: &object::File<'_>, symbol: &object::Symbol<'_
 }
 
 /// A tagged code address with its tag cleared ([`ModeBit`]).
-fn mode_bit_cleared(address: u64) -> u64 {
+pub(crate) fn mode_bit_cleared(address: u64) -> u64 {
     address & !1
 }
 
@@ -791,7 +820,9 @@ fn symbol_table(file: &object::File<'_>, addresses: &CodeAddresses<'_, '_>) -> S
         if symbol.is_undefined() || weak_external(file, &symbol) {
             if let Ok(name) = symbol.name_bytes() {
                 let name = String::from_utf8_lossy(name).into_owned();
-                table.imports.push(import(name, symbol.address()));
+                table
+                    .imports
+                    .push(import(name, addresses.import(symbol.address())));
             }
             continue;
         }

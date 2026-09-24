@@ -141,11 +141,17 @@ which addresses carry it. On 32-bit ARM ELF (Thumb) and MIPS ELF (MIPS16, microM
 `STT_FUNC`'s value and `e_entry`; only functions carry it, and the parse takes no other kind. MIPS
 toolchains differ: GNU ld and lld set it in `.dynsym` and `e_entry` and clear it in `.symtab`, which
 flags `st_other` instead, and binutils reads an odd `STT_FUNC` as tagged anyway, so every function's
-is cleared. On an ARMNT PE and an armv7 Mach-O it is the entry point and the exports (`ld64` and
-`lld-link` both set it); a Mach-O symbol's value is even, `ld64` flagging a Thumb one in `n_desc`.
-An export table says nothing of what an export is, so a data export is cleared too, and dropped
-anyway for being in no code section. A DWARF relocation against a tagged function in a `.o` takes
-the same address (`symbol_address`), so its line info starts where its symbol does. On PPC64 ELFv1 a
+is cleared. An import's address there is its PLT entry, which GNU ld and lld both tag when it is
+MIPS16 or microMIPS code; neither tags an ARM one, which is cleared anyway, being even. An FDE's two
+ends are cleared too: gas makes a label in compressed code odd, so an FDE written against labels
+states odd ends, though the label `.cfi_startproc` makes is even, and so is LLVM's. On a 32-bit ARM
+PE and an armv7 Mach-O it is the entry point and the exports (`ld64` and `lld-link` both set it). A
+Windows CE PE (`IMAGE_FILE_MACHINE_ARM`, `IMAGE_FILE_MACHINE_THUMB`) is an unknown architecture to
+`object`, so its machine field is read directly and it is read as an ARMNT one. A Mach-O symbol's
+value is even, `ld64` flagging a Thumb one in `n_desc`. An export table says nothing of what an
+export is, so a data export is cleared too, and dropped anyway for being in no code section. A
+DWARF relocation against a tagged function in a `.o` takes the same address (`symbol_address`), so
+its line info starts where its symbol does. On PPC64 ELFv1 a
 function's symbol and `e_entry` name a descriptor in `.opd`, whose first doubleword is the code's
 address; the symbol's size is the descriptor's, so none is kept. In a relocatable object that
 doubleword is 0 until the linker writes it, so the relocation that fills it is read instead. A

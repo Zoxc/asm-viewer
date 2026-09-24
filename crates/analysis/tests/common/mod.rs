@@ -1547,15 +1547,16 @@ pub struct SharedObject<'a> {
 }
 
 /// The `.eh_frame` an ELF image carries, as `gcc` writes one: a `zR` CIE whose FDE addresses
-/// are `pcrel|sdata4`, an FDE per range, and the zero-length terminator. Through `gimli`'s
-/// writer, whose pc-relative encoding subtracts only its own offset into the section, so
-/// the address handed to it is made relative to the section's `address` first; the
-/// terminator is appended by hand, since the writer leaves it out.
-fn eh_frame_section(address: u64, ranges: &[(u64, u64)]) -> Vec<u8> {
+/// are `pcrel|sdata4`, an FDE per range of offsets into the `.text` at `text`, and the
+/// zero-length terminator. Through `gimli`'s writer, whose pc-relative encoding subtracts
+/// only its own offset into the section, so the address handed to it is made relative to
+/// the section's `address` first; the terminator is appended by hand, since the writer
+/// leaves it out.
+fn eh_frame_section(address: u64, text: u64, ranges: &[(u64, u64)], big_endian: bool) -> Vec<u8> {
     use gimli::write::{
         Address, CommonInformationEntry, EhFrame, EndianVec, FrameDescriptionEntry, FrameTable,
     };
-    use gimli::{Encoding, Format, LittleEndian, Register};
+    use gimli::{Encoding, Format, Register, RunTimeEndian};
 
     let mut table = FrameTable::default();
     let mut cie = CommonInformationEntry::new(
@@ -1571,7 +1572,7 @@ fn eh_frame_section(address: u64, ranges: &[(u64, u64)]) -> Vec<u8> {
     cie.fde_address_encoding = gimli::DwEhPe(gimli::DW_EH_PE_pcrel.0 | gimli::DW_EH_PE_sdata4.0);
     let cie = table.add_cie(cie);
     for &(begin, end) in ranges {
-        let function = TEXT_ADDRESS + begin;
+        let function = text + begin;
         table.add_fde(
             cie,
             FrameDescriptionEntry::new(
@@ -1580,7 +1581,12 @@ fn eh_frame_section(address: u64, ranges: &[(u64, u64)]) -> Vec<u8> {
             ),
         );
     }
-    let mut section = EhFrame(EndianVec::new(LittleEndian));
+    let endian = if big_endian {
+        RunTimeEndian::Big
+    } else {
+        RunTimeEndian::Little
+    };
+    let mut section = EhFrame(EndianVec::new(endian));
     table
         .write_eh_frame(&mut section)
         .expect("writing the fixture's .eh_frame");
@@ -1622,7 +1628,7 @@ pub fn elf_shared_object(fixture: SharedObject) -> Vec<u8> {
     let eh_frame_bytes = if eh_frame.is_empty() {
         Vec::new()
     } else {
-        eh_frame_section(IMAGE_BASE + eh_frame_rva, eh_frame)
+        eh_frame_section(IMAGE_BASE + eh_frame_rva, TEXT_ADDRESS, eh_frame, false)
     };
 
     // The entries start with the null entry every ELF symbol table has.
@@ -2046,8 +2052,8 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
 /// two of them on the export and the entry point and the third on a function nothing names;
 /// a Mach-O executable whose entry point is its `LC_MAIN`, beside the one function its
 /// symbol table names; and the images whose functions' stated addresses are not their code's:
-/// an ARM ELF, two MIPS ones, an ARMNT DLL and two armv7 Mach-O ones whose addresses carry a
-/// mode bit, and a PPC64 ELFv1 one and two XCOFF ones with descriptors.
+/// an ARM ELF, two MIPS ones, three 32-bit ARM DLLs and two armv7 Mach-O ones whose
+/// addresses carry a mode bit, and a PPC64 ELFv1 one and two XCOFF ones with descriptors.
 /// An `.o` declares none of these, so a corpus of relocatable objects leaves the export,
 /// entry-point and unwind paths unexercised entirely.
 pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
@@ -2115,10 +2121,20 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
             macho_executable(0x1_0000_0000, MACHO_CODE_OFFSET + 0x180, false),
             2,
         ),
-        ("arm thumb", arm_thumb_image(), 5),
-        ("mips32 compressed", mips_compressed_image(false), 5),
-        ("mips64 compressed", mips_compressed_image(true), 5),
+        ("arm thumb", arm_thumb_image(), 6),
+        ("mips32 compressed", mips_compressed_image(false), 6),
+        ("mips64 compressed", mips_compressed_image(true), 6),
         ("armnt dll", armnt_dll(), 2),
+        (
+            "windows ce arm dll",
+            arm_pe_dll(object::pe::IMAGE_FILE_MACHINE_ARM),
+            2,
+        ),
+        (
+            "windows ce thumb dll",
+            arm_pe_dll(object::pe::IMAGE_FILE_MACHINE_THUMB),
+            2,
+        ),
         ("armv7 mach-o, LC_MAIN", macho_arm_executable(false), 3),
         ("armv7 mach-o, LC_UNIXTHREAD", macho_arm_executable(true), 3),
         ("ppc64 elfv1", ppc64_elfv1_image(), 3),
@@ -2139,13 +2155,14 @@ pub struct ImageSection<'a> {
     pub bytes: &'a [u8],
 }
 
-/// One global symbol of an [`elf_image`]. `section` indexes [`ElfImage::sections`].
+/// One global symbol of an [`elf_image`]. `section` indexes [`ElfImage::sections`], and
+/// [`None`] is an undefined symbol: an import.
 pub struct ImageSymbol<'a> {
     pub name: &'a str,
     pub value: u64,
     pub size: u64,
     pub kind: object::elf::SymbolType,
-    pub section: usize,
+    pub section: Option<usize>,
 }
 
 /// A linked ELF (`ET_EXEC`) of either class and either byte order, for the machines the
@@ -2207,7 +2224,7 @@ pub fn elf_image(image: ElfImage) -> Vec<u8> {
         .map(|symbol| writer.add_dynamic_string(symbol.name.as_bytes()))
         .collect();
     for symbol in symbols {
-        writer.reserve_symbol_index(Some(headers[symbol.section].1));
+        writer.reserve_symbol_index(symbol.section.map(|section| headers[section].1));
     }
     for _ in dynamic {
         writer.reserve_dynamic_symbol_index();
@@ -2243,7 +2260,7 @@ pub fn elf_image(image: ElfImage) -> Vec<u8> {
         writer.write(section.bytes);
     }
     let sym = |symbol: &ImageSymbol, name| Sym {
-        section: Some(headers[symbol.section].1 .0),
+        section: symbol.section.map(|section| headers[section].1 .0),
         st_name: name,
         st_info: elf::SymbolInfo::new(elf::STB_GLOBAL, symbol.kind),
         st_other: elf::SymbolOther(0),
@@ -2349,8 +2366,16 @@ pub fn mips_compressed_image(is_64: bool) -> Vec<u8> {
 /// header and with `names` for the tagged function, the untagged one and the tagged
 /// export: `.text` at `text`, `.data` a page after it, and every address stated as the
 /// linker writes it.
+///
+/// Also stated with bit 0 set: two imports' PLT entries past `.text`, `plt_import` at
+/// `.text + 0x31` in `.dynsym`, as GNU ld and lld write a microMIPS one, and `symtab_import`
+/// at `.text + 0x21` in `.symtab`; and the one FDE in `.eh_frame`, for a function nothing
+/// else names at `.text + 0x14`, which states `0x15..0x19` as an FDE written against labels
+/// gas marks as compressed code does.
 fn tagged_elf_image(names: [&str; 3], machine: ElfImage, text: u64) -> Vec<u8> {
     let [tagged, untagged, export] = names;
+    let eh_frame_address = text + 0x2000;
+    let eh_frame = eh_frame_section(eh_frame_address, text, &[(0x15, 0x19)], machine.big_endian);
     elf_image(ElfImage {
         entry: text + 0x11,
         sections: &[
@@ -2358,7 +2383,13 @@ fn tagged_elf_image(names: [&str; 3], machine: ElfImage, text: u64) -> Vec<u8> {
                 name: ".text",
                 address: text,
                 code: true,
-                bytes: &[0; 0x14],
+                bytes: &[0; 0x1c],
+            },
+            ImageSection {
+                name: ".eh_frame",
+                address: eh_frame_address,
+                code: false,
+                bytes: &eh_frame,
             },
             ImageSection {
                 name: ".data",
@@ -2373,21 +2404,28 @@ fn tagged_elf_image(names: [&str; 3], machine: ElfImage, text: u64) -> Vec<u8> {
                 value: text + 1,
                 size: 4,
                 kind: object::elf::STT_FUNC,
-                section: 0,
+                section: Some(0),
             },
             ImageSymbol {
                 name: untagged,
                 value: text + 4,
                 size: 4,
                 kind: object::elf::STT_FUNC,
-                section: 0,
+                section: Some(0),
             },
             ImageSymbol {
                 name: "a_datum",
                 value: text + 0x1001,
                 size: 1,
                 kind: object::elf::STT_OBJECT,
-                section: 1,
+                section: Some(2),
+            },
+            ImageSymbol {
+                name: "symtab_import",
+                value: text + 0x21,
+                size: 0,
+                kind: object::elf::STT_FUNC,
+                section: None,
             },
         ],
         dynamic: &[
@@ -2396,14 +2434,21 @@ fn tagged_elf_image(names: [&str; 3], machine: ElfImage, text: u64) -> Vec<u8> {
                 value: text + 9,
                 size: 4,
                 kind: object::elf::STT_FUNC,
-                section: 0,
+                section: Some(0),
             },
             ImageSymbol {
                 name: "odd_datum",
                 value: text + 0xd,
                 size: 1,
                 kind: object::elf::STT_OBJECT,
-                section: 0,
+                section: Some(0),
+            },
+            ImageSymbol {
+                name: "plt_import",
+                value: text + 0x31,
+                size: 0,
+                kind: object::elf::STT_FUNC,
+                section: None,
             },
         ],
         ..machine
@@ -2419,6 +2464,12 @@ pub const ARMNT_TEXT: u64 = ARMNT_BASE + 0x1000;
 /// and the entry point at `.text + 5`. `odd_datum` is exported at an odd address in
 /// `.rdata`. No symbol table, as such a DLL ships.
 pub fn armnt_dll() -> Vec<u8> {
+    arm_pe_dll(object::pe::IMAGE_FILE_MACHINE_ARMNT)
+}
+
+/// [`armnt_dll`] for another 32-bit ARM `machine`: Windows CE's `IMAGE_FILE_MACHINE_ARM` or
+/// `IMAGE_FILE_MACHINE_THUMB`, which `object` calls an unknown architecture.
+pub fn arm_pe_dll(machine: object::pe::Machine) -> Vec<u8> {
     use object::pe;
     use object::write::pe::{NtHeaders, Writer};
 
@@ -2481,7 +2532,7 @@ pub fn armnt_dll() -> Vec<u8> {
         .write_empty_dos_header()
         .expect("writing the DOS header");
     writer.write_nt_headers(NtHeaders {
-        machine: pe::IMAGE_FILE_MACHINE_ARMNT,
+        machine,
         time_date_stamp: 0,
         characteristics: pe::IMAGE_FILE_EXECUTABLE_IMAGE
             | pe::IMAGE_FILE_32BIT_MACHINE
@@ -2671,7 +2722,7 @@ pub fn ppc64_elfv1_image() -> Vec<u8> {
         value: PPC64_OPD + 0x18,
         size: 24,
         kind: object::elf::STT_FUNC,
-        section: 1,
+        section: Some(1),
     };
     elf_image(ElfImage {
         is_64: true,
@@ -2700,14 +2751,14 @@ pub fn ppc64_elfv1_image() -> Vec<u8> {
                 value: PPC64_OPD,
                 size: 24,
                 kind: object::elf::STT_FUNC,
-                section: 1,
+                section: Some(1),
             },
             ImageSymbol {
                 name: ".foo",
                 value: PPC64_TEXT,
                 size: 8,
                 kind: object::elf::STT_FUNC,
-                section: 0,
+                section: Some(0),
             },
             ImageSymbol { ..bar },
             ImageSymbol {
@@ -2715,7 +2766,7 @@ pub fn ppc64_elfv1_image() -> Vec<u8> {
                 value: PPC64_OPD + 0x48,
                 size: 24,
                 kind: object::elf::STT_FUNC,
-                section: 1,
+                section: Some(1),
             },
         ],
         dynamic: &[bar],

@@ -76,6 +76,19 @@ the mutations sweep. On a Mach-O the first error now ends the export walk. Pinne
 
 Not reported.
 
+**A Windows CE ARM PE is an unknown architecture.** `PeFile::architecture` and
+`CoffFile::architecture` map `IMAGE_FILE_MACHINE_ARMNT` to `Architecture::Arm` and answer
+`Unknown` for `IMAGE_FILE_MACHINE_ARM` (0x1c0) and `IMAGE_FILE_MACHINE_THUMB` (0x1c2), the two
+machines Windows CE's ARM images are built for.
+
+**What it cost**: `ModeBit` goes by the architecture, so such a DLL's Thumb exports and entry
+point sat a byte into their code. `old_arm_pe` in `crates/analysis/src/parse.rs` reads the
+machine field itself. Pinned by `code_addresses.rs`'
+`a_32_bit_arm_pe_export_and_entry_point_are_at_their_code`. The listing still says its code is
+of an unknown architecture rather than 32-bit ARM, which nothing here decodes either.
+
+Not reported.
+
 ## Wanted
 
 **An XCOFF image writer.** `write::Object` writes an XCOFF relocatable object and nothing

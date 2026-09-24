@@ -9,6 +9,7 @@
 //! module only reads. It is the one part of the crate that reads call-frame information;
 //! `line/dwarf.rs` is still the only one that knows DWARF's debug sections and `addr2line`.
 
+use crate::parse::{mode_bit_cleared, ModeBit};
 use crate::sections::runtime_endian;
 use crate::SectionAddress;
 use gimli::{BaseAddresses, CieOrFde, EhFrame, EhFrameOffset, UnwindSection as _};
@@ -55,6 +56,9 @@ pub(crate) fn entries(file: &object::File<'_>) -> Vec<UnwindEntry> {
 /// will not parse — a bad record's length is exactly what cannot be trusted to find the
 /// next — keeping what was read; an FDE whose own parse fails is skipped. Every CIE comes
 /// before the FDEs that use it, so they are kept as they go by and re-read only on a miss.
+///
+/// On 32-bit ARM and MIPS both ends are cleared of the mode bit ([`ModeBit`]). No code
+/// starts or ends at an odd address there, so this changes only an end that was tagged.
 fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
     let Some(section) = file.section_by_name(".eh_frame") else {
         return Vec::new();
@@ -79,6 +83,9 @@ fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
         bases = bases.set_got(got.address());
     }
 
+    // gas makes a label in MIPS16 or microMIPS code odd, so an FDE written against labels
+    // states odd ends. The one `.cfi_startproc` makes is left even, as LLVM leaves its own.
+    let tagged = ModeBit::of(file).is_some();
     let mut cies: HashMap<EhFrameOffset<usize>, gimli::CommonInformationEntry<_>> = HashMap::new();
     let mut entries = Vec::new();
     let mut records = eh_frame.entries(&bases);
@@ -97,15 +104,22 @@ fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
         let Ok(fde) = fde else {
             continue;
         };
-        let begin = SectionAddress::new(fde.initial_address());
-        let Some(end) = begin.checked_add(fde.len()) else {
+        let Some(end) = fde.initial_address().checked_add(fde.len()) else {
             continue;
         };
-        if fde.len() == 0 {
+        let (begin, end) = if tagged {
+            (
+                mode_bit_cleared(fde.initial_address()),
+                mode_bit_cleared(end),
+            )
+        } else {
+            (fde.initial_address(), end)
+        };
+        if begin >= end {
             continue;
         }
         entries.push(UnwindEntry {
-            range: begin..end,
+            range: SectionAddress::new(begin)..SectionAddress::new(end),
             chained: false,
         });
     }
@@ -126,9 +140,8 @@ impl UnwindEntry {
     /// How many bytes of code the entry declares.
     ///
     /// The subtraction cannot underflow today: both readers in this module drop an entry
-    /// whose end is not past its begin — [`pe`] by `begin >= end`, [`elf`] by skipping
-    /// a zero-length FDE. That rule is theirs, so it saturates here beside them rather than
-    /// have a caller elsewhere rest on it unsaid.
+    /// whose end is not past its begin, by `begin >= end`. That rule is theirs, so it
+    /// saturates here beside them rather than have a caller elsewhere rest on it unsaid.
     pub(crate) fn len(&self) -> u64 {
         self.range.start.bytes_to_saturating(self.range.end)
     }
