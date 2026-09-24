@@ -9181,8 +9181,10 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
     serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
+    // The tab's own first-line caret is already there, so wait for it to move.
+    let standing = roots.doors.marked.peek().source.clone();
     press_at(&mut test, call);
-    pump(&mut test, |_| roots.doors.marked.peek().source.is_some());
+    pump(&mut test, |_| roots.doors.marked.peek().source != standing);
 
     let picked = roots
         .doors
@@ -9251,8 +9253,9 @@ fn the_caret_a_definition_plants_reads_nothing_on_the_ui_thread() {
 
     let call = word_point(&test, "helper");
     let before = source::touches();
+    let standing = roots.doors.marked.peek().source.clone();
     press_at(&mut test, call);
-    pump(&mut test, |_| roots.doors.marked.peek().source.is_some());
+    pump(&mut test, |_| roots.doors.marked.peek().source != standing);
 
     assert_eq!(
         source::touches(),
@@ -9309,8 +9312,9 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
     serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
+    let standing = roots.doors.marked.peek().source.clone();
     press_at(&mut test, call);
-    pump(&mut test, |_| roots.doors.marked.peek().source.is_some());
+    pump(&mut test, |_| roots.doors.marked.peek().source != standing);
 
     let picked = roots
         .doors
