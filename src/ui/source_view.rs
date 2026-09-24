@@ -25,6 +25,10 @@ struct SourceList {
     /// two functions compiled from one file are two places, and keying by the file would
     /// have them share a position.
     document: Document,
+    /// The tab's own document, which says whose side these rows are. Not `document`: a
+    /// symbol tab draws the listing the worker still holds until its own answer lands,
+    /// and that listing may be a source line's.
+    owner: Document,
     /// The row this tab opens at the first time it is shown, from
     /// [`SourceSide::opening`], and [`None`] for a tab with nothing better to open at
     /// than the top. The row itself and never one backed off towards the top: the rows
@@ -39,6 +43,7 @@ impl PartialEq for SourceList {
             && Arc::ptr_eq(&self.file, &other.file)
             && self.tab == other.tab
             && self.document == other.document
+            && self.owner == other.owner
             && self.opening == other.opening
     }
 }
@@ -174,7 +179,7 @@ impl Component for SourceList {
             asking.doors.places.driven,
             self.tab,
             &self.document,
-            matches!(self.document, Document::Symbol(_)),
+            matches!(self.owner, Document::Object(_) | Document::Symbol(_)),
             answered.as_ref(),
         );
         use_kept_position(
@@ -216,7 +221,7 @@ impl Component for SourceList {
 
         // The tab this file's own line questions are answered for, which is the tab it
         // drives: a companion file beside a symbol drives none.
-        let drives = (self.document.driven_from() == Pane::Source).then_some(self.tab);
+        let drives = (self.owner.driven_from() == Pane::Source).then_some(self.tab);
 
         // The bar's chords, the step it asks for and the listing's own keys, all of it
         // wired once (`use_listing_keys`).
@@ -667,6 +672,7 @@ impl Component for SourcePane {
                             file,
                             tab: self.tab,
                             document,
+                            owner: self.document.clone(),
                             opening,
                         }
                         .into_element(),

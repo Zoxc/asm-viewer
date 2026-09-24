@@ -943,7 +943,10 @@ pane still draws the listing it had -- and a symbol's Source pane the file besid
 tab's new place, that listing's offset was filed as the arriving one's, and a planted caret went
 into the listing being left. So the tab's place is the key only once the last question the worker
 answered is the one that place asks (`Analyzed::answered`, which a line compiling to nothing
-answers too); until then a pane keeps the key it had and plants nothing. Comparing documents
+answers too); until then a pane keeps the key it had and plants nothing. Whether the pane waits
+at all is the tab's document's to say and not the listing's tag: a symbol tab still drawing a
+source line's listing took it for its own at once, and its rows for a source tab's subject.
+Comparing documents
 instead missed two lines of one file and a tab opened beside, whose trail the listing on screen
 is on no place of. The switching run takes the row being left from the raw offset, not the offset clamped to the
 arriving listing's length: clamped, a long function left for a short one was written down at the

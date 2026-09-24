@@ -14934,6 +14934,106 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
     );
 }
 
+/// The Source pane for the tab on screen, as `app()` mounts it: the pane's document is the
+/// tab's, whatever listing the analysis holds.
+fn active_source_harness() -> impl IntoElement {
+    use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
+    let open = use_open();
+    let active = active_tab(&open.strip.read(), &open.docs.read());
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .maybe_child(active.map(|(tab, stop)| {
+            SourcePane {
+                tab,
+                document: stop.document,
+            }
+            .into_element()
+        }))
+}
+
+/// A symbol tab drawn over a source line's listing, the worker not having answered it
+/// yet, is still a symbol tab: its file is a companion, so a line's menu opens it, and
+/// the pane waits for the symbol's answer before calling the listing the tab's own. It
+/// then opens on the symbol's line, not where the old listing left it.
+#[test]
+fn a_symbol_tab_over_a_source_lines_listing_waits_for_its_own() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let directory = Seeded::directory("waiting-companion");
+    let text: String = (1..=200)
+        .map(|n| format!("int line_{n}(void);\n"))
+        .collect();
+    let file = directory.named("waiting.c", &text);
+    let listing = |ask: Ask, line: u32| {
+        let mut studied = Studied::new(sum_to.clone());
+        studied.lines.file = Some(file.clone());
+        studied.lines.line = Some(line);
+        Shown { ask, studied }
+    };
+    let own = Studied::new(sum_to.clone())
+        .lines
+        .line
+        .expect("the gcc fixture opens sum_to on a line");
+    let old = 150;
+    assert!(own + (CONTEXT_ROWS as u32) < old);
+
+    let stale = listing(
+        Ask::Source {
+            at: LinePos {
+                file: file.clone(),
+                line: old,
+            },
+            chosen: None,
+        },
+        old,
+    );
+    let symbol = Document::Symbol(sum_to.clone());
+    let mount = || {
+        let stale = stale.clone();
+        let (mut test, roots) = TestingRunner::new(
+            active_source_harness,
+            (500., 300.).into(),
+            move |runner: &mut _| runner.provide_root_context(move || listing_states(stale)),
+            1.,
+        );
+        let states = roots.states;
+        open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
+        for _ in 0..20 {
+            test.sync_and_update();
+        }
+        assert!(gutter_lines(&test).contains(&old));
+        (test, roots)
+    };
+
+    let (mut test, roots) = mount();
+    let mut analysis = roots.analysis;
+    analysis.set(answered(listing(Ask::Symbol(sum_to.clone()), own)));
+    for _ in 0..20 {
+        test.sync_and_update();
+    }
+    let rows = gutter_lines(&test);
+    assert!(
+        rows.contains(&own) && !rows.contains(&old),
+        "the symbol's answer opened where the old listing was left: {rows:?}"
+    );
+
+    let (mut test, _roots) = mount();
+    let row = centre_of(&test, &format!("{old}\u{a0}"));
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Find all locations".to_owned()),
+        "the menu never opened: {drawn:?}"
+    );
+    assert!(
+        drawn.contains(&"Open waiting.c".to_owned()),
+        "the symbol's companion was taken for a source tab's subject: {drawn:?}"
+    );
+}
+
 /// The rule a separator row draws between two basic blocks is laid out on whole device
 /// pixels too, and in the same row of them the gutter's horizontal run takes -- a rule
 /// and a run crossing one row must not be half a pixel apart.
