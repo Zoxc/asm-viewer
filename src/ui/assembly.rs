@@ -865,6 +865,9 @@ pub(crate) struct SeparatorRow {
     pub(crate) row: usize,
     /// The wash of its pane's selection, if it is in it.
     pub(crate) wash: Wash,
+    /// Whether it is inside the pane's character selection, which it shows with the
+    /// stub an empty row draws.
+    pub(crate) selected: bool,
     /// The gutter's width for the whole symbol, and the lanes crossing this boundary.
     pub(crate) width: usize,
     pub(crate) arrows: RowArrows,
@@ -892,6 +895,7 @@ impl SeparatorRow {
         SeparatorRow {
             row,
             wash: wash_of(chars, row),
+            selected: RowChars::of(chars, row).highlight.is_some(),
             width: data.width(),
             arrows: RowArrows {
                 lanes: data.lanes().boundary(below),
@@ -929,6 +933,14 @@ impl Component for SeparatorRow {
             None,
         )
         .child(block_rule())
+        // Where an instruction row's text starts. Last, so no sibling moves when it comes
+        // and goes.
+        .maybe_child(self.selected.then(|| {
+            stub(
+                pixel_grid(),
+                MARK_COLUMN + gutter_width(width) + ADDRESS_WIDTH,
+            )
+        }))
     }
 
     fn render_key(&self) -> DiffKey {

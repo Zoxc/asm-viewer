@@ -27462,6 +27462,46 @@ fn a_press_in_the_gutter_places_the_caret_and_a_sweep_takes_whole_rows() {
     assert_eq!(picked.chars.rows(), 0..=0);
 }
 
+/// A separator inside a character selection shows the stub an empty row does, where the
+/// text of the rows around it starts, or the run would read as two.
+#[test]
+fn a_separator_inside_a_selection_shows_a_stub() {
+    let shown = shown_sum_to();
+    let (mut test, roots) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let mut marked = roots.doors.marked;
+    settle(&mut test);
+    // `sum_to`'s first separator is listing row 7, between instructions 6 and 7.
+    marked.write().assembly = Some(Picked {
+        chars: CharSelection::between(
+            Caret { row: 5, col: 0 },
+            Caret {
+                row: 9,
+                col: crate::chars::END,
+            },
+        ),
+        dragging: false,
+        by_rows: false,
+        file: None,
+        owed: Owed::default(),
+    });
+    settle(&mut test);
+
+    let rows = paragraphs(&test);
+    let (above, below) = (rows[6].0, rows[7].0);
+    assert_eq!(below.min_y() - above.max_y(), code_row_height());
+    let stub = rects_with(&test, palette().text_select_bg)
+        .into_iter()
+        .find(|wash| (wash.min_y() - above.max_y()).abs() < 1.0)
+        .expect("the separator draws nothing of the selection");
+    assert!((stub.min_x() - above.min_x()).abs() <= 1.0, "{stub:?}");
+    assert_eq!(stub.height(), code_row_height());
+}
+
 /// Ctrl+C takes the characters where any are selected, and the caret's row whole
 /// otherwise -- its own line, as an editor copies the line under a caret; and Escape
 /// peels the selection back to the caret first and drops the run on a second press.

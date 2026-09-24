@@ -902,15 +902,11 @@ fn marks(
     // row's whole height, on the grid -- so one row's meets the next's on a pixel edge. An
     // empty row inside the run shows as a stub, or the run would read as broken there.
     let selected = chars.highlight.and_then(|(from, to)| {
-        // The stub is this mark's own rule and the only thing it does not share with the
-        // other two: an empty row has one column, so `span` answers nothing for it.
-        let span = match len == 0 {
-            true => {
-                let left = cells.column_x(0, len)?;
-                grid.span(left, left + code_row_height() / 4.0)
-            }
-            false => cells.span(grid, from, to, len)?,
-        };
+        // An empty row has one column, so `span` answers nothing for it: it has the stub.
+        if len == 0 {
+            return Some(stub(grid, cells.column_x(0, len)?));
+        }
+        let span = cells.span(grid, from, to, len)?;
         Some(box_over(span, 0.0, code_row_height()).background(palette().text_select_bg))
     });
 
@@ -933,6 +929,13 @@ fn marks(
         selected.unwrap_or_else(nothing),
         caret.unwrap_or_else(nothing),
     )
+}
+
+/// What an empty row inside the run draws of it, from `left` in the row: a quarter of a
+/// row wide, or the run would read as broken there. A separator row draws it too.
+pub(crate) fn stub(grid: Grid, left: f32) -> Rect {
+    let span = grid.span(left, left + code_row_height() / 4.0);
+    box_over(span, 0.0, code_row_height()).background(palette().text_select_bg)
 }
 
 /// A caret at window x `at`, on a row whose own left edge is `row_left`, brought into the
