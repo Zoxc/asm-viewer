@@ -470,18 +470,18 @@ pub fn debug_lines(profiles: &Path, profile: Profile) -> bool {
     if key("strip").is_some_and(|strip| strips(strip.as_bool(), strip.as_str())) {
         return false;
     }
-    let Some(value) = key("debug") else {
-        return profile.debug_by_default();
-    };
+    key("debug").map_or(profile.debug_by_default(), |debug| {
+        carries_lines(debug.as_bool(), debug.as_integer(), debug.as_str())
+    })
+}
 
-    // The three spellings cargo accepts, and the values of each that mean none. Anything
-    // else it accepts -- `1`, `2`, `"limited"`, `"full"` -- carries lines.
-    match value {
-        toml::Value::Boolean(on) => *on,
-        toml::Value::Integer(level) => *level > 0,
-        toml::Value::String(name) => !matches!(name.as_str(), "none" | "false" | "0"),
-        _ => false,
-    }
+/// Whether a profile's `debug`, read in the three spellings cargo accepts, asks for line
+/// tables. `false`, `0`, `"none"`, `"false"` and `"0"` mean none; anything else cargo
+/// accepts -- `1`, `2`, `"limited"`, `"full"` -- carries lines.
+fn carries_lines(on: Option<bool>, level: Option<i64>, name: Option<&str>) -> bool {
+    on == Some(true)
+        || level.is_some_and(|level| level > 0)
+        || name.is_some_and(|name| !matches!(name, "none" | "false" | "0"))
 }
 
 /// Whether a profile's `strip`, read as a bool or as a string, takes the debug information
@@ -496,9 +496,10 @@ fn strips(on: Option<bool>, name: Option<&str>) -> bool {
 /// file the build ignores; which file that is, is [`profile_manifest`]'s to say.
 ///
 /// `line-tables-only` and not `true`: the source side wants the line table and nothing
-/// else, and it is the cheapest debug information to build. A `strip` that would take it
-/// out again becomes `"none"`: stripping symbols takes the debug information with them, so
-/// there is no keeping the one without the other.
+/// else, and it is the cheapest debug information to build. A `debug` that already carries
+/// lines is left alone, so a profile that only strips keeps what it asked for. A `strip`
+/// that would take the lines out becomes `"none"`: stripping symbols takes the debug
+/// information with them, so there is no keeping the one without the other.
 pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> {
     let text = crate::source::read_text_in(profiles).map_err(|error| error.to_string())?;
     let mut document = text
@@ -523,7 +524,14 @@ pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> 
         .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
         .as_table_mut()
         .ok_or_else(|| format!("`profile.{}` is not a table", profile.name()))?;
-    one["debug"] = toml_edit::value("line-tables-only");
+    let carries = one
+        .get("debug")
+        .map_or(profile.debug_by_default(), |debug| {
+            carries_lines(debug.as_bool(), debug.as_integer(), debug.as_str())
+        });
+    if !carries {
+        one["debug"] = toml_edit::value("line-tables-only");
+    }
     if one
         .get("strip")
         .is_some_and(|strip| strips(strip.as_bool(), strip.as_str()))

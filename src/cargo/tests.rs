@@ -426,6 +426,23 @@ fn a_stripped_profile_has_no_lines_until_they_are_added() {
         assert!(debug_lines(&profile_manifest(&directory), Profile::Release));
     }
 
+    // Only the strip was in the way, so a `debug` that carries lines is kept, and so is
+    // the debug profile's default when it says none.
+    fs::write(
+        &manifest_at,
+        "[profile.release]\nstrip = true\ndebug = true\n",
+    )
+    .expect("a manifest");
+    add_debug_lines(&profile_manifest(&directory), Profile::Release).expect("the write");
+    let after = fs::read_to_string(&manifest_at).expect("the file");
+    assert!(after.contains("debug = true"), "{after}");
+    assert!(!after.contains("line-tables-only"), "{after}");
+    fs::write(&manifest_at, "[profile.dev]\nstrip = true\n").expect("a manifest");
+    add_debug_lines(&profile_manifest(&directory), Profile::Debug).expect("the write");
+    let after = fs::read_to_string(&manifest_at).expect("the file");
+    assert!(!after.contains("debug"), "{after}");
+    assert!(debug_lines(&profile_manifest(&directory), Profile::Debug));
+
     // A strip that keeps the lines is left as it was.
     fs::write(&manifest_at, "[profile.release]\nstrip = false\n").expect("a manifest");
     add_debug_lines(&profile_manifest(&directory), Profile::Release).expect("the write");
