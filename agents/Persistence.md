@@ -653,9 +653,11 @@ pane waiting for an answer that was never coming and no trace anywhere. The hook
 thread, the location, the message and a `Backtrace::force_capture` -- forced, so a backtrace does
 not depend on `RUST_BACKTRACE` in whatever environment the app was launched from -- **appending**
 one record per panic to one file per launch, where every other file the app stores is replaced
-whole by `write_atomically`. A file per launch is what keeps a bad input honest: a guarded panic
-fires once per name, so a file that upsets the demangler is twenty thousand records in one file
-rather than twenty thousand files. That file and whether the app is already on its way down are
+whole by `write_atomically`. A file per launch keeps a run's panics in one place and in order.
+**Guarded panics are capped at twenty a run** (`MAX_GUARDED`), and one past the cap is not even
+captured: the demangler is guarded per name, so a file that upsets it raises a panic per symbol,
+and each capture symbolizes a backtrace under a lock the whole process shares. Uncapped, one such
+file stalled the demangler pool and wrote hundreds of megabytes of records. That file and whether the app is already on its way down are
 what a run remembers across its panics, and they are one `Run`: the installed hook keeps one
 static of it and hands it to the rule, so a test can have a run of its own, the tests sharing
 one process.

@@ -111,7 +111,7 @@ fn only_a_panic_the_crate_does_not_guard_is_told_about() {
         let run = Run::new();
         handle(
             &run,
-            &panic_at(1_757_000_000, "a dependency's bug"),
+            || panic_at(1_757_000_000, "a dependency's bug"),
             guarded,
             &mut |_| {
                 stored += 1;
@@ -132,6 +132,51 @@ fn only_a_panic_the_crate_does_not_guard_is_told_about() {
     }
 }
 
+/// **A file cannot make the app write down a guarded panic without bound.** The demangler
+/// is guarded per name, so a bad string table is a panic per symbol, and each one captured
+/// is a backtrace symbolized under a lock the whole process shares. Past the cap one is
+/// neither captured nor stored, and the last one stored says so.
+#[test]
+fn guarded_panics_past_the_cap_are_not_captured() {
+    let run = Run::new();
+    let (mut captured, mut stored) = (0, Vec::new());
+    for _ in 0..MAX_GUARDED + 5 {
+        handle(
+            &run,
+            || {
+                captured += 1;
+                panic_at(1_757_000_000, "a dependency's bug")
+            },
+            true,
+            &mut |panic| {
+                stored.push(panic.message.clone());
+                None
+            },
+            &mut |_, _| panic!("a guarded panic was told about"),
+            &mut |_| panic!("a guarded panic stopped the app"),
+        );
+    }
+    assert_eq!(captured, MAX_GUARDED);
+    assert_eq!(stored.len(), MAX_GUARDED);
+    assert_eq!(stored[0], "a dependency's bug");
+    assert!(stored[MAX_GUARDED - 1].ends_with("(the last guarded panic this run writes down)"));
+
+    // An unguarded panic after them is still captured, written down and told about.
+    let mut told = 0;
+    handle(
+        &run,
+        || {
+            captured += 1;
+            panic_at(1_757_000_000, "the app's bug")
+        },
+        false,
+        &mut |_| None,
+        &mut |_, _| told += 1,
+        &mut |_| {},
+    );
+    assert_eq!((captured, told), (MAX_GUARDED + 1, 1));
+}
+
 /// **One box, however many panics follow.** The hook runs before the unwind, so the thread
 /// that panicked goes on running -- back into the render loop it panicked in -- while the
 /// shutdown is still saving. A second panic there used to hand the reader a second box on
@@ -145,7 +190,7 @@ fn only_the_first_panic_is_told_about_and_the_rest_are_written_down() {
     let mut again = |message: &str| {
         handle(
             &run,
-            &panic_at(1_757_000_000, message),
+            || panic_at(1_757_000_000, message),
             false,
             &mut |_| {
                 stored += 1;

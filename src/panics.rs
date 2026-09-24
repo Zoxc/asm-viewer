@@ -10,9 +10,9 @@
 //!
 //! **It can tell a guarded panic from a real one.** `analysis::guard` marks the calls
 //! whose panics are caught on purpose -- a demangler on a name out of a string table, a
-//! debug format read by a dependency that does unchecked arithmetic. Those are written
-//! down like any other and nothing else happens: nobody is told and nothing is shut down,
-//! because nothing has gone wrong with the app.
+//! debug format read by a dependency that does unchecked arithmetic. The first
+//! [`MAX_GUARDED`] of a run are written down and nothing else happens: nobody is told and
+//! nothing is shut down, because nothing has gone wrong with the app.
 //!
 //! **It must not take a lock the panicking thread might hold.** The guard the panic is
 //! unwinding out of is still alive while the hook runs, and a `std::sync::Mutex` is not
@@ -47,7 +47,7 @@ use std::{
     panic::{self, PanicHookInfo},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc, Mutex,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -59,8 +59,8 @@ use std::{
 /// has a run of its own: that is one static and the tests share one process.
 struct Run {
     /// The file this run appends to, made on the first panic and kept for the rest: one
-    /// file per launch, so a worker dying twenty thousand times over one bad file leaves
-    /// one file behind and the panics of one run read in order.
+    /// file per launch, so a worker dying many times over leaves one file behind and the
+    /// panics of one run read in order.
     file: Mutex<Option<PathBuf>>,
     /// Whether the app is already on its way down.
     ///
@@ -74,7 +74,16 @@ struct Run {
     stopping: AtomicBool,
     /// The shutdown thread, which only one panic starts and only the main thread waits for.
     shutdown: Mutex<Shutdown>,
+    /// How many guarded panics this run has had, capped at [`MAX_GUARDED`] written down.
+    guarded: AtomicUsize,
 }
+
+/// How many guarded panics one run writes down. **How many a file raises is the file's to
+/// say**: the demangler is guarded per name, so one bad string table is a panic per symbol.
+/// Each is a backtrace captured and symbolized under a lock the whole process shares, and
+/// a record tens of kilobytes long; uncapped, opening one file stalled the demangler pool
+/// and wrote hundreds of megabytes. Past the cap a guarded panic is not captured at all.
+const MAX_GUARDED: usize = 20;
 
 /// Where the one shutdown of a run has got to.
 ///
@@ -104,7 +113,15 @@ impl Run {
             file: Mutex::new(None),
             stopping: AtomicBool::new(false),
             shutdown: Mutex::new(Shutdown::NotStarted),
+            guarded: AtomicUsize::new(0),
         }
+    }
+
+    /// Count one guarded panic, and answer how many more the run will write down after it,
+    /// or `None` when it is past the cap.
+    fn admit_guarded(&self) -> Option<usize> {
+        let before = self.guarded.fetch_add(1, Ordering::Relaxed);
+        MAX_GUARDED.checked_sub(before.saturating_add(1))
     }
 }
 
@@ -206,11 +223,13 @@ impl Panic {
 /// component tree and so keeps its own copy of it.
 pub(crate) fn install(store: Option<Store>) {
     panic::set_hook(Box::new(move |info| {
-        let panic = Panic::of(info);
-        echo(std::io::stderr(), &panic);
         handle(
             &RUN,
-            &panic,
+            || {
+                let panic = Panic::of(info);
+                echo(std::io::stderr(), &panic);
+                panic
+            },
             analysis::guard::guarded(),
             &mut |panic| {
                 store
@@ -234,27 +253,40 @@ fn echo(mut out: impl Write, panic: &Panic) {
     let _ = writeln!(out, "{}", panic.told());
 }
 
-/// What a panic leads to, with the storing, the telling and the shutting down all handed
-/// in so a test can have the rule without a disk or a window: **every** panic is written
-/// down, the **first** one the crate does not guard is told about, and every one it does
-/// not guard is handed to `stop`, with whether it was the one told about ([`shut_down`]).
+/// What a panic leads to, with the capture, the storing, the telling and the shutting
+/// down all handed in so a test can have the rule without a disk or a window: **every**
+/// panic is written down but a guarded one past [`MAX_GUARDED`], which is not even
+/// captured; the **first** one the crate does not guard is told about; and every one it
+/// does not guard is handed to `stop`, with whether it was the one told about
+/// ([`shut_down`]).
 fn handle(
     run: &Run,
-    panic: &Panic,
+    capture: impl FnOnce() -> Panic,
     guarded: bool,
     store: &mut impl FnMut(&Panic) -> Option<PathBuf>,
     tell: &mut impl FnMut(&Panic, Option<&Path>),
     stop: &mut impl FnMut(bool),
 ) {
-    let file = store(panic);
     if guarded {
+        let Some(left) = run.admit_guarded() else {
+            return;
+        };
+        let mut panic = capture();
+        if left == 0 {
+            panic
+                .message
+                .push_str("\n(the last guarded panic this run writes down)");
+        }
+        store(&panic);
         return;
     }
+    let panic = capture();
+    let file = store(&panic);
     // Claimed here and not after the telling: the box is a blocking call, and a second
     // panic arrives while the reader is still looking at the first.
     let told = !run.stopping.swap(true, Ordering::SeqCst);
     if told {
-        tell(panic, file.as_deref());
+        tell(&panic, file.as_deref());
     }
     stop(told);
 }
