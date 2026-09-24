@@ -1,9 +1,10 @@
 # Starting and ending a program
 
-Two things here start a program the app must be able to end outright: a scratchpad's run
-(`src/scratchpad.rs`) and the language server (`src/lsp.rs`). Everything above the spawn used to be
+Three things here start a program the app must be able to end outright: a scratchpad's run
+(`src/scratchpad.rs`), the language server (`src/lsp.rs`) and a cargo build (`src/cargo.rs`, for
+the Project view and for a pad). Everything above the spawn used to be
 written twice, once each, and the two copies drifted -- most visibly into two `stop_all`s, of which
-one exit path called one. It is one runner now, `src/process.rs`, and neither consumer holds a
+one exit path called one. It is one runner now, `src/process.rs`, and no consumer holds a
 process of its own: `start` is the one spawn, `Handle` the one thing that ends what it made,
 `stop_all` what the shutdown calls, and `read_on_thread` the one place a child's pipe is put on a
 thread.
@@ -119,6 +120,12 @@ caller cannot forget one. It lived in `src/scratchpad.rs`, which meant the invar
 states -- `Ended` said exactly once -- was kept in a file about cargo packages. The language server
 does its own end-of-pipe accounting, and a third program the app started would have been a second
 copy of the run's.
+
+**A build is `output`**: `Command::output` through `start`, both pipes read whole and the
+process reaped, blocking the worker until then. It was `Command::output` itself, which no
+shutdown could reach, so a build running when the window closed went on after the app, with
+every `rustc` it had started, and the next launch's build waited on its lock on the target
+directory. Not `run`: that cuts a line at 4096 bytes, and one of cargo's JSON messages is longer.
 
 **A reader that will not start is a reader that has finished.** The run's count of pipes still open
 has to reach zero however a thread ends, or the process is never reaped, the one `Ended` is never

@@ -2,13 +2,14 @@
 //! started in, the handle that stops it, the one list a shutdown walks, the pipes read on
 //! threads of their own, and a run's output cut into rows.
 //!
-//! Two things start programs -- a scratchpad's run (`src/scratchpad.rs`) and the language
-//! server (`src/lsp.rs`) -- and they ask a process the same things, so neither has a copy
-//! of any of this. [`start`] is the one spawn, [`Handle`] the one thing that ends what it
-//! made, [`stop_all`] what the shutdown calls, and [`read_on_thread`] the one place a
-//! child's pipe is put on a thread. [`run`] is the two together for a program whose output
-//! is all the app wants of it: both pipes read, and the one [`RunEvent::Ended`] said when
-//! they are both at their end and the process is reaped.
+//! Three things start programs -- a scratchpad's run (`src/scratchpad.rs`), the language
+//! server (`src/lsp.rs`) and a cargo build (`src/cargo.rs`) -- and they ask a process the
+//! same things, so none has a copy of any of this. [`start`] is the one spawn, [`Handle`]
+//! the one thing that ends what it made, [`stop_all`] what the shutdown calls, and
+//! [`read_on_thread`] the one place a child's pipe is put on a thread. [`run`] is the two
+//! together for a program whose output is all the app wants of it: both pipes read, and
+//! the one [`RunEvent::Ended`] said when they are both at their end and the process is
+//! reaped. [`output`] is the same for a program whose output is wanted whole, at its end.
 //!
 //! **A stop is a kill, and it reaches the whole group.** Without a group, a stop kills the
 //! process this app has a handle for and leaves everything it forked running with nothing
@@ -340,6 +341,59 @@ fn start_in(list: &'static Mutex<Started>, command: &mut Command) -> io::Result<
     drop(listed);
 
     Ok((handle, pipes))
+}
+
+/// Everything a program wrote, and how it ended: what [`output`] hands back.
+pub struct Output {
+    pub ended: Ended,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// Run `command` to its end and hand back everything it wrote: `Command::output`, through
+/// [`start`], so a shutdown stops it and everything it forked. For a program whose output
+/// is only read once it is done, a cargo build. Blocks until then.
+///
+/// Both pipes are read whole and at once: one read after the other could leave the program
+/// blocked writing to a full pipe that nobody is reading yet.
+pub fn output(name: &'static str, command: &mut Command) -> io::Result<Output> {
+    output_in(&STARTED, name, command)
+}
+
+/// [`output`] onto `list`, for the tests, as [`start_in`] is.
+fn output_in(
+    list: &'static Mutex<Started>,
+    name: &'static str,
+    command: &mut Command,
+) -> io::Result<Output> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let (running, pipes) = start_in(list, command)?;
+
+    let (sender, stderr) = std::sync::mpsc::channel();
+    let reader = pipes.stderr.map(|pipe| {
+        read_on_thread(name, pipe, move |mut pipe| {
+            let mut read = Vec::new();
+            let _ = pipe.read_to_end(&mut read);
+            let _ = sender.send(read);
+        })
+    });
+    if let Some(Err(error)) = reader {
+        // Nothing will read stderr, so the program's writes to it can only fail.
+        running.stop();
+        return Err(error);
+    }
+
+    let mut stdout = Vec::new();
+    if let Some(mut pipe) = pipes.stdout {
+        let _ = pipe.read_to_end(&mut stdout);
+    }
+    // Empty when the thread ended without sending: a panic there is reported on its own.
+    let stderr = stderr.recv().unwrap_or_default();
+    Ok(Output {
+        ended: running.ended(),
+        stdout,
+        stderr,
+    })
 }
 
 /// Read a pipe on a thread of its own, named so that a panic on one says which thread died

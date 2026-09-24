@@ -332,3 +332,54 @@ fn a_program_waited_for_and_found_gone_leaves_the_list_too() {
     );
     assert!(!listed(&handle), "the reaped program is still on the list");
 }
+
+/// What `output` hands back is both pipes whole and how the program ended, as
+/// `Command::output` would say it.
+#[cfg(unix)]
+#[test]
+fn an_output_is_both_pipes_and_the_exit() {
+    let list: &'static Mutex<Started> = Box::leak(Box::new(Mutex::new(Started::new())));
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("echo out; echo err >&2; exit 3")
+        .stdin(Stdio::null());
+    let output = output_in(list, "a test's stderr", &mut command).expect("/bin/sh started");
+
+    assert_eq!(output.ended, Ended::Exited(Some(3)));
+    assert_eq!(output.stdout, b"out\n");
+    assert_eq!(output.stderr, b"err\n");
+    let listed = list.lock().unwrap_or_else(|held| held.into_inner());
+    assert!(
+        listed.handles.is_empty(),
+        "the ended program is still listed"
+    );
+}
+
+/// **A program whose output is wanted at its end is on the list a shutdown walks** while it
+/// runs. A cargo build went through `Command::output`, which no shutdown could reach, and
+/// went on building after the app had closed.
+#[cfg(unix)]
+#[test]
+fn an_output_still_running_is_stopped_by_the_shutdown() {
+    let list: &'static Mutex<Started> = Box::leak(Box::new(Mutex::new(Started::new())));
+    let running = thread::spawn(move || {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg("sleep 30").stdin(Stdio::null());
+        output_in(list, "a test's stderr", &mut command).expect("/bin/sh started")
+    });
+    let until = Instant::now() + Duration::from_secs(30);
+    while list
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .handles
+        .is_empty()
+    {
+        assert!(Instant::now() < until, "the program never went on the list");
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    stop_all_in(list);
+    let output = running.join().expect("the wait did not panic");
+    assert_eq!(output.ended, Ended::Stopped);
+}

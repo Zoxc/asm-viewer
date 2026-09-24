@@ -20,6 +20,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    process,
     store::write_atomically,
     uri,
     verdict::{counted, Verdict},
@@ -211,7 +212,9 @@ pub fn run(directory: &Path, profile: Profile) -> Run {
         command.arg("--release");
     }
 
-    let output = match command.output() {
+    // Through `process`, so a build running when the app closes is stopped with it, and
+    // the `rustc`s it started with it.
+    let output = match process::output("the cargo build's stderr", &mut command) {
         Ok(output) => output,
         Err(error) => return Run::NoCargo(error.to_string()),
     };
@@ -223,7 +226,7 @@ pub fn run(directory: &Path, profile: Profile) -> Run {
     outcome(
         &String::from_utf8_lossy(&output.stdout),
         &String::from_utf8_lossy(&output.stderr),
-        output.status.success(),
+        output.ended == process::Ended::Exited(Some(0)),
         &directory,
     )
 }
