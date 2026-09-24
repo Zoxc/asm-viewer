@@ -198,6 +198,7 @@ fn a_ppc64_elfv1_function_is_at_the_code_its_descriptor_names() {
         );
     }
 
+    // One function left out, though both symbol tables name it.
     assert_eq!(
         object.messages,
         [LoadMessage::UnreadableDescriptors { count: 1 }]

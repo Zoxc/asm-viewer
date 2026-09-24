@@ -2740,8 +2740,8 @@ pub const PPC64_OPD: u64 = 0x1002_0000;
 /// descriptors in `.opd`, 24 bytes each, whose first doubleword is the code's address:
 /// `foo` names `.text`'s first byte, `bar` its ninth, and the entry point its thirteenth.
 /// `.foo` names `foo`'s code directly, as older toolchains wrote it, with the code's size.
-/// `broken` names a descriptor that runs past the end of `.opd`. `bar` is in `.dynsym`
-/// too, as a shared object's exported functions are.
+/// `broken` names a descriptor that runs past the end of `.opd`. `bar` and `broken` are in
+/// `.dynsym` too, as a shared object's exported functions are.
 pub fn ppc64_elfv1_image() -> Vec<u8> {
     let mut opd = Vec::new();
     for code in [PPC64_TEXT, PPC64_TEXT + 8, PPC64_TEXT + 12] {
@@ -2753,6 +2753,13 @@ pub fn ppc64_elfv1_image() -> Vec<u8> {
     let bar = ImageSymbol {
         name: "bar",
         value: PPC64_OPD + 0x18,
+        size: 24,
+        kind: object::elf::STT_FUNC,
+        section: Some(1),
+    };
+    let broken = ImageSymbol {
+        name: "broken",
+        value: PPC64_OPD + 0x48,
         size: 24,
         kind: object::elf::STT_FUNC,
         section: Some(1),
@@ -2794,15 +2801,9 @@ pub fn ppc64_elfv1_image() -> Vec<u8> {
                 section: Some(0),
             },
             ImageSymbol { ..bar },
-            ImageSymbol {
-                name: "broken",
-                value: PPC64_OPD + 0x48,
-                size: 24,
-                kind: object::elf::STT_FUNC,
-                section: Some(1),
-            },
+            ImageSymbol { ..broken },
         ],
-        dynamic: &[bar],
+        dynamic: &[bar, broken],
     })
 }
 

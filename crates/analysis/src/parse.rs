@@ -18,7 +18,7 @@ use object::{
     RelocationTarget, SectionIndex, SectionKind, SymbolIndex, SymbolKind, SymbolSection,
 };
 use std::{
-    cell::Cell,
+    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
     path::PathBuf,
@@ -339,8 +339,9 @@ struct Code {
 /// them over as the file states them, and they are not (`notes/upstream/object.md`).
 struct CodeAddresses<'data, 'file> {
     rule: Rule<'data, 'file>,
-    /// How many functions were left out because their descriptor could not be read.
-    unread: Cell<usize>,
+    /// The stated addresses of the descriptors that could not be read: one per function
+    /// left out, though an exported one is in both symbol tables.
+    unread: RefCell<HashSet<u64>>,
 }
 
 enum Rule<'data, 'file> {
@@ -403,7 +404,7 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
         };
         CodeAddresses {
             rule,
-            unread: Cell::new(0),
+            unread: RefCell::default(),
         }
     }
 
@@ -418,7 +419,7 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
             // A symbol outside `.opd` names code already: older toolchains' `.foo`.
             Rule::Opd(opd) if symbol.section == Some(opd.section.index()) => {
                 let code = opd_code(file, opd, symbol.address);
-                self.count(code.is_none());
+                self.count(code.is_none(), symbol.address);
                 code
             }
             _ => Some(symbol),
@@ -436,7 +437,7 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
             Rule::Xcoff => xcoff_entry(file, entry),
             _ => return Some(entry),
         };
-        self.count(code.is_none());
+        self.count(code.is_none(), entry);
         code
     }
 
@@ -458,15 +459,15 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
         }
     }
 
-    fn count(&self, unread: bool) {
+    fn count(&self, unread: bool, descriptor: u64) {
         if unread {
-            self.unread.set(self.unread.get().saturating_add(1));
+            self.unread.borrow_mut().insert(descriptor);
         }
     }
 
     /// What is said about the functions left out, if any were.
     fn message(&self) -> Option<LoadMessage> {
-        let count = self.unread.get();
+        let count = self.unread.borrow().len();
         (count > 0).then_some(LoadMessage::UnreadableDescriptors { count })
     }
 }

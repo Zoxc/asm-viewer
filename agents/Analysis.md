@@ -167,7 +167,8 @@ is read through, `.foo` is dropped as the same place twice and gives `foo` its s
 `o_entry` names a descriptor, 4 or 8 bytes by class; `object` calls a descriptor csect data, so no
 symbol does. An `o_entry` of all ones is no entry point, as in a shared object built without `-e`,
 and no descriptor is read for it. A descriptor that cannot be read leaves its function out, with
-one warning for all of them. An ELF's exports are its `.dynsym` again, so an export at a dynamic
+one warning for all of them, which counts each descriptor once: an exported function is in both
+symbol tables. An ELF's exports are its `.dynsym` again, so an export at a dynamic
 function's stated address is skipped when that function's code was found elsewhere: it would be a
 second row a byte into it. The two nameless
 declarations, the entry point and an unwind entry, are called `<entry point>` and `<function 0x…>`
