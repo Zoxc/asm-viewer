@@ -163,10 +163,11 @@ doubleword is 0 until the linker writes it, so the relocation that fills it is r
 symbol already outside `.opd` is code: older toolchains name it `.foo` beside `foo`, and once `foo`
 is read through, `.foo` is dropped as the same place twice and gives `foo` its size. On XCOFF only
 `o_entry` names a descriptor, 4 or 8 bytes by class; `object` calls a descriptor csect data, so no
-symbol does. A descriptor that cannot be read leaves its function out, with one warning for all of
-them. An ELF's exports are its `.dynsym` again, so an export at a dynamic function's stated address
-is skipped when that function's code was found elsewhere: it would be a second row a byte into it.
-The two nameless
+symbol does. An `o_entry` of all ones is no entry point, as in a shared object built without `-e`,
+and no descriptor is read for it. A descriptor that cannot be read leaves its function out, with
+one warning for all of them. An ELF's exports are its `.dynsym` again, so an export at a dynamic
+function's stated address is skipped when that function's code was found elsewhere: it would be a
+second row a byte into it. The two nameless
 declarations, the entry point and an unwind entry, are called `<entry point>` and `<function 0x…>`
 or `<fragment 0x…>`, in angle brackets because no assembler, linker or mangling scheme emits them,
 so none can collide with a real one. The three are one type, `made_up::MadeUp`, whose `Display` is

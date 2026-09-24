@@ -216,14 +216,22 @@ fn declared_code(
         );
     }
 
-    // 0 is "this image has no entry point", which is how a DLL built without one states it.
+    // No entry point is 0 in an ELF image and all ones by the file's width in XCOFF, where 0
+    // is also `object`'s answer for a file with no auxiliary header. Neither is read as a
+    // descriptor. A PE with none gives its image base, which no code section covers.
     let entry = match file {
         object::File::MachO32(file) => macho_entry(file),
         object::File::MachO64(file) => macho_entry(file),
         _ => Some(file.entry()),
     };
+    let all_ones = if file.is_64() {
+        u64::MAX
+    } else {
+        u64::from(u32::MAX)
+    };
+    let none = |entry| entry == 0 || (file.format() == BinaryFormat::Xcoff && entry == all_ones);
     let entry = entry
-        .filter(|&entry| entry != 0)
+        .filter(|&entry| !none(entry))
         .and_then(|entry| addresses.entry(file, entry));
     if let Some(entry) = entry {
         take(

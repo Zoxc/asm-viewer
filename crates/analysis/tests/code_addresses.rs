@@ -231,6 +231,17 @@ fn an_xcoff_entry_point_is_at_the_code_its_descriptor_names() {
     }
 }
 
+/// `o_entry` is all ones where a module has no entry point, as in a shared object built
+/// without `-e`. That is no descriptor, so nothing is said about one.
+#[test]
+fn an_xcoff_module_with_no_entry_point_says_nothing() {
+    for is_64 in [false, true] {
+        let object = parse(&xcoff_image(is_64, u64::MAX));
+        assert!(object.symbols_sorted.is_empty(), "64-bit: {is_64}");
+        assert_eq!(object.messages, [], "64-bit: {is_64}");
+    }
+}
+
 #[test]
 fn an_xcoff_entry_point_whose_descriptor_no_section_holds_is_left_out() {
     let object = parse(&xcoff_image(false, 0x3000_0000));
