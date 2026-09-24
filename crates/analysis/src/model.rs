@@ -68,15 +68,14 @@ pub struct Object {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoadMessage {
     /// The code sections could not all be placed apart, because `section` states `address`,
-    /// the highest any code section states, near the top of the address space. `section` is
-    /// [`None`] where its name cannot be read.
-    CodeSectionsOverlap {
-        section: Option<String>,
-        address: u64,
-    },
+    /// the highest any code section states, near the top of the address space.
+    CodeSectionsOverlap { section: String, address: u64 },
     /// `count` functions or entry points were left out because the descriptor naming their
     /// code could not be read.
     UnreadableDescriptors { count: usize },
+    /// `count` sections are called `<section N>` by their index, because their names could
+    /// not be read. They are kept, code and all.
+    UnreadableSectionNames { count: usize },
 }
 
 /// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
@@ -94,6 +93,8 @@ impl LoadMessage {
         match self {
             LoadMessage::CodeSectionsOverlap { .. } => Severity::Error,
             LoadMessage::UnreadableDescriptors { .. } => Severity::Warning,
+            // Only the name is wrong, and it says so.
+            LoadMessage::UnreadableSectionNames { .. } => Severity::Warning,
         }
     }
 }
@@ -102,21 +103,19 @@ impl LoadMessage {
 impl fmt::Display for LoadMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LoadMessage::CodeSectionsOverlap { section, address } => {
-                let name = match section {
-                    Some(name) => format!("`{name}` "),
-                    None => String::new(),
-                };
-                write!(
-                    f,
-                    "The code sections could not be placed apart: section {name}states the \
-                     address {address:#x}, near the top of the address space, so addresses in \
-                     this object overlap."
-                )
-            }
+            LoadMessage::CodeSectionsOverlap { section, address } => write!(
+                f,
+                "The code sections could not be placed apart: section `{section}` states the \
+                 address {address:#x}, near the top of the address space, so addresses in this \
+                 object overlap."
+            ),
             LoadMessage::UnreadableDescriptors { count } => write!(
                 f,
                 "Functions left out because their descriptors could not be read: {count}."
+            ),
+            LoadMessage::UnreadableSectionNames { count } => write!(
+                f,
+                "Sections named by their index because their names could not be read: {count}."
             ),
         }
     }

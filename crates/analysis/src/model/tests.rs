@@ -121,7 +121,7 @@ fn covering_answers_only_for_the_last_start_at_or_before() {
 #[test]
 fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
     let overlap = LoadMessage::CodeSectionsOverlap {
-        section: Some(".text.high".to_owned()),
+        section: ".text.high".to_owned(),
         address: 0xffff_fffb,
     };
     assert_eq!(overlap.severity(), Severity::Error);
@@ -130,16 +130,17 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         "The code sections could not be placed apart: section `.text.high` states the address \
          0xfffffffb, near the top of the address space, so addresses in this object overlap."
     );
-    let unnamed = LoadMessage::CodeSectionsOverlap {
-        section: None,
-        address: 0xffff_fffb,
-    };
-    assert!(unnamed.to_string().contains("section states the address"));
-
     let unread = LoadMessage::UnreadableDescriptors { count: 2 };
     assert_eq!(unread.severity(), Severity::Warning);
     assert_eq!(
         unread.to_string(),
         "Functions left out because their descriptors could not be read: 2."
+    );
+
+    let unnamed = LoadMessage::UnreadableSectionNames { count: 1 };
+    assert_eq!(unnamed.severity(), Severity::Warning);
+    assert_eq!(
+        unnamed.to_string(),
+        "Sections named by their index because their names could not be read: 1."
     );
 }

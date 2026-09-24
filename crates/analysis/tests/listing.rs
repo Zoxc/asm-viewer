@@ -1004,7 +1004,7 @@ fn a_section_near_the_top_of_the_address_space_is_a_load_error() {
     assert_eq!(
         object.messages,
         [LoadMessage::CodeSectionsOverlap {
-            section: Some(".text.high".to_owned()),
+            section: ".text.high".to_owned(),
             address: u64::MAX - 4,
         }]
     );

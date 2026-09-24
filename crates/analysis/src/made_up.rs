@@ -1,8 +1,10 @@
 //! The names the app gives code the file names nothing: an image's entry point, a function
-//! only an unwind entry declares, and a fragment of one. This is where each is spelled.
+//! only an unwind entry declares, a fragment of one, and a section whose own name will not
+//! read. This is where each is spelled.
 
 use crate::unwind::UnwindEntry;
 use crate::SectionAddress;
+use object::SectionIndex;
 use std::fmt;
 
 /// A name the app made up, its [`Display`](fmt::Display) the one place the spelling lives.
@@ -48,6 +50,17 @@ impl fmt::Display for MadeUp {
             MadeUp::Function(address) => write!(f, "<function {address:#x}>"),
             MadeUp::Fragment(address) => write!(f, "<fragment {address:#x}>"),
         }
+    }
+}
+
+/// The name made up for a section whose own will not read out of the file: `<section N>`,
+/// by its index. Not a [`MadeUp`], which is a symbol's name and what a saved place records:
+/// nothing saves a section by its name.
+pub(crate) struct UnnamedSection(pub(crate) SectionIndex);
+
+impl fmt::Display for UnnamedSection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<section {}>", self.0 .0)
     }
 }
 

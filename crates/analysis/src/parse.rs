@@ -3,7 +3,7 @@
 
 use crate::demangle;
 use crate::line::{DebugInfo, Declared};
-use crate::sections::{bias_of, section_biases, section_data, Placement};
+use crate::sections::{bias_of, section_biases, section_data, section_name, Placement};
 use crate::unwind::{self, UnwindEntry};
 use crate::{
     Import, LoadMessage, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress,
@@ -90,15 +90,16 @@ struct SymbolTable {
 /// exported *data* out.
 ///
 /// **One symbol per address, earliest source winning** (symbol table > dynamic symbol >
-/// export > entry point > debug file > unwind entry). An export is very often the symbol
-/// table's own function under its exported name, and a second `SymbolData` for it would be a
-/// second row in the list for one place in the file. The debug file comes after the image so
-/// a name the image itself states is never displaced by the debug file's spelling of it, and
-/// its own records are taken in the order it hands them over, which is the order it wants
-/// them believed. The unwind entries come last of all because they carry no name: one at an
-/// address anything else named adds nothing, and one nothing named is called
+/// export > entry point > debug file > unwind entry > dynamic symbol whose name will not
+/// read). An export is very often the symbol table's own function under its exported name,
+/// and a second `SymbolData` for it would be a second row in the list for one place in the
+/// file. The debug file comes after the image so a name the image itself states is never
+/// displaced by the debug file's spelling of it, and its own records are taken in the order it
+/// hands them over, which is the order it wants them believed. The last two carry no name: one
+/// at an address anything else named adds nothing, and one nothing named is called
 /// `<function 0x…>` by its address — or `<fragment 0x…>` where its unwind info is chained, a
-/// second range of some function's rather than a function ([`UnwindEntry`]).
+/// second range of some function's rather than a function ([`UnwindEntry`]). The unnamed
+/// `.dynsym` entries come after the unwind entries, as the symbol table's unnamed ones do.
 ///
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
@@ -145,20 +146,23 @@ fn declared_code(
     let mut imported: HashSet<String> = imports.iter().map(|i| i.name.clone()).collect();
     // The stated addresses of the dynamic functions whose code is somewhere else.
     let mut moved = HashSet::new();
+    // The defined ones whose names will not read. Like the symbol table's, each is called by
+    // its address, and only where nothing else names that code.
+    let mut unnamed = Vec::new();
     for symbol in file.dynamic_symbols() {
         if symbol.kind() != SymbolKind::Text {
             continue;
         }
-        let Ok(name) = symbol.name_bytes() else {
-            continue;
-        };
-        if name.is_empty() {
+        let name = symbol.name_bytes();
+        if name.is_ok_and(<[u8]>::is_empty) {
             continue;
         }
         if symbol.is_undefined() {
-            let name = String::from_utf8_lossy(name).into_owned();
-            if imported.insert(name.clone()) {
-                imports.push(import(name, addresses.import(symbol.address())));
+            if let Ok(name) = name {
+                let name = String::from_utf8_lossy(name).into_owned();
+                if imported.insert(name.clone()) {
+                    imports.push(import(name, addresses.import(symbol.address())));
+                }
             }
             continue;
         }
@@ -173,11 +177,15 @@ fn declared_code(
         if code.address != symbol.address() {
             moved.insert(symbol.address());
         }
-        take(
-            Name::Symbol(String::from_utf8_lossy(name).into_owned()),
-            SectionAddress::new(code.address),
-            code.size,
-        );
+        let address = SectionAddress::new(code.address);
+        match name {
+            Ok(name) => take(
+                Name::Symbol(String::from_utf8_lossy(name).into_owned()),
+                address,
+                code.size,
+            ),
+            Err(_) => unnamed.push((address, code.size)),
+        }
     }
 
     // `exports` reports one entry at a time, so a malformed one is skipped rather than
@@ -249,14 +257,17 @@ fn declared_code(
         take(function.name, function.address, function.len);
     }
 
-    // Last of all, the unwind entries: an address and a length for whatever is still
-    // unnamed, and no name at all.
+    // Then the unwind entries: an address and a length for whatever is still unnamed, and no
+    // name at all. Last, the `.dynsym` functions whose names will not read.
     for entry in unwind {
         take(
             Name::MadeUp(MadeUp::unwind(entry)),
             entry.range.start,
             Some(entry.len()),
         );
+    }
+    for (address, size) in unnamed {
+        take(Name::MadeUp(MadeUp::Function(address)), address, size);
     }
 
     declared
@@ -751,7 +762,8 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
 /// Every section the file states, by index. Each code section's place is decided here, once,
 /// for the line info and the code listing both ([`section_biases`]), and what went wrong
-/// deciding it is pushed onto `messages`.
+/// deciding it is pushed onto `messages`. A section whose name will not read is kept under a
+/// made-up one, and one message counts them.
 fn read_sections(
     file: &object::File<'_>,
     messages: &mut Vec<LoadMessage>,
@@ -759,10 +771,15 @@ fn read_sections(
     let Placement { biases, message } = section_biases(file);
     messages.extend(message);
     let format = file.format();
-    file.sections()
+    let mut unnamed = 0usize;
+    let sections = file
+        .sections()
         .filter_map(|section| {
             let index = section.index();
-            let name = String::from_utf8_lossy(section.name_bytes().ok()?).into_owned();
+            let name = section_name(&section).unwrap_or_else(|made_up| {
+                unnamed = unnamed.saturating_add(1);
+                made_up
+            });
 
             // Only a code section's bytes are read here. Whatever reads another -- the line
             // info, the unwind tables -- reads it out of the file again, so a copy here would
@@ -813,7 +830,11 @@ fn read_sections(
                 ),
             ))
         })
-        .collect()
+        .collect();
+    if unnamed > 0 {
+        messages.push(LoadMessage::UnreadableSectionNames { count: unnamed });
+    }
+    sections
 }
 
 /// The file's text symbols.

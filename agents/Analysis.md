@@ -45,8 +45,9 @@ parse at all is still dropped, having nothing to show; a message is for an objec
 that cannot be trusted in part. The parse collects them. A rule the parse follows hands back what
 went wrong beside its answer rather than reporting it itself, as `section_biases` does, so the DWARF
 loader, which asks the same rule again, drops the second copy. The Objects list marks the row
-(`agents/Sidebar.md`). Two cases are reported so far: the layout running out of address space,
-and functions left out because the descriptor naming their code could not be read (below).
+(`agents/Sidebar.md`). Three cases are reported so far: the layout running out of address space,
+functions left out because the descriptor naming their code could not be read (below), and
+sections named `<section N>` because their own names would not read (below).
 
 **Data model**, built once at open time and shared via `Arc`. Only *defined* `SymbolKind::Text`
 symbols are kept. `object` calls an undefined ELF `STT_FUNC` or COFF function text too, but it has
@@ -124,11 +125,12 @@ address (an alias, an assembler label) and both are kept. `estimate_size` stops 
 at a **greater** address, so a twin bounds nothing: a search that once landed on either twin
 answered 0 for an aliased symbol, which in an object without DWARF was a function with no listing at
 all. A symbol whose name will not read out of the string table is a place in the file all the same,
-but it does **not** go into `known`, so an export, a PDB procedure or public, or an unwind entry can
-still claim that address and give it a real name. Only where none does is the symbol listed at all,
-under `<function 0x…>`, which is why the symbol-table walk sets such a symbol aside until after
-`declared_code`. Where one does, the claimant stands at that address and bounds the symbol below
-it. `known` holds placed addresses, so a name at the same offset of another section of a
+and so is such a defined function in `.dynsym`, which a stripped library names its code in; neither
+goes into `known`, so an export, a PDB procedure or public, or an unwind entry can still claim that
+address and give it a real name. Only where none does is the symbol listed at all, under
+`<function 0x…>`, which is why the symbol-table walk sets such a symbol aside until after
+`declared_code`, and `declared_code` takes the `.dynsym` ones last of all. Where one does, the
+claimant stands at that address and bounds the symbol below it. `known` holds placed addresses, so a name at the same offset of another section of a
 relocatable object is another place and claims nothing. Not quite always: a claimant outside every
 code section's bytes drops the symbol without taking its place, and the symbol below then runs on to
 the next one listed. It takes an unreadable name to get there. The section comes from looking the address up in the kept **text** sections, which
@@ -178,7 +180,12 @@ so a file symbol spelled like one is still the file's own. The value travels as 
 *saved* places, which write which name it is and the symbol's address rather than the spelling, so
 a bookmark on one outlives a change of spelling (`agents/Persistence.md`); `made_up/tests.rs` pins
 today's three all the same. And it carries the one thing every made-up name shares: it is not the file's own, so no
-demangler is ever offered one.
+demangler is ever offered one. A section whose name will not read is kept too, code and all, as
+`<section N>` by its index (`UnnamedSection`, beside `MadeUp`), with one warning counting them.
+Dropping it lost every function in it: none had a section, so none had bytes, and the section view
+had no listing. It is not a `MadeUp`, which is a symbol's name and what a saved place records;
+nothing saves a section by its name. `CodeSectionsOverlap` uses the same name, so it always names
+a section.
 `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target lookup),
 `symbols_sorted` (by name, then by index, for the UI list) and `placed` (the
 code sections' symbols by placed address; below). **The constructors make what

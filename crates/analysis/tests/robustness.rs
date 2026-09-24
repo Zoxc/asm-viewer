@@ -3,13 +3,13 @@
 
 mod common;
 
-use analysis::{parse_object, CodeListing, Object};
+use analysis::{parse_object, CodeListing, LoadMessage, Object};
 use common::{
     at, caller_and_target, committed_fixture, declared_code_images, dwarf_fixture,
-    elf_shared_object, elf_with_unreadable_name, elf_x86_64, elf_x86_64_with_dwarf, garbage,
-    listing_of, named, names, parse, parse_and_walk, survivors, DwarfFixture, DwarfRow,
-    DwarfSection, ExportedSymbol, SharedObject, TextRelocation, TextSymbol, UnitRanges,
-    TEXT_ADDRESS,
+    elf_shared_object, elf_unreadable_section_name, elf_with_unreadable_dynamic_name,
+    elf_with_unreadable_name, elf_x86_64, elf_x86_64_with_dwarf, garbage, listing_of, named, names,
+    parse, parse_and_walk, survivors, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol,
+    SharedObject, TextRelocation, TextSymbol, UnitRanges, TEXT_ADDRESS,
 };
 use object::SectionKind;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -1513,4 +1513,75 @@ fn an_unnamed_symbol_is_not_dropped_for_a_name_in_another_section() {
     let object = parse(&data);
 
     assert_eq!(names(&object), ["<function 0x0>", "f"]);
+}
+
+/// Defect: a section whose name would not read was left out, code and all. Its functions had
+/// no section, so they opened to nothing, and the section view had no listing for it. It is
+/// kept under a name made up from its index, and the object says so.
+#[test]
+fn a_code_section_whose_name_will_not_read_is_kept() {
+    let mut data = elf_x86_64(
+        &[TextSymbol {
+            name: "f",
+            bytes: &[0x90, 0xC3],
+        }],
+        &[],
+    );
+    assert_eq!(parse(&data).messages, []);
+
+    elf_unreadable_section_name(&mut data, ".text");
+    let object = parse(&data);
+
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableSectionNames { count: 1 }]
+    );
+    let f = named(&object, "f");
+    let section = f.section.as_ref().expect("f keeps its section");
+    assert!(section.name.starts_with("<section "), "{}", section.name);
+    let code: Vec<_> = f
+        .assembly(&object)
+        .expect("f decodes")
+        .instructions
+        .iter()
+        .map(common::text)
+        .collect();
+    assert_eq!(code, ["nop", "ret"]);
+    // The section view lists it too.
+    assert_eq!(listing_of(&object, section).stretches().len(), 1);
+}
+
+/// The same for a stripped library's `.dynsym`: a defined function whose name will not read
+/// is kept under its address, as the symbol table's is.
+#[test]
+fn a_dynamic_symbol_whose_name_will_not_read_is_listed_by_its_address() {
+    let text = [0x90, 0xC3, 0x90, 0xC3];
+    let dynamic = [
+        ExportedSymbol {
+            name: "first",
+            offset: 0,
+            size: 2,
+            code: true,
+        },
+        ExportedSymbol {
+            name: "second",
+            offset: 2,
+            size: 2,
+            code: true,
+        },
+    ];
+    let data = elf_with_unreadable_dynamic_name(
+        &elf_shared_object(SharedObject {
+            text: &text,
+            dynamic: &dynamic,
+            static_symbols: &[],
+            entry: None,
+            eh_frame: &[],
+        }),
+        "second",
+    );
+    let object = parse(&data);
+
+    assert_eq!(names(&object), ["<function 0x140001002>", "first"]);
+    assert_eq!(named(&object, "<function 0x140001002>").size, Some(2));
 }

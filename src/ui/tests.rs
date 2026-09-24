@@ -5029,7 +5029,7 @@ fn two_loads_at_once_keep_a_file_to_one_row() {
 #[test]
 fn an_object_with_a_load_error_is_marked_on_its_row() {
     let wrong = LoadMessage::CodeSectionsOverlap {
-        section: Some(".text".to_owned()),
+        section: ".text".to_owned(),
         address: 0x1000,
     };
     let mark = |object: &mut Arc<Object>| {

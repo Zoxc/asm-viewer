@@ -466,6 +466,15 @@ pub fn elf_unreadable_section(data: &mut [u8], name: &str) {
 /// corrupt or mutated object where a text symbol is in the table but cannot be read out
 /// of it. Written here rather than by a writer because no writer emits an unreadable name.
 pub fn elf_with_unreadable_name(data: &[u8], name: &str) -> Vec<u8> {
+    unreadable_symbol_name(data, name, ".symtab")
+}
+
+/// The same for a `.dynsym` entry: the one table a stripped library names its functions in.
+pub fn elf_with_unreadable_dynamic_name(data: &[u8], name: &str) -> Vec<u8> {
+    unreadable_symbol_name(data, name, ".dynsym")
+}
+
+fn unreadable_symbol_name(data: &[u8], name: &str, table: &str) -> Vec<u8> {
     use object::read::{Object as _, ObjectSection as _, ObjectSymbol as _};
 
     /// `Elf64_Sym`, whose `st_name` is its first field.
@@ -474,16 +483,19 @@ pub fn elf_with_unreadable_name(data: &[u8], name: &str) -> Vec<u8> {
     let mut data = data.to_vec();
     let (index, table) = {
         let file = object::File::parse(&data[..]).expect("the fixture parses");
-        let index = file
-            .symbols()
+        let mut symbols = match table {
+            ".dynsym" => file.dynamic_symbols(),
+            _ => file.symbols(),
+        };
+        let index = symbols
             .find(|symbol| symbol.name() == Ok(name))
-            .unwrap_or_else(|| panic!("no symbol named {name} in the fixture"))
+            .unwrap_or_else(|| panic!("no symbol named {name} in the fixture's {table}"))
             .index()
             .0;
         let table = file
-            .section_by_name(".symtab")
+            .section_by_name(table)
             .and_then(|section| section.file_range())
-            .expect("the fixture has a symbol table")
+            .unwrap_or_else(|| panic!("the fixture has no {table}"))
             .0;
         (index, table as usize)
     };
@@ -491,6 +503,13 @@ pub fn elf_with_unreadable_name(data: &[u8], name: &str) -> Vec<u8> {
     let at = table + index * SYMBOL;
     data[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
     data
+}
+
+/// Point the `sh_name` of one section of a written ELF past `.shstrtab`, so `object` answers
+/// `Err` for its name and nothing else about the section changes.
+pub fn elf_unreadable_section_name(data: &mut [u8], name: &str) {
+    let (header, _) = elf_section_header(data, name);
+    data[header..header + 4].copy_from_slice(&u32::MAX.to_le_bytes());
 }
 
 /// An x86-64 **COFF** relocatable object whose `.text` holds `symbols` back to back, each an

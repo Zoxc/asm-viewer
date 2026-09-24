@@ -3,6 +3,7 @@
 //! parse and the DWARF loader share, and the byte order `gimli` reads them in, which the DWARF
 //! loader and the unwind reader share.
 
+use crate::made_up::UnnamedSection;
 use crate::{Bias, LoadMessage};
 use object::{
     CompressedData, CompressionFormat, Object as _, ObjectKind, ObjectSection, SectionIndex,
@@ -94,7 +95,7 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> Placement {
         let Some(aligned) = aligned else {
             // No room left. The sections not placed yet stay where the file put them, on
             // top of each other, and the reader is told so rather than the layout moved.
-            placement.message = Some(out_of_room(highest.as_ref()));
+            placement.message = highest.as_ref().map(out_of_room);
             break;
         };
         next = aligned;
@@ -113,12 +114,19 @@ pub(crate) struct Placement {
 /// The error for a layout that ran out of address space. Only a stated address near the top
 /// can do that (see [`section_biases`]), so `highest`, the section stating the highest, is
 /// the one named.
-fn out_of_room(highest: Option<&object::Section<'_, '_>>) -> LoadMessage {
+fn out_of_room(highest: &object::Section<'_, '_>) -> LoadMessage {
     LoadMessage::CodeSectionsOverlap {
-        section: highest
-            .and_then(|section| section.name_bytes().ok())
-            .map(|name| String::from_utf8_lossy(name).into_owned()),
-        address: highest.map_or(0, |section| section.address()),
+        section: section_name(highest).unwrap_or_else(|made_up| made_up),
+        address: highest.address(),
+    }
+}
+
+/// What `section` is called: the file's own name, or, as the `Err`, the one made up for it
+/// where that will not read ([`UnnamedSection`]).
+pub(crate) fn section_name(section: &object::Section<'_, '_>) -> Result<String, String> {
+    match section.name_bytes() {
+        Ok(name) => Ok(String::from_utf8_lossy(name).into_owned()),
+        Err(_) => Err(UnnamedSection(section.index()).to_string()),
     }
 }
 

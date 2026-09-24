@@ -1,5 +1,6 @@
-use super::MadeUp;
+use super::{MadeUp, UnnamedSection};
 use crate::SectionAddress;
+use object::SectionIndex;
 
 /// An address in a section's own terms, written as the number a test means by it.
 fn at(address: u64) -> SectionAddress {
@@ -22,4 +23,10 @@ fn the_three_names_are_spelled_as_they_are_saved() {
     );
     // An address is written `0x0` and not `0`.
     assert_eq!(MadeUp::Function(at(0)).to_string(), "<function 0x0>");
+}
+
+/// A section is called by its index, in decimal as tools list them.
+#[test]
+fn a_section_is_named_by_its_index() {
+    assert_eq!(UnnamedSection(SectionIndex(12)).to_string(), "<section 12>");
 }
