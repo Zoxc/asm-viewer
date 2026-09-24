@@ -25,6 +25,7 @@ fn a_failed_build_reports_the_compilers_diagnostics() {
     let Run::Rejected {
         diagnostics,
         message,
+        ..
     } = outcome(stdout, stderr, false, &workspace())
     else {
         panic!("a rejection");
@@ -49,6 +50,34 @@ fn a_failed_build_reports_the_compilers_diagnostics() {
     assert!(message.contains("could not compile"));
 }
 
+/// **A failed build keeps the artifacts cargo wrote before it stopped.** In a workspace a
+/// member that compiled is written even when another does not.
+#[test]
+fn a_failed_build_keeps_what_it_wrote() {
+    let stdout = concat!(
+        r#"{"reason":"compiler-artifact","manifest_path":"/work/app/core/Cargo.toml","#,
+        r#""target":{"name":"core","kind":["lib"]},"executable":null,"#,
+        r#""filenames":["/work/app/target/debug/libcore.rlib"]}"#,
+        "\n",
+        r#"{"reason":"build-finished","success":false}"#,
+        "\n",
+    );
+
+    let Run::Rejected { artifacts, .. } = outcome(stdout, "", false, &workspace()) else {
+        panic!("a rejection");
+    };
+
+    assert_eq!(
+        artifacts,
+        vec![Artifact {
+            path: PathBuf::from("/work/app/target/debug/libcore.rlib"),
+            target: "core".to_owned(),
+            kind: "lib".to_owned(),
+            fresh: false,
+        }]
+    );
+}
+
 /// The failure with no diagnostics behind it at all — a dependency that names a crate
 /// nothing has heard of. cargo says it on stderr and emits no compiler message.
 #[test]
@@ -59,6 +88,7 @@ fn a_dependency_that_does_not_resolve_is_cargos_own_words() {
     assert_eq!(
         outcome("", stderr, false, &workspace()),
         Run::Rejected {
+            artifacts: Vec::new(),
             diagnostics: Vec::new(),
             message: stderr.trim().to_owned(),
         }
@@ -596,6 +626,7 @@ fn a_verdict_counts_the_level_its_own_answer_is_about() {
     );
 
     let rejected = |diagnostics| Run::Rejected {
+        artifacts: Vec::new(),
         diagnostics,
         message: String::new(),
     };
@@ -620,6 +651,7 @@ fn a_verdict_counts_the_level_its_own_answer_is_about() {
 #[test]
 fn a_refusal_is_cargos_own_words_only_where_the_compiler_reported_no_error() {
     let rejected = |diagnostics, message: &str| Run::Rejected {
+        artifacts: Vec::new(),
         diagnostics,
         message: message.to_owned(),
     };

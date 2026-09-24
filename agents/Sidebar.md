@@ -623,9 +623,10 @@ opened by hand is theirs even where a build has just written the same path. So t
 the *previous* build's list intersected with what this one wrote and with what is open, closed one
 by one and reopened in a single load rather than a close and a spawn each. cargo lists every
 artifact, up to date or not, so "what this one wrote" leaves out the ones it calls `fresh`: their
-bytes are the same. They stay in the list the next build replaces. A build that failed replaces
-nothing and keeps the previous list: a typo is the usual reason, cargo wrote none of those files,
-and a close would take every tab into them for bytes that are the same. The load is registered with the closes and
+bytes are the same. They stay in the list the next build replaces. A build that failed keeps the
+previous list and replaces only what cargo wrote before it stopped: in a workspace the members that
+compiled are still written, so `Run::Rejected` carries its artifacts too. A typo in a one-crate
+package writes nothing, so nothing is closed. The load is registered with the closes and
 not in the task that reads it, or the save observer, woken by the closes, would run first and write
 a project file without those binaries. The previous build's list is saved with the session, which
 is what makes the rule survive a restart (`agents/Persistence.md`). The load is also handed the

@@ -242,6 +242,7 @@ fn only_a_build_that_wrote_the_package_clears_the_unsaved_marker() {
     pads.state_mut().unsaved = Some(Failure::Write("read-only".to_owned()));
     let refused_by_cargo = Build {
         run: cargo::Run::Rejected {
+            artifacts: Vec::new(),
             diagnostics: Vec::new(),
             message: String::new(),
         },

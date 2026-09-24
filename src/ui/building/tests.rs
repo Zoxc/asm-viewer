@@ -117,6 +117,7 @@ fn a_failed_build_reopens_nothing_and_leaves_the_previous_list_standing() {
         ..Builds::default()
     };
     let run = cargo::Run::Rejected {
+        artifacts: Vec::new(),
         diagnostics: Vec::new(),
         message: "no".to_owned(),
     };
@@ -125,6 +126,34 @@ fn a_failed_build_reopens_nothing_and_leaves_the_previous_list_standing() {
     assert!(reopening.is_empty(), "a failed build wrote over nothing");
     assert_eq!(state.previous, previous);
     assert!(!state.building);
+}
+
+/// **A failed build replaces what cargo wrote before it stopped.** In a workspace the
+/// members that compiled are written all the same, and the objects open for them would
+/// show code that is no longer on disk. The previous list stands.
+#[test]
+fn a_failed_build_reopens_what_it_wrote() {
+    let previous = vec![
+        PathBuf::from("target/debug/libcore.rlib"),
+        PathBuf::from("target/debug/app"),
+    ];
+    let mut state = Builds {
+        building: true,
+        previous: previous.clone(),
+        ..Builds::default()
+    };
+    let cargo::Run::Built { artifacts, .. } = built(&["target/debug/libcore.rlib"]) else {
+        unreachable!()
+    };
+    let run = cargo::Run::Rejected {
+        artifacts,
+        diagnostics: Vec::new(),
+        message: "could not compile `app`".to_owned(),
+    };
+    let reopening = state.finished(run, HashMap::new(), &previous);
+
+    assert_eq!(reopening, vec![PathBuf::from("target/debug/libcore.rlib")]);
+    assert_eq!(state.previous, previous);
 }
 
 /// **A clone of the state shares the build rather than copying it.** The cargo section
@@ -309,6 +338,7 @@ fn both_build_panes_say_the_same_line_about_the_same_build() {
         ),
         (
             cargo::Run::Rejected {
+                artifacts: Vec::new(),
                 diagnostics: Vec::new(),
                 message: "no matching package".to_owned(),
             },

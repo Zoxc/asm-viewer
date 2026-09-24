@@ -124,40 +124,37 @@ impl Builds {
     /// and the project has open. cargo lists every artifact, written or up to date, so one it
     /// calls fresh is left open: its bytes are the same.
     ///
-    /// **A build that failed replaces nothing.** A compile error leaves the previous build's
-    /// files as they were, so closing them would take every tab into them for nothing. The
-    /// previous list stands: it is still what the next build that succeeds replaces.
+    /// **A build that failed replaces only what cargo wrote before it stopped.** In a
+    /// workspace the members that compiled are written all the same. The previous list
+    /// stands: it is still what the next build that succeeds replaces.
     fn finished(
         &mut self,
         run: cargo::Run,
         sources: HashMap<String, PathBuf>,
         open: &[PathBuf],
     ) -> Vec<PathBuf> {
-        let produced: Option<(Vec<PathBuf>, Vec<PathBuf>)> = match &run {
-            cargo::Run::Built { artifacts, .. } => Some((
-                artifacts
-                    .iter()
-                    .map(|artifact| artifact.path.clone())
-                    .collect(),
-                artifacts
-                    .iter()
-                    .filter(|artifact| !artifact.fresh)
-                    .map(|artifact| artifact.path.clone())
-                    .collect(),
-            )),
-            _ => None,
+        let (artifacts, succeeded) = match &run {
+            cargo::Run::Built { artifacts, .. } => (&artifacts[..], true),
+            cargo::Run::Rejected { artifacts, .. } => (&artifacts[..], false),
+            cargo::Run::NoCargo(_) => (&[][..], false),
         };
+        let mut written: Vec<PathBuf> = artifacts
+            .iter()
+            .filter(|artifact| !artifact.fresh)
+            .map(|artifact| artifact.path.clone())
+            .collect();
+        if succeeded {
+            let produced = artifacts.iter().map(|artifact| artifact.path.clone());
+            let before = std::mem::replace(&mut self.previous, produced.collect());
+            written.retain(|path| before.contains(path));
+        } else {
+            written.retain(|path| self.previous.contains(path));
+        }
         self.building = false;
         self.built = Some(Arc::new(run));
         self.sources = Arc::new(sources);
-        let Some((produced, written)) = produced else {
-            return Vec::new();
-        };
-        let before = std::mem::replace(&mut self.previous, produced);
+        written.retain(|path| open.contains(path));
         written
-            .into_iter()
-            .filter(|path| before.contains(path) && open.contains(path))
-            .collect()
     }
 
     /// The one line under the button saying where the last build got to. Said by

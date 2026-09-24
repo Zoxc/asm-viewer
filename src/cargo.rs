@@ -88,7 +88,11 @@ pub enum Run {
     /// some failures are said at all: `no matching package named ... found` for a
     /// dependency that does not resolve, and a manifest error, both arrive with no
     /// compiler diagnostics behind them.
+    ///
+    /// `artifacts` is what cargo finished before it stopped: in a workspace, the members
+    /// that compiled are written all the same.
     Rejected {
+        artifacts: Vec<Artifact>,
         diagnostics: Vec<Diagnostic>,
         message: String,
     },
@@ -116,6 +120,7 @@ impl Run {
             Run::Rejected {
                 diagnostics,
                 message,
+                ..
             } if !message.is_empty()
                 && !diagnostics
                     .iter()
@@ -259,6 +264,7 @@ fn outcome(stdout: &str, stderr: &str, success: bool, directory: &Path) -> Run {
 
     if !success {
         return Run::Rejected {
+            artifacts,
             diagnostics,
             message: stderr.trim().to_owned(),
         };

@@ -20246,6 +20246,7 @@ fn pad_built(executable: PathBuf, diagnostics: Vec<Diagnostic>) -> Result<Build,
 fn pad_rejected(diagnostics: Vec<Diagnostic>, message: String) -> Result<Build, Failure> {
     Ok(Build {
         run: cargo::Run::Rejected {
+            artifacts: Vec::new(),
             diagnostics,
             message,
         },
@@ -34454,6 +34455,7 @@ fn a_diagnostics_place_opens_the_file_it_names() {
         span: Some(span.clone()),
     };
     let run = cargo::Run::Rejected {
+        artifacts: Vec::new(),
         diagnostics: vec![said(&own), said(&elsewhere)],
         message: String::new(),
     };
@@ -34534,6 +34536,7 @@ fn a_diagnostics_place_opens_in_the_tab_the_file_is_already_in() {
     );
 
     let run = cargo::Run::Rejected {
+        artifacts: Vec::new(),
         diagnostics: vec![cargo::Diagnostic {
             level: Level::Error,
             message: "mismatched types".to_owned(),
@@ -34604,6 +34607,7 @@ fn a_place_under_the_directory_keeps_its_path_where_it_cannot_be_opened() {
         }),
     };
     let run = cargo::Run::Rejected {
+        artifacts: Vec::new(),
         diagnostics: vec![
             said("src/nothing.rs"),
             said("/home/reader/.cargo/registry/src/index/serde-1.0/src/lib.rs"),
