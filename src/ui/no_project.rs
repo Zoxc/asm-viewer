@@ -24,6 +24,7 @@ impl Component for WindowBody {
         let sidebar_dock = use_consume::<SidebarDock>().0;
         let split = use_consume::<SidebarSplit>().0;
         let strip = use_open().strip;
+        let stay = use_project_states().stay;
         let opened = use_memo(move || file.read().is_some());
         // A memo over the one thing this branch asks of the strip, not a read of it: the
         // bar is written by every tab opened, moved or closed, and this has to re-render
@@ -47,7 +48,11 @@ impl Component for WindowBody {
         // The sidebar beside the one proportional panel, which therefore takes whatever is
         // left. Docking cannot express a literal width, which is why this split is a
         // `ResizableContainer` and not another `DockingArea`.
-        ResizableContainer::new()
+        //
+        // Under a rect keyed by the stay, so every project mounts the panels afresh at the
+        // widths it restored: a panel reads its size only when it mounts, and a switch from
+        // one project to another never renders with none between.
+        let container = ResizableContainer::new()
             .direction(Direction::Horizontal)
             .controller(split.context)
             .panel(
@@ -59,7 +64,11 @@ impl Component for WindowBody {
                 ResizablePanel::new(split.rest())
                     .min_size(10.0)
                     .child(ContentArea),
-            )
+            );
+        rect()
+            .expanded()
+            .key(*stay.read())
+            .child(container)
             .into_element()
     }
 }

@@ -537,7 +537,7 @@ impl ProjectStates {
 /// `clear_project`, which every way out of a project goes through. Not the project's file:
 /// leaving a project and opening it again is a stay of its own, and "Save as..." moves the
 /// file without leaving.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Stay(u64);
 
 impl Stay {

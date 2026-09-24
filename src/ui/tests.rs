@@ -810,6 +810,50 @@ fn a_window_with_no_project_is_one_screen() {
     );
 }
 
+/// **A switch lays the sidebar out at the width the new project saved.** A panel takes its
+/// width once, when it mounts, and a switch goes from one project to the next in one
+/// handler: there is never a render with no project, so the old panels stayed mounted at
+/// the old width while the new one was held and saved.
+#[test]
+fn a_switch_lays_the_sidebar_out_at_the_new_projects_width() {
+    let (mut test, (states, split)) = TestingRunner::new(
+        body_harness,
+        (1200., 600.).into(),
+        |runner: &mut _| {
+            runner
+                .provide_root_context(|| (test_roots().states, consume_context::<SidebarSplit>().0))
+        },
+        1.,
+    );
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/src/a.avproj")),
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+    let drawn = || split.context.peek().panels.first().map(|panel| panel.size);
+    assert_eq!(drawn(), Some(380.0));
+
+    // What `switch_project` does, short of the disk.
+    clear_project(states);
+    proj.write().file = Some(PathBuf::from("/src/b.avproj"));
+    let session: Session = toml::from_str("[ui]\nsidebar = 600.0\n").expect("a session");
+    restore_project(states, Project::default(), session);
+    settle(&mut test);
+
+    assert_eq!(*states.arranged.sidebar.peek(), 600.0);
+    assert_eq!(
+        drawn(),
+        Some(600.0),
+        "the sidebar kept the last project's width"
+    );
+    assert_eq!(
+        split.context.peek().panels.len(),
+        2,
+        "the old panels stayed registered"
+    );
+}
+
 /// Settings and the Scratchpad are nobody's project's, so they open with none -- as ordinary
 /// tabs, which brings the bar back for them. The screen is what there is when the strip is
 /// empty, so closing the last one takes the bar away and puts the screen back.

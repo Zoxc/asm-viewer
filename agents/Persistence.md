@@ -181,9 +181,11 @@ that adds a panel would hide it from everyone who had ever arranged their sideba
 sidebar's width is a `SidebarSplit` -- a number and the `ResizableContext` it is read back out
 of, as the document's split is (`Split`, `agents/UI.md`): a
 `ResizablePanel` registers at its `initial_size` and forgets on unmount, and the window's body
-is rebuilt whenever a project arrives or goes. What **cannot** be saved is how tall a group
-inside the dock was dragged; freya recomputes those on every render and hands out no
-controller (`notes/upstream/freya.md`).
+is rebuilt whenever a project arrives or goes. A switch goes from one project to the next with
+no render between, so that rebuild is keyed by the `Stay`, which every project left moves on,
+and not by whether a project is open. What **cannot** be saved is how tall a group inside the
+dock was dragged; freya recomputes those on every render and hands out no controller
+(`notes/upstream/freya.md`).
 
 **Startup opens what the app was given, or what it was last in.** `app()` takes the project
 named on the command line and `use_restore_on_startup` prefers it (`project::open_at`, which
