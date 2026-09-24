@@ -500,8 +500,8 @@ pub(crate) struct PadState {
     /// program before a build that would not compile.
     pub(crate) program: Option<Program>,
     /// Why the package on disk is not what is on screen, or `None` when it is.
-    /// [`Scratchpad::write_to`] refuses outright for a bad row, so a bad row stops the
-    /// *source* being written too and the pane has to say so.
+    /// [`Scratchpad::write_to`] refuses the manifest for a bad row, though it still
+    /// writes the source, and the pane has to say so.
     pub(crate) unsaved: Option<Failure>,
 }
 

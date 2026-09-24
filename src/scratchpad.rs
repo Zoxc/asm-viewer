@@ -586,17 +586,21 @@ impl Scratchpad {
     /// reader's document, so an interrupted write must leave the last good version behind.
     /// The manifest goes first, so a directory that exists at all is a package.
     ///
+    /// **A bad row holds back the manifest and not the source.** The source still goes
+    /// down beside the manifest already there, and the refusal is still returned, so the
+    /// pane still says the package is not saved. Add puts in an empty row, so without
+    /// this every edit made while a row was being typed went with a closed window.
+    ///
     /// Under the lock the close hook writes under ([`flush`]), so the two never write one
     /// package at once. What the hook has written is not written over: the process is
     /// ending, and anything the worker still holds is older. A package that was
     /// [owed](Scratchpad::owe) is no longer owed once it is written here.
     pub fn write_to(&self, directory: &Path) -> Result<(), Failure> {
-        let manifest = self.manifest()?;
         let _writing = writing();
         if matches!(owed().get(directory), Some(Owed::Written)) {
             return Ok(());
         }
-        self.write_package(directory, &manifest)?;
+        self.write_package(directory)?;
         // Asked again rather than remembered: a newer package may have been owed while
         // this one was being written, and that one is still owed.
         let mut owed = owed();
@@ -621,16 +625,26 @@ impl Scratchpad {
     }
 
     /// The two files, written: [`Scratchpad::write_to`] less the locks, for the one caller
-    /// already holding them.
-    fn write_package(&self, directory: &Path, manifest: &str) -> Result<(), Failure> {
+    /// already holding them. A refused manifest writes the source alone, and only where
+    /// a manifest already is, so the directory stays a package.
+    fn write_package(&self, directory: &Path) -> Result<(), Failure> {
         let source = directory.join(SOURCE_FILE);
+        let manifest = self.manifest();
 
-        let write = || -> io::Result<()> {
+        let write = |manifest: Option<&str>| -> io::Result<()> {
             fs::create_dir_all(source.parent().unwrap_or(directory))?;
-            write_atomically(&directory.join(cargo::MANIFEST), manifest.as_bytes())?;
+            if let Some(manifest) = manifest {
+                write_atomically(&directory.join(cargo::MANIFEST), manifest.as_bytes())?;
+            }
             write_atomically(&source, self.source.as_bytes())
         };
-        write().map_err(|error| Failure::Write(error.to_string()))
+        let written = match &manifest {
+            Ok(manifest) => write(Some(manifest)),
+            Err(_) if directory.join(cargo::MANIFEST).is_file() => write(None),
+            Err(_) => Ok(()),
+        };
+        written.map_err(|error| Failure::Write(error.to_string()))?;
+        manifest.map(drop)
     }
 
     /// Read a scratchpad back out of its directory, or `None` if there is not one there.
@@ -922,10 +936,7 @@ fn flush_where(under: impl Fn(&Path) -> bool) {
         let Owed::Due(scratchpad) = std::mem::replace(owing, Owed::Written) else {
             continue;
         };
-        let written = scratchpad
-            .manifest()
-            .and_then(|manifest| scratchpad.write_package(directory, &manifest));
-        if let Err(failure) = written {
+        if let Err(failure) = scratchpad.write_package(directory) {
             log::warn!("could not save {}: {failure}", directory.display());
         }
     }

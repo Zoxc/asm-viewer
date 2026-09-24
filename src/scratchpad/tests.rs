@@ -724,6 +724,30 @@ fn the_close_writes_what_the_worker_has_not() {
     assert_eq!(read.source, pad.source, "the owed edit is not on disk");
 }
 
+/// **A bad row holds back the manifest and not the source.** Add puts in an empty row,
+/// so a reader who adds one and goes on editing has a bad row for as long as they edit.
+/// The rows on disk stay the last good ones, and a save still says it was refused.
+#[test]
+fn a_bad_row_still_lets_the_source_be_written() {
+    let directory = Temporary::fresh("scratchpad-test");
+    let mut pad = Scratchpad::new("pad-1").expect("a valid id");
+    pad.add_dependency("anyhow", "1");
+    pad.write_to(&directory).expect("the package is written");
+
+    pad.add_dependency("", "");
+    pad.source = "fn main() { saved(); }".to_owned();
+    assert_eq!(pad.write_to(&directory), Err(Failure::Dependencies(1)));
+    let read = Scratchpad::load_from(&directory).expect("the package loads");
+    assert_eq!(read.source, pad.source, "the save dropped the source");
+    assert_eq!(read.dependencies(), [dependency("anyhow", "1")]);
+
+    pad.source = "fn main() { closed(); }".to_owned();
+    pad.owe(directory.to_path_buf());
+    super::flush_where(|owed| owed.starts_with(&*directory));
+    let read = Scratchpad::load_from(&directory).expect("the package loads");
+    assert_eq!(read.source, pad.source, "the close dropped the source");
+}
+
 /// What the close wrote is not written over by the worker behind it, which is only ever
 /// holding something older; and a package the worker has written is no longer owed, so
 /// the close does not write it again over something newer.

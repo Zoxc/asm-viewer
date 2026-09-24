@@ -457,9 +457,11 @@ behind another pad's build was dropped without a word. The Name box and Add are 
 is open, as Build is, and a pad is held with no rows, so there is no row box to type in. Startup is one question above that,
 `PadJob::List`, asked on mount, whose answer says which pad to open: the front of the order, or,
 when there is no order at all, the pad the app booted holding, opened like any other so that
-`opened_in` seeds its baseline without writing anything. `Scratchpad::write` refuses outright
-rather than generating a manifest that differs from the rows, so a bad row stops the source being
-written too, which the pane says over the rows, each of which says its own half. Every bad row is
+`opened_in` seeds its baseline without writing anything. `Scratchpad::write_to` refuses
+rather than generating a manifest that differs from the rows, which the pane says over the rows,
+each of which says its own half. The source is still written beside the last good manifest: Add
+puts in an empty row, so a refusal that held back the source too lost every edit made while a row
+was being typed to a closed window. Every bad row is
 marked, not the first: `Scratchpad::problems` answers with `(RowId, Problem)` for all of them, and
 `Problem::half` says which of the row's two boxes to redden, because `Repeated` is a *name*
 collision and nothing in its wording says so. The refusal itself carries only how many rows are
