@@ -201,8 +201,8 @@ is then what `Saves` holds: `written` and `stored` are the two files as they now
 neither is read back. That saves two reads and a parse under the lock, on the UI thread, and
 drops a failure a Save has no business having -- a project file deleted or mangled underneath
 a run holding it perfectly well used to make Save write nothing. The baselines are the truer
-answer besides: a project just started has an empty file and an id only the app knows, and a
-re-read would hand it to its new place with no id, and so with no session either.
+answer besides: a project just started whose id the flush could not write has an empty file,
+and a re-read would hand it to its new place with no id, and so with no session either.
 `Put::Copy` is Save as:
 a copy under a **new id**, because there are two projects afterwards and one id across both
 would mean each matched the other's session. `Put::Move` is an unsaved project's Save: the id
@@ -258,18 +258,17 @@ seconds. The session takes the project file's whole name and not its stem, so th
 and one ignore rule reaches both -- which is the point of the naming, a project file being something
 a reader may check in.
 
-**The id is stamped by the policy and not by the caller, once.** The id of `Saves::written` is
-which project the open file holds; `Saves::record` puts it on the session before comparing it
-against the baseline, so the stamp cannot read as a change, and builds the `Project` with it. The
-writes take both halves as it handed them back. They used to stamp each again, for a project whose
-file was claimed by the first write and given its id then; ids are minted in `start_new` and
-`Saves::to_put` now, and `saves` is held under one lock from the decision to the write, so a second stamp
-could only put back what the first one wrote. The third place is `open_at`, for a file that has
-none -- written by hand, or claimed by `start_new` and killed before its first write. Without one,
-every session was stamped with none and dropped by every load. The file is not written for it,
-since the project file changes only when the reader changes something; the first write that happens
-anyway carries it, so a project the reader only ever reads keeps losing its session. Nothing in the UI knows the id, which is why nothing
-in the UI can get it wrong.
+**The id is stamped by the policy and not by the caller, once.** `Saves::id` is which project
+is open; `Saves::record` puts it on the session before comparing it against the baseline, so the
+stamp cannot read as a change, and builds the `Project` with it. The writes take both halves as it
+handed them back, and `saves` is held under one lock from the decision to the write, so a second
+stamp could only put back what the first one wrote. Ids are minted in two places. `Saves::to_put`
+gives a copy its own. `Saves::opened` gives one to a file that has none -- written by hand, or
+claimed empty by `start_new` -- and `written.id` stays `None`, since that is what the file holds, so
+the id is **owed to the next flush** like a detail typed in. It used to wait for the first write the
+reader caused, and a project the reader only read -- no binaries, nothing changed -- never had one:
+every session went out under an id the file did not hold, and every load dropped it. Nothing in the
+UI knows the id, which is why nothing in the UI can get it wrong.
 
 **Building puts a `[cargo]` section in each file, and which file each half goes in is that same
 line.** The profile is what the reader chose, so it is the project file's and is written the moment

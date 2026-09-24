@@ -66,11 +66,12 @@ pub(super) struct Saves {
     /// or created. Otherwise claimed on the first write that has anything to say, so a run
     /// where nothing was ever opened leaves no file behind.
     open: Option<PathBuf>,
+    /// Which project this is. Stamped onto both halves of every write, since a session
+    /// carrying another id is one the next load throws away.
+    id: Option<ProjectId>,
     /// `project.toml` as last written: the baseline every change is measured against, and
-    /// where a write that is not about the binaries takes them from.
-    ///
-    /// Its id says which project the file holds. It is stamped onto both halves of every
-    /// write, since a session carrying another id is one the next load throws away.
+    /// where a write that is not about the binaries takes them from. Its id is the one the
+    /// file holds, which is `None` until a write gives it [`Saves::id`].
     ///
     /// Seeded whole by [`Saves::opened`], where the two below are pointedly empty,
     /// because every baseline is the state the app boots into and only this one is
@@ -129,6 +130,12 @@ impl Saves {
     /// state the app will be in the instant afterwards. The two empty baselines are
     /// *assigned* rather than assumed because a project switched away from leaves its own
     /// binaries and pending session behind.
+    ///
+    /// A `project` with no id -- written by hand, or claimed by [`super::start_new`] and not
+    /// written yet -- is given one here, and the file is owed it, like a detail typed in.
+    /// Otherwise the file got it only with a change the reader made, and a project they
+    /// only read lost its session on every launch: the session went out under an id the
+    /// file never held.
     pub(super) fn opened(
         &mut self,
         store: &Store,
@@ -138,6 +145,7 @@ impl Saves {
     ) {
         self.store = Some(store.clone());
         self.open = Some(path);
+        self.id = project.id.or_else(ProjectId::new);
         self.written = project.clone();
         self.binaries = Vec::new();
         self.unheld = project.binaries.clone();
@@ -145,17 +153,17 @@ impl Saves {
         // -- the one from the file being opened, the other into `Proj` beside it -- so a
         // baseline without them would read the state the app boots into as a change.
         self.session = Session {
-            id: self.written.id,
+            id: self.id,
             trusted: session.trusted,
             ..Session::default()
         };
         // What the file holds, which is the whole session and not the stub above.
         self.stored = Session {
-            id: self.written.id,
+            id: self.id,
             ..session.clone()
         };
         self.pending = None;
-        self.owed_project = None;
+        self.owed_project = self.owed_for(&project.details);
     }
 
     /// What a [`super::put_in`] writes into the place it is putting the project: the file
@@ -174,7 +182,7 @@ impl Saves {
         let from = self.open.clone()?;
         let id = match put {
             Put::Copy => ProjectId::new(),
-            Put::Move => self.written.id,
+            Put::Move => self.id,
         };
         let project = Project {
             id,
@@ -230,13 +238,12 @@ impl Saves {
         // baseline and what arrives comparable. The only stamp: the writes take both
         // halves as this hands them back.
         let session = Session {
-            id: self.written.id,
+            id: self.id,
             ..session
         };
         // Not a baseline: what the app has held, mid-load or not.
         self.unheld.retain(|path| !binaries.contains(path));
         let binaries_changed = !loading && self.binaries != binaries;
-        let details_changed = self.written.details != *details;
         let bookmarks_changed = self.written.bookmarks != bookmarks;
         let session_changed = !loading && *self.latest() != session;
 
@@ -255,14 +262,7 @@ impl Saves {
         if !binaries_changed && !bookmarks_changed {
             // The details alone, or nothing: owed, or no longer owed where they have been
             // changed back to what the file holds.
-            self.owed_project = details_changed.then(|| OwedProject {
-                project: Project {
-                    id: self.written.id,
-                    details: details.clone(),
-                    ..self.written.clone()
-                },
-                binaries_changed: false,
-            });
+            self.owed_project = self.owed_for(details);
             return None;
         }
         // This write carries the details, so nothing is owed for them any more.
@@ -270,7 +270,7 @@ impl Saves {
 
         Some(Recorded {
             project: Project {
-                id: self.written.id,
+                id: self.id,
                 details: details.clone(),
                 // A write that is not about the binaries keeps the ones already in the
                 // file; see [`Saves::binaries`].
@@ -282,6 +282,20 @@ impl Saves {
             },
             binaries_changed,
             session: carried,
+        })
+    }
+
+    /// The `project.toml` owed where `details` or the id differ from what the file holds,
+    /// both being changes that wait for a flush.
+    fn owed_for(&self, details: &Details) -> Option<OwedProject> {
+        let changed = self.written.details != *details || self.written.id != self.id;
+        changed.then(|| OwedProject {
+            project: Project {
+                id: self.id,
+                details: details.clone(),
+                ..self.written.clone()
+            },
+            binaries_changed: false,
         })
     }
 
@@ -350,6 +364,7 @@ impl Saves {
     /// a moment ago, and the files just written say the same.
     pub(super) fn moved_to(&mut self, path: PathBuf, id: Option<ProjectId>) {
         self.open = Some(path);
+        self.id = id;
         self.written.id = id;
         self.session.id = id;
         self.stored.id = id;

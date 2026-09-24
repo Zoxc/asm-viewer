@@ -149,14 +149,9 @@ pub fn switch(store: &Store, path: &Path) -> Result<(Project, Session), Failure>
 /// caller's own path stays the project's name.
 ///
 /// A file with no id -- written by hand, or claimed by [`start_new`] and never written --
-/// is given one here. Not written at once, the project file changing only when the reader
-/// changes something; the first write carries it. Without it every session would be
-/// written without an id too, and so dropped by every load.
+/// is given one by [`saves::Saves::opened`], and the next flush writes it.
 pub fn open_at(store: &Store, path: &Path) -> Result<(Project, Session), Failure> {
-    let (mut project, session) = load_project(store, path)?;
-    if project.id.is_none() {
-        project.id = ProjectId::new();
-    }
+    let (project, session) = load_project(store, path)?;
     remember(store, path);
     saves().opened(store, path.to_path_buf(), &project, &session);
     Ok((project, session))
@@ -167,12 +162,14 @@ pub fn open_at(store: &Store, path: &Path) -> Result<(Project, Session), Failure
 pub fn start_new(store: &Store) -> Option<PathBuf> {
     flush();
     let path = unsaved_project(store)?;
-    let project = Project {
-        id: ProjectId::new(),
-        ..Project::default()
-    };
     remember(store, &path);
-    saves().opened(store, path.clone(), &project, &Session::default());
+    // The file is empty, so the project it holds has no id: `opened` gives it one.
+    saves().opened(
+        store,
+        path.clone(),
+        &Project::default(),
+        &Session::default(),
+    );
     log::debug!("started the project {}", path.display());
     Some(path)
 }
@@ -203,7 +200,7 @@ pub enum Put {
 /// lock, on the UI thread, and drops a failure a Save has no business having -- a project
 /// file deleted or mangled underneath a run holding it perfectly well used to make this
 /// answer `false` and write nothing. The baselines are the truer answer besides: a project
-/// just started ([`start_new`]) has an empty file and an id only the app knows, and a
+/// just started ([`start_new`]) whose id the flush could not write has an empty file, and a
 /// re-read would hand it to its new place with no id, and so with no session either.
 pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
     flush();

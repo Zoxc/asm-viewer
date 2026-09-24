@@ -230,7 +230,7 @@ fn a_record_keeps_the_directory_the_project_was_given() {
 fn reopening_seeds_the_details_but_not_the_baseline() {
     let mut saves = Saves::default();
     let loaded = Project {
-        id: None,
+        id: ProjectId::parse("00000000deadbeef"),
         details: Details {
             directory: Some(PathBuf::from("/src/kernel")),
             ..Details::default()
@@ -260,7 +260,7 @@ fn reopening_seeds_the_details_but_not_the_baseline() {
 fn a_binary_landing_mid_load_is_not_written() {
     let mut saves = Saves::default();
     let loaded = Project {
-        id: None,
+        id: ProjectId::parse("00000000deadbeef"),
         details: Details::default(),
         binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
         bookmarks: Vec::new(),
@@ -300,7 +300,13 @@ fn a_binary_landing_mid_load_is_not_written() {
     )
     .expect("a write");
     assert_eq!(project, loaded);
-    assert_eq!(session, Some(session_with(Some("a.o"))));
+    assert_eq!(
+        session,
+        Some(Session {
+            id: loaded.id,
+            ..session_with(Some("a.o"))
+        })
+    );
 }
 
 /// A binary the file names that the load produced nothing for -- deleted, being relinked,
@@ -356,7 +362,7 @@ fn a_binary_that_did_not_load_stays_in_the_file() {
 fn a_session_recorded_mid_load_is_not_left_pending() {
     let mut saves = Saves::default();
     let loaded = Project {
-        id: None,
+        id: ProjectId::parse("00000000deadbeef"),
         details: Details::default(),
         binaries: paths(&["/tmp/vmlinux"]),
         bookmarks: Vec::new(),
@@ -390,7 +396,13 @@ fn a_session_recorded_mid_load_is_not_left_pending() {
     let (project, session) =
         recorded(&mut saves, loaded.binaries.clone(), whole.clone()).expect("a write");
     assert_eq!(project, loaded);
-    assert_eq!(session, Some(whole));
+    assert_eq!(
+        session,
+        Some(Session {
+            id: loaded.id,
+            ..whole
+        })
+    );
 }
 
 /// A write that does go out mid-load -- a directory typed in, a bookmark -- must not take

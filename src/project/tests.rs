@@ -413,9 +413,10 @@ fn a_project_that_does_not_open_says_which_way() {
     );
 }
 
-/// A project file with no id, as one written by hand has, is given one on opening. The file
-/// is not written for it, but the first write the reader causes carries it, and from then on
-/// the session beside it is believed.
+/// A project file with no id, as one written by hand has, is given one on opening, and the
+/// next flush writes it, like a detail typed in. A project the reader only reads -- no
+/// binaries, nothing changed -- used to lose its session on every launch: the session went
+/// out under an id the project file never got.
 #[test]
 fn a_project_file_with_no_id_is_given_one() {
     let _saves = using_saves();
@@ -423,28 +424,15 @@ fn a_project_file_with_no_id_is_given_one() {
     let store = Store::at(&base);
     let path = base.join(format!("app.{PROJECT_EXTENSION}"));
     fs::create_dir_all(&base).expect("creating the test directory");
-    fs::write(&path, b"").expect("writing the project");
+    fs::write(&path, b"directory = \"/src/app\"\n").expect("writing the project");
 
     let (project, _) = open_at(&store, &path).expect("the project opens");
-    assert!(project.id.is_some(), "no id was given");
-    assert_eq!(fs::read(&path).expect("the project file"), b"");
-
-    // A bookmark, which is written at once, and a session, which the flush writes.
-    let bookmarks = [Bookmark {
-        name: None,
-        document: saved_object("a.o"),
-    }];
-    record(
-        &Details::default(),
-        &[],
-        false,
-        &bookmarks,
-        session_with(Some("a.o")),
-    );
+    record(&project.details, &[], false, &[], session_with(Some("a.o")));
     flush();
 
     let (reread, session) = load_project(&store, &path).expect("the project reads back");
-    assert_eq!(reread.id, project.id);
+    assert!(reread.id.is_some(), "the project file was not given the id");
+    assert_eq!(reread.details, project.details);
     assert_eq!(session.active, Some(saved_object("a.o")));
 }
 
