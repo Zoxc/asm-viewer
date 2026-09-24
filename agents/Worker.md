@@ -406,7 +406,9 @@ DWARF a click costs would land long after the reader had typed past it. Its drai
 question **per pane**, not the newest outright, so the two panes of a tab do not drop each other's,
 and its answer is judged by comparison as every other is -- the listing it is about, by pointer, and
 the pattern it was asked with, held as one value (`About`) so that the ask, the answer and the hits
-the bar draws are judged by one `==` and not by three comparisons that can disagree. The listing
+the bar draws are judged by one `==` and not by three comparisons that can disagree. `About` holds
+the listing and not its address: a bar keeps its hits after the pane leaves, and a freed listing's
+address can go to the next one, whose search the old hits would then pass for. The listing
 travels with the job (`Searchable`), a worker thread being able to read no UI state; both arms of it
 are `Send` already, and the two functions that build a row's line from them ask for no colour,
 `palette()` being thread-local. A pane asks by *claiming* what it draws (`use_searching`, the shape

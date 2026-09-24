@@ -113,9 +113,13 @@ pub(crate) fn look(listed: &Searchable, filter: &Filter) -> Vec<Hit> {
 /// judged by one `==`, where comparing the two halves in each of the three places is three
 /// places to forget one and draw an answer about a listing the pane has left or a pattern
 /// typed past.
+///
+/// **It holds the listing, not its address.** A bar keeps its hits after the pane has left
+/// the listing they are about. Were that listing freed, the next one could be put at the
+/// same address, and the old hits would pass for its own.
 #[derive(Clone, PartialEq)]
 pub(crate) struct About {
-    listing: usize,
+    listing: Searchable,
     filter: Filter,
 }
 
@@ -123,7 +127,7 @@ impl About {
     /// What a search of `listed` for `filter` is about.
     fn of(listed: &Searchable, filter: &Filter) -> Self {
         About {
-            listing: listed.id(),
+            listing: listed.clone(),
             filter: filter.clone(),
         }
     }
@@ -921,3 +925,6 @@ pub(crate) fn use_find_steps<R: FnMut(usize) + 'static>(
         reveal(hit.row);
     });
 }
+
+#[cfg(test)]
+mod tests;
