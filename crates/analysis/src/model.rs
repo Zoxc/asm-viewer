@@ -82,6 +82,14 @@ impl LoadMessage {
             text,
         }
     }
+
+    /// A [`Warning`](Severity::Warning) saying `text`.
+    pub(crate) fn warning(text: String) -> LoadMessage {
+        LoadMessage {
+            severity: Severity::Warning,
+            text,
+        }
+    }
 }
 
 /// [`Object::placed`]: every symbol inside a code section's bytes

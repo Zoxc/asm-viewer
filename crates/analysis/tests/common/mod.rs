@@ -2044,8 +2044,10 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
 /// ELF `.so` whose only symbol table is `.dynsym`, and a PE DLL whose declarations are its
 /// export directory, its entry point and its unwind table — three entries in either table,
 /// two of them on the export and the entry point and the third on a function nothing names;
-/// and a Mach-O executable whose entry point is its `LC_MAIN`, beside the one function its
-/// symbol table names. An `.o` declares none of these, so a corpus of relocatable objects leaves the export,
+/// a Mach-O executable whose entry point is its `LC_MAIN`, beside the one function its
+/// symbol table names; and the images whose functions' stated addresses are not their code's:
+/// an ARM one with Thumb functions, a PPC64 ELFv1 one and two XCOFF ones with descriptors.
+/// An `.o` declares none of these, so a corpus of relocatable objects leaves the export,
 /// entry-point and unwind paths unexercised entirely.
 pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
     const TEXT: &[u8] = &[0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3, 0xC3];
@@ -2112,12 +2114,481 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
             macho_executable(0x1_0000_0000, MACHO_CODE_OFFSET + 0x180, false),
             2,
         ),
+        ("arm thumb", arm_thumb_image(), 5),
+        ("ppc64 elfv1", ppc64_elfv1_image(), 3),
+        ("xcoff32", xcoff_image(false, XCOFF_DATA), 1),
+        ("xcoff64", xcoff_image(true, XCOFF_DATA), 1),
     ]
 }
 
 /// Where [`macho_executable`] puts its code in the file: past the load commands, which is
 /// where `__text` sits in an image `ld64` links.
 pub const MACHO_CODE_OFFSET: u64 = 0x200;
+
+/// One section of an [`elf_image`]: its bytes at `address`, code or data.
+pub struct ImageSection<'a> {
+    pub name: &'a str,
+    pub address: u64,
+    pub code: bool,
+    pub bytes: &'a [u8],
+}
+
+/// One global symbol of an [`elf_image`]. `section` indexes [`ElfImage::sections`].
+pub struct ImageSymbol<'a> {
+    pub name: &'a str,
+    pub value: u64,
+    pub size: u64,
+    /// `STT_FUNC`, `STT_OBJECT` and so on.
+    pub kind: u8,
+    pub section: usize,
+}
+
+/// A linked ELF (`ET_EXEC`) of either class and either byte order, for the machines the
+/// other builders here cannot write an image for.
+pub struct ElfImage<'a> {
+    pub is_64: bool,
+    pub big_endian: bool,
+    pub machine: u16,
+    pub flags: u32,
+    pub entry: u64,
+    pub sections: &'a [ImageSection<'a>],
+    /// Written to `.symtab`.
+    pub symbols: &'a [ImageSymbol<'a>],
+    /// Written to `.dynsym`, which is what `object` reads exports from.
+    pub dynamic: &'a [ImageSymbol<'a>],
+}
+
+/// [`ElfImage`] assembled byte by byte: the ELF header, each section's bytes, the two
+/// symbol tables with their strings, the section names, then the section headers. No
+/// program headers, which the parse does not read.
+pub fn elf_image(image: ElfImage) -> Vec<u8> {
+    let ElfImage {
+        is_64,
+        big_endian,
+        machine,
+        flags,
+        entry,
+        sections,
+        symbols,
+        dynamic,
+    } = image;
+    let put = |out: &mut Vec<u8>, value: u64, width: usize| {
+        let bytes = value.to_be_bytes();
+        let bytes = &bytes[8 - width..];
+        if big_endian {
+            out.extend_from_slice(bytes);
+        } else {
+            out.extend(bytes.iter().rev());
+        }
+    };
+    let word = if is_64 { 8 } else { 4 };
+    let (ehdr, shdr, sym) = if is_64 { (64, 64, 24) } else { (52, 40, 16) };
+    // The first section header is the null one, so `sections[i]` is section `i + 1`.
+    let symtab_index = sections.len() as u64 + 1;
+    let dynsym_index = symtab_index + 2;
+    let shstrtab_index = dynsym_index + 2;
+
+    let table = |symbols: &[ImageSymbol]| {
+        let mut strings = vec![0u8];
+        let mut entries = vec![0u8; sym];
+        for symbol in symbols {
+            let name = strings.len() as u64;
+            strings.extend_from_slice(symbol.name.as_bytes());
+            strings.push(0);
+            let info = 0x10 | u64::from(symbol.kind); // STB_GLOBAL
+            let shndx = symbol.section as u64 + 1;
+            put(&mut entries, name, 4);
+            if is_64 {
+                put(&mut entries, info, 1);
+                put(&mut entries, 0, 1);
+                put(&mut entries, shndx, 2);
+                put(&mut entries, symbol.value, 8);
+                put(&mut entries, symbol.size, 8);
+            } else {
+                put(&mut entries, symbol.value, 4);
+                put(&mut entries, symbol.size, 4);
+                put(&mut entries, info, 1);
+                put(&mut entries, 0, 1);
+                put(&mut entries, shndx, 2);
+            }
+        }
+        (entries, strings)
+    };
+    let (symtab, strtab) = table(symbols);
+    let (dynsym, dynstr) = table(dynamic);
+
+    let mut shstrtab = vec![0u8];
+    let mut name_of = |name: &str| {
+        let offset = shstrtab.len() as u64;
+        shstrtab.extend_from_slice(name.as_bytes());
+        shstrtab.push(0);
+        offset
+    };
+    struct Header<'a> {
+        name: u64,
+        kind: u64,
+        flags: u64,
+        address: u64,
+        bytes: &'a [u8],
+        link: u64,
+        entsize: u64,
+    }
+    let header = |name, kind, flags, bytes, link, entsize| Header {
+        name,
+        kind,
+        flags,
+        address: 0,
+        bytes,
+        link,
+        entsize,
+    };
+    let mut headers = Vec::new();
+    for section in sections {
+        // SHT_PROGBITS; SHF_ALLOC, and SHF_EXECINSTR or SHF_WRITE.
+        let flags = if section.code { 2 | 4 } else { 2 | 1 };
+        headers.push(Header {
+            address: section.address,
+            ..header(name_of(section.name), 1, flags, section.bytes, 0, 0)
+        });
+    }
+    // SHT_SYMTAB = 2, SHT_STRTAB = 3, SHT_DYNSYM = 11.
+    let names = [
+        name_of(".symtab"),
+        name_of(".strtab"),
+        name_of(".dynsym"),
+        name_of(".dynstr"),
+        name_of(".shstrtab"),
+    ];
+    headers.push(header(
+        names[0],
+        2,
+        0,
+        &symtab,
+        symtab_index + 1,
+        sym as u64,
+    ));
+    headers.push(header(names[1], 3, 0, &strtab, 0, 0));
+    headers.push(header(
+        names[2],
+        11,
+        2,
+        &dynsym,
+        dynsym_index + 1,
+        sym as u64,
+    ));
+    headers.push(header(names[3], 3, 2, &dynstr, 0, 0));
+    headers.push(header(names[4], 3, 0, &shstrtab, 0, 0));
+
+    let mut out = vec![0u8; ehdr];
+    let mut placed = Vec::new();
+    for header in &headers {
+        out.resize(out.len().next_multiple_of(8), 0);
+        placed.push(out.len() as u64);
+        out.extend_from_slice(header.bytes);
+    }
+    out.resize(out.len().next_multiple_of(8), 0);
+    let shoff = out.len() as u64;
+
+    out.resize(out.len() + shdr, 0);
+    for (header, offset) in headers.iter().zip(placed) {
+        // sh_info is 1 for a symbol table: the null entry is its one local symbol.
+        let info = u64::from(header.entsize != 0);
+        put(&mut out, header.name, 4);
+        put(&mut out, header.kind, 4);
+        put(&mut out, header.flags, word);
+        put(&mut out, header.address, word);
+        put(&mut out, offset, word);
+        put(&mut out, header.bytes.len() as u64, word);
+        put(&mut out, header.link, 4);
+        put(&mut out, info, 4);
+        put(&mut out, 1, word);
+        put(&mut out, header.entsize, word);
+    }
+
+    let mut header = Vec::with_capacity(ehdr);
+    header.extend_from_slice(b"\x7fELF");
+    header.push(if is_64 { 2 } else { 1 });
+    header.push(if big_endian { 2 } else { 1 });
+    header.push(1); // EV_CURRENT
+    header.resize(16, 0);
+    put(&mut header, 2, 2); // ET_EXEC
+    put(&mut header, u64::from(machine), 2);
+    put(&mut header, 1, 4);
+    put(&mut header, entry, word);
+    put(&mut header, 0, word); // e_phoff
+    put(&mut header, shoff, word);
+    put(&mut header, u64::from(flags), 4);
+    put(&mut header, ehdr as u64, 2);
+    put(&mut header, 0, 2); // e_phentsize
+    put(&mut header, 0, 2); // e_phnum
+    put(&mut header, shdr as u64, 2);
+    put(&mut header, headers.len() as u64 + 1, 2);
+    put(&mut header, shstrtab_index, 2);
+    out[..ehdr].copy_from_slice(&header);
+    out
+}
+
+/// `STT_OBJECT` and `STT_FUNC`, for an [`ImageSymbol`].
+pub const STT_OBJECT: u8 = 1;
+pub const STT_FUNC: u8 = 2;
+
+/// Where [`arm_thumb_image`] puts its code.
+pub const ARM_TEXT: u64 = 0x8000;
+
+/// A 32-bit ARM executable whose Thumb functions state their addresses as the ARM ELF ABI
+/// has them, with bit 0 set: `thumb_fn` at `.text + 1` in `.symtab`, `thumb_export` at
+/// `.text + 9` in `.dynsym`, and the entry point at `.text + 0x11`. Beside them, an ARM
+/// function at an even address, and a data symbol at an odd one in `.text`, which is
+/// exported and not a function, so its address is not tagged.
+pub fn arm_thumb_image() -> Vec<u8> {
+    elf_image(ElfImage {
+        is_64: false,
+        big_endian: false,
+        machine: 40,        // EM_ARM
+        flags: 0x0500_0000, // EABI version 5
+        entry: ARM_TEXT + 0x11,
+        sections: &[
+            ImageSection {
+                name: ".text",
+                address: ARM_TEXT,
+                code: true,
+                bytes: &[0; 0x14],
+            },
+            ImageSection {
+                name: ".data",
+                address: 0x9000,
+                code: false,
+                bytes: &[0; 8],
+            },
+        ],
+        symbols: &[
+            ImageSymbol {
+                name: "thumb_fn",
+                value: ARM_TEXT + 1,
+                size: 4,
+                kind: STT_FUNC,
+                section: 0,
+            },
+            ImageSymbol {
+                name: "arm_fn",
+                value: ARM_TEXT + 4,
+                size: 4,
+                kind: STT_FUNC,
+                section: 0,
+            },
+            ImageSymbol {
+                name: "a_datum",
+                value: 0x9001,
+                size: 1,
+                kind: STT_OBJECT,
+                section: 1,
+            },
+        ],
+        dynamic: &[
+            ImageSymbol {
+                name: "thumb_export",
+                value: ARM_TEXT + 9,
+                size: 4,
+                kind: STT_FUNC,
+                section: 0,
+            },
+            ImageSymbol {
+                name: "odd_datum",
+                value: ARM_TEXT + 0xd,
+                size: 1,
+                kind: STT_OBJECT,
+                section: 0,
+            },
+        ],
+    })
+}
+
+/// Where [`ppc64_elfv1_image`] puts its code and its descriptors.
+pub const PPC64_TEXT: u64 = 0x1000_0000;
+pub const PPC64_OPD: u64 = 0x1002_0000;
+
+/// A big-endian PPC64 ELFv1 executable. Its functions' symbols and its entry point name
+/// descriptors in `.opd`, 24 bytes each, whose first doubleword is the code's address:
+/// `foo` names `.text`'s first byte, `bar` its ninth, and the entry point its thirteenth.
+/// `.foo` names `foo`'s code directly, as older toolchains wrote it, with the code's size.
+/// `broken` names a descriptor that runs past the end of `.opd`. `bar` is in `.dynsym`
+/// too, as a shared object's exported functions are.
+pub fn ppc64_elfv1_image() -> Vec<u8> {
+    let mut opd = Vec::new();
+    for code in [PPC64_TEXT, PPC64_TEXT + 8, PPC64_TEXT + 12] {
+        opd.extend_from_slice(&code.to_be_bytes());
+        opd.extend_from_slice(&0x1003_8000u64.to_be_bytes()); // the TOC
+        opd.extend_from_slice(&0u64.to_be_bytes());
+    }
+    opd.extend_from_slice(&[0; 4]);
+    let bar = ImageSymbol {
+        name: "bar",
+        value: PPC64_OPD + 0x18,
+        size: 24,
+        kind: STT_FUNC,
+        section: 1,
+    };
+    elf_image(ElfImage {
+        is_64: true,
+        big_endian: true,
+        machine: 21, // EM_PPC64
+        flags: 1,    // ELFv1
+        entry: PPC64_OPD + 0x30,
+        sections: &[
+            ImageSection {
+                name: ".text",
+                address: PPC64_TEXT,
+                code: true,
+                // Four `nop`s.
+                bytes: &[0x60, 0, 0, 0, 0x60, 0, 0, 0, 0x60, 0, 0, 0, 0x60, 0, 0, 0],
+            },
+            ImageSection {
+                name: ".opd",
+                address: PPC64_OPD,
+                code: false,
+                bytes: &opd,
+            },
+        ],
+        symbols: &[
+            ImageSymbol {
+                name: "foo",
+                value: PPC64_OPD,
+                size: 24,
+                kind: STT_FUNC,
+                section: 1,
+            },
+            ImageSymbol {
+                name: ".foo",
+                value: PPC64_TEXT,
+                size: 8,
+                kind: STT_FUNC,
+                section: 0,
+            },
+            ImageSymbol { ..bar },
+            ImageSymbol {
+                name: "broken",
+                value: PPC64_OPD + 0x48,
+                size: 24,
+                kind: STT_FUNC,
+                section: 1,
+            },
+        ],
+        dynamic: &[bar],
+    })
+}
+
+/// A big-endian PPC64 ELFv1 relocatable object: `foo`'s descriptor in `.opd` is zeros, and
+/// the `R_PPC64_ADDR64` against `.text` plus 8 that the linker fills its first doubleword
+/// from is the only place the code's address is stated.
+pub fn ppc64_elfv1_object() -> Vec<u8> {
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::PowerPc64, Endianness::Big);
+    obj.flags = object::FileFlags::Elf {
+        os_abi: object::elf::ELFOSABI_NONE,
+        abi_version: 0,
+        e_flags: object::elf::FileFlags(1),
+    };
+    let text = obj.section_id(write::StandardSection::Text);
+    obj.append_section_data(text, &[0x60, 0, 0, 0].repeat(4), 4);
+    let opd = obj.add_section(Vec::new(), b".opd".to_vec(), SectionKind::Data);
+    obj.append_section_data(opd, &[0; 24], 8);
+    obj.add_symbol(write::Symbol {
+        name: b"foo".to_vec(),
+        value: 0,
+        size: 24,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(opd),
+        flags: SymbolFlags::None,
+    });
+    let text_symbol = obj.section_symbol(text);
+    obj.add_relocation(
+        opd,
+        write::Relocation {
+            offset: 0,
+            symbol: text_symbol,
+            addend: 8,
+            flags: RelocationFlags::Elf {
+                r_type: object::elf::R_PPC64_ADDR64,
+            },
+        },
+    )
+    .expect("adding the descriptor's relocation");
+    obj.write().expect("writing the fixture object")
+}
+
+/// Where [`xcoff_image`] puts its code and its entry point's descriptor.
+pub const XCOFF_TEXT: u64 = 0x1000_0000;
+pub const XCOFF_DATA: u64 = 0x2000_0000;
+
+/// An XCOFF executable, 32- or 64-bit, with no symbol table: `.text`, and `.data` holding
+/// one function descriptor whose first word is `.text + 8`. `entry` is the auxiliary
+/// header's `o_entry`, which a linker points at that descriptor.
+pub fn xcoff_image(is_64: bool, entry: u64) -> Vec<u8> {
+    let word = if is_64 { 8 } else { 4 };
+    let put = |out: &mut Vec<u8>, value: u64, width: usize| {
+        out.extend_from_slice(&value.to_be_bytes()[8 - width..]);
+    };
+    let (file_header, aux_header, section_header) =
+        if is_64 { (24, 120, 72) } else { (20, 72, 40) };
+    let text = [0x60, 0, 0, 0].repeat(4);
+    let mut descriptor = Vec::new();
+    for value in [XCOFF_TEXT + 8, XCOFF_DATA + 0x100, 0] {
+        put(&mut descriptor, value, word);
+    }
+    let text_at = (file_header + aux_header + 2 * section_header) as u64;
+    let data_at = text_at + text.len() as u64;
+
+    let mut out = Vec::new();
+    // f_magic, f_nscns, f_timdat, then f_symptr, f_opthdr, f_flags and f_nsyms in the
+    // class's order. F_EXEC = 2.
+    put(&mut out, if is_64 { 0x01F7 } else { 0x01DF }, 2);
+    put(&mut out, 2, 2);
+    put(&mut out, 0, 4);
+    if is_64 {
+        put(&mut out, 0, 8);
+        put(&mut out, aux_header as u64, 2);
+        put(&mut out, 2, 2);
+        put(&mut out, 0, 4);
+    } else {
+        put(&mut out, 0, 4);
+        put(&mut out, 0, 4);
+        put(&mut out, aux_header as u64, 2);
+        put(&mut out, 2, 2);
+    }
+
+    // Only `o_entry` is read: after o_mflag, o_vstamp and three sizes in XCOFF32; after
+    // o_debugger, three addresses, nine halves, six bytes and three sizes in XCOFF64.
+    let entry_at = if is_64 { 80 } else { 16 };
+    let mut aux = vec![0u8; aux_header];
+    aux[entry_at..entry_at + word].copy_from_slice(&entry.to_be_bytes()[8 - word..]);
+    out.extend_from_slice(&aux);
+
+    // s_name, s_paddr, s_vaddr, s_size, s_scnptr, s_relptr, s_lnnoptr, s_nreloc, s_nlnno,
+    // s_flags and, in XCOFF64, s_reserve. STYP_TEXT = 0x20, STYP_DATA = 0x40.
+    for (name, address, bytes, at, kind) in [
+        (b".text\0\0\0", XCOFF_TEXT, &text, text_at, 0x20),
+        (b".data\0\0\0", XCOFF_DATA, &descriptor, data_at, 0x40),
+    ] {
+        out.extend_from_slice(name);
+        put(&mut out, address, word);
+        put(&mut out, address, word);
+        put(&mut out, bytes.len() as u64, word);
+        put(&mut out, at, word);
+        put(&mut out, 0, word);
+        put(&mut out, 0, word);
+        let count = if is_64 { 4 } else { 2 };
+        put(&mut out, 0, count);
+        put(&mut out, 0, count);
+        put(&mut out, kind, 4);
+        if is_64 {
+            put(&mut out, 0, 4);
+        }
+    }
+    out.extend_from_slice(&text);
+    out.extend_from_slice(&descriptor);
+    out
+}
 
 /// An x86-64 Mach-O **executable** (`MH_EXECUTE`), assembled with `object`'s encoder because
 /// its writer emits `MH_OBJECT` only, with neither segments nor `LC_MAIN`. `__PAGEZERO`, then

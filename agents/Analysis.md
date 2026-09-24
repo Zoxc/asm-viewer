@@ -36,7 +36,8 @@ parse at all is still dropped, having nothing to show; a message is for an objec
 that cannot be trusted in part. The parse collects them. A rule the parse follows hands back what
 went wrong beside its answer rather than reporting it itself, as `section_biases` does, so the DWARF
 loader, which asks the same rule again, drops the second copy. The Objects list marks the row
-(`agents/Sidebar.md`). One case is reported so far: the layout running out of address space.
+(`agents/Sidebar.md`). Two cases are reported so far: the layout running out of address space,
+and functions left out because the descriptor naming their code could not be read (below).
 
 **Data model**, built once at open time and shared via `Arc`. Only *defined* `SymbolKind::Text`
 symbols are kept. `object` calls an undefined ELF `STT_FUNC` or COFF function text too, but it has
@@ -127,7 +128,20 @@ doubles as the filter keeping exported *data* out. A relocatable object is skipp
 `entry()` answers an `LC_MAIN` as a file offset, so `macho_entry` walks the load commands
 itself and is not asked at all: an `LC_MAIN`'s offset is placed through the segment whose file
 bytes hold it (no such segment, no entry point), and an `LC_UNIXTHREAD`'s PC is read as
-`object` reads it (`notes/upstream/object.md`). The two nameless
+`object` reads it (`notes/upstream/object.md`). **A function's stated address is read through to
+its code** (`CodeAddresses`), on the three formats where `object` hands over a number that is not
+the code's. On 32-bit ARM ELF, bit 0 of an `STT_FUNC`'s value and of `e_entry` is the Thumb flag,
+and is cleared; only functions carry it, and the parse takes no other kind. On PPC64 ELFv1 a
+function's symbol and `e_entry` name a descriptor in `.opd`, whose first doubleword is the code's
+address; the symbol's size is the descriptor's, so none is kept. In a relocatable object that
+doubleword is 0 until the linker writes it, so the relocation that fills it is read instead. A
+symbol already outside `.opd` is code: older toolchains name it `.foo` beside `foo`, and once `foo`
+is read through, `.foo` is dropped as the same place twice and gives `foo` its size. On XCOFF only
+`o_entry` names a descriptor, 4 or 8 bytes by class; `object` calls a descriptor csect data, so no
+symbol does. A descriptor that cannot be read leaves its function out, with one warning for all of
+them. An ELF's exports are its `.dynsym` again, so an export at a dynamic function's stated address
+is skipped when that function's code was found elsewhere: it would be a second row a byte into it.
+The two nameless
 declarations, the entry point and an unwind entry, are called `<entry point>` and `<function 0x…>`
 or `<fragment 0x…>`, in angle brackets because no assembler, linker or mangling scheme emits them,
 so none can collide with a real one. The three are one type, `made_up::MadeUp`, whose `Display` is
@@ -939,14 +953,17 @@ the sidebar's question.
 **"Never panic on any file input" is tested two ways, and they are different jobs.**
 `tests/mutations.rs` is the **search**. It takes every fixture the suite builds (both committed gcc
 objects and gcc's stripped `.so`, the synthesized DWARF one, the ELF `.so`, the PE DLL and the same
-DLL naming a `.pdb` that is nowhere) and the six that are files on disk, the linker's three DLLs
+DLL naming a `.pdb` that is nowhere, the Mach-O executable, the ARM, PPC64 and XCOFF images whose
+functions' stated addresses are not their code's, and a PPC64 `.o` whose descriptor only a
+relocation fills) and the six that are files on disk, the linker's three DLLs
 each parsed **beside its PDB** and those PDBs themselves. It truncates each at every length; writes
 poison values (`0`, `u32::MAX`, `u64::MAX`, the file's own length…) into every numeric field of
 every header, section header, symbol and relocation, and for the PDB of the MSF superblock and
 stream directory, for the DLL of its debug directory and CodeView record, its exception directory
 and every `RUNTIME_FUNCTION`'s three words, and for an ELF of every `.eh_frame` record's length, CIE
 pointer, address and range; and splats pseudo-random runs over it, running the whole pipeline over
-each result. A `.pdb` being a second file found beside its binary, a mutated PDB is written beside
+each result. The field sweep reads only 64-bit little-endian ELF and PE headers, so the others
+get only the truncations and the splats. A `.pdb` being a second file found beside its binary, a mutated PDB is written beside
 its pristine DLL before that is parsed, under a directory per test in the target directory. A sanity
 check first asks each intact pair for line info, so the sweep is known to reach the backend and not
 a search that comes back empty; for the pairs whose image declares nothing, having a symbol at all

@@ -26,7 +26,7 @@ mod common;
 
 use common::{
     caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, garbage,
-    parse_and_walk_at,
+    parse_and_walk_at, ppc64_elfv1_object,
 };
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -100,7 +100,7 @@ fn scratch(test: &str) -> PathBuf {
 }
 
 /// Every shape the crate can be asked about: relocatable objects with and without DWARF,
-/// real compiler output in DWARF 5, `gcc`'s stripped shared object whose only declarations
+/// one whose function descriptor only a relocation fills, real compiler output in DWARF 5, `gcc`'s stripped shared object whose only declarations
 /// are its FDEs, the two linked images, whose export and entry-point paths
 /// (`declared_code`) no `.o` reaches at all, one of them naming a `.pdb` that is nowhere,
 /// and the linker's three real DLLs each **beside its PDB**.
@@ -120,6 +120,7 @@ fn corpus(test: &str) -> Vec<Case> {
             "line_fixture_hidden.so".to_owned(),
             committed_fixture("line_fixture_hidden.so"),
         ),
+        Case::in_memory("ppc64 elfv1 .o".to_owned(), ppc64_elfv1_object()),
     ];
     corpus.extend(
         declared_code_images()

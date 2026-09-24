@@ -43,3 +43,20 @@ handed back a later `LC_MAIN`'s raw offset. Pinned by `declared_code.rs`' three
 `a_macho_…` tests.
 
 Not reported.
+
+**Three formats' function addresses are handed over as the file states them, not as code
+addresses.** On 32-bit ARM ELF, `ElfSymbol::address` and `ElfFile::entry` answer `st_value` and
+`e_entry` with bit 0 still set on a Thumb function, and so do the ELF exports. On PPC64 ELFv1, an
+`STT_FUNC`'s value and `e_entry` are the address of a function descriptor in `.opd`. On XCOFF,
+`entry()` answers `o_entry`, which is also a descriptor's address. The trait's docs say only
+"address" and "the virtual address of the entry point", and nothing marks these as different.
+
+**What it cost**: a Thumb function and its entry point sat one byte into the code, and each
+exported one was listed twice, once a byte in. A PPC64 ELFv1 function's symbol and every ELFv1 or
+XCOFF entry point landed in no code section and were dropped without a word. The fix is
+`CodeAddresses` in `crates/analysis/src/parse.rs`, which clears the Thumb bit and reads a
+descriptor's first word, through its relocation in a relocatable object. Pinned by
+`tests/code_addresses.rs`.
+
+Not reported. `object` 0.40 has no helper for any of it. The one piece it offers is
+`FileFlags::ppc64_abi`, which reads the ABI version.

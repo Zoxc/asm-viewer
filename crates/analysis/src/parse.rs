@@ -12,10 +12,12 @@ use crate::{
 use object::macho;
 use object::read::macho::{MachHeader, MachOFile};
 use object::{
-    BinaryFormat, Endian, ExportTarget, Object as _, ObjectKind, ObjectSection, ObjectSegment,
-    ObjectSymbol, ReadRef, SectionIndex, SectionKind, SymbolIndex, SymbolKind, SymbolSection,
+    Architecture, BigEndian, BinaryFormat, Endian, Endianness, ExportTarget, FileFlags,
+    Object as _, ObjectKind, ObjectSection, ObjectSegment, ObjectSymbol, ReadRef, RelocationTarget,
+    SectionIndex, SectionKind, SymbolIndex, SymbolKind, SymbolSection,
 };
 use std::{
+    cell::Cell,
     collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
     path::PathBuf,
@@ -76,7 +78,9 @@ struct SymbolTable {
 /// (`unwind`, out of [`unwind::entries`]). A stripped shared library is otherwise a file with
 /// nothing in it, and a `/DEBUG` image has no symbol table at all.
 /// Every address here is one the file — or the debug file matched to it by GUID and age —
-/// states outright, so the "nothing is scanned for" rule still holds.
+/// states outright, so the "nothing is scanned for" rule still holds. A function's and the
+/// entry point's are read through to the code first, where the format tags them or points
+/// at a descriptor ([`CodeAddresses`]).
 ///
 /// Three decisions the caller depends on:
 ///
@@ -101,8 +105,10 @@ struct SymbolTable {
 /// The indices start at `next`, *past* the file's own symbol table, which is the only honest
 /// thing they can be. Nothing can reach them by relocation, since a file that declares
 /// exports is a linked image.
+#[allow(clippy::too_many_arguments)]
 fn declared_code(
     file: &object::File<'_>,
+    addresses: &CodeAddresses<'_, '_>,
     code: &[(Range<SectionAddress>, SectionIndex)],
     known: &mut HashSet<PlacedAddress>,
     imports: &mut Vec<Import>,
@@ -136,6 +142,8 @@ fn declared_code(
 
     // An import the symbol table already named is not listed twice.
     let mut imported: HashSet<String> = imports.iter().map(|i| i.name.clone()).collect();
+    // The stated addresses of the dynamic functions whose code is somewhere else.
+    let mut moved = HashSet::new();
     for symbol in file.dynamic_symbols() {
         if symbol.kind() != SymbolKind::Text {
             continue;
@@ -153,10 +161,21 @@ fn declared_code(
             }
             continue;
         }
+        let stated_at = Code {
+            address: symbol.address(),
+            section: symbol.section().index(),
+            size: stated(symbol.size()),
+        };
+        let Some(code) = addresses.function(file, stated_at) else {
+            continue;
+        };
+        if code.address != symbol.address() {
+            moved.insert(symbol.address());
+        }
         take(
             Name::Symbol(String::from_utf8_lossy(name).into_owned()),
-            SectionAddress::new(symbol.address()),
-            stated(symbol.size()),
+            SectionAddress::new(code.address),
+            code.size,
         );
     }
 
@@ -169,6 +188,12 @@ fn declared_code(
         let ExportTarget::Address { address } = export.target() else {
             continue;
         };
+        // An ELF's exports are its `.dynsym` again. One whose code the walk above found
+        // elsewhere is that function, and taken as stated it would be a byte into it
+        // (Thumb) or its descriptor.
+        if moved.contains(&address) {
+            continue;
+        }
         let Some(name) = export.name().into_name() else {
             continue;
         };
@@ -188,7 +213,10 @@ fn declared_code(
         object::File::MachO64(file) => macho_entry(file),
         _ => Some(file.entry()),
     };
-    if let Some(entry) = entry.filter(|&entry| entry != 0) {
+    let entry = entry
+        .filter(|&entry| entry != 0)
+        .and_then(|entry| addresses.entry(file, entry));
+    if let Some(entry) = entry {
         take(
             Name::MadeUp(MadeUp::EntryPoint),
             SectionAddress::new(entry),
@@ -269,6 +297,254 @@ fn thread_pc<E: Endian>(endian: E, cputype: macho::CpuType, state: &[u8]) -> Opt
     }
 }
 
+/// A function's code as the parse takes it: where it is, the section it is in, and the size
+/// the file states for it.
+#[derive(Clone, Copy)]
+struct Code {
+    address: u64,
+    section: Option<SectionIndex>,
+    size: Option<u64>,
+}
+
+/// How the numbers a file states for its functions and its entry point become the addresses
+/// of their code. On most formats they already are. On three, `object` hands them over as
+/// the file states them, and they are not (`notes/upstream/object.md`).
+struct CodeAddresses<'data, 'file> {
+    rule: Rule<'data, 'file>,
+    /// How many functions were left out because their descriptor could not be read.
+    unread: Cell<usize>,
+}
+
+enum Rule<'data, 'file> {
+    /// Each number is the code's address.
+    Direct,
+    /// 32-bit ARM ELF: bit 0 of a function's address is the Thumb flag ([`thumb_code`]).
+    Thumb,
+    /// PPC64 ELFv1: a function's symbol and the entry point name its descriptor in `.opd`
+    /// ([`opd_code`]).
+    Opd(Opd<'data, 'file>),
+    /// XCOFF: the entry point names its descriptor ([`xcoff_entry`]). Its function symbols
+    /// are code already: `object` calls a descriptor csect data.
+    Xcoff,
+}
+
+/// A PPC64 ELFv1 `.opd`, and in a relocatable object the relocations that fill its
+/// descriptors, by their offset into it.
+struct Opd<'data, 'file> {
+    section: object::Section<'data, 'file>,
+    relocations: HashMap<u64, (RelocationTarget, i64)>,
+}
+
+impl<'data, 'file> Opd<'data, 'file> {
+    fn of(file: &'file object::File<'data>, section: object::Section<'data, 'file>) -> Self {
+        let mut relocations = HashMap::new();
+        if file.kind() == ObjectKind::Relocatable {
+            for (offset, relocation) in section.relocations() {
+                relocations
+                    .entry(offset)
+                    .or_insert((relocation.target(), relocation.addend()));
+            }
+        }
+        Opd {
+            section,
+            relocations,
+        }
+    }
+}
+
+impl<'data, 'file> CodeAddresses<'data, 'file> {
+    fn of(file: &'file object::File<'data>) -> Self {
+        let rule = match (file.format(), file.architecture(), file.flags()) {
+            (BinaryFormat::Elf, Architecture::Arm, _) => Rule::Thumb,
+            // ABI 2 has no descriptors; 0 is "unstated", and has them where there is an `.opd`.
+            (BinaryFormat::Elf, Architecture::PowerPc64, FileFlags::Elf { e_flags, .. })
+                if e_flags.ppc64_abi() != 2 =>
+            {
+                match file.section_by_name(".opd") {
+                    Some(section) => Rule::Opd(Opd::of(file, section)),
+                    None => Rule::Direct,
+                }
+            }
+            (BinaryFormat::Xcoff, _, _) => Rule::Xcoff,
+            _ => Rule::Direct,
+        };
+        CodeAddresses {
+            rule,
+            unread: Cell::new(0),
+        }
+    }
+
+    /// A defined function symbol's code, or [`None`] where it names a descriptor that
+    /// cannot be read. Only a function's: a data symbol's address is never tagged.
+    fn function(&self, file: &object::File<'data>, symbol: Code) -> Option<Code> {
+        match &self.rule {
+            Rule::Thumb => Some(Code {
+                address: thumb_code(symbol.address),
+                ..symbol
+            }),
+            // A symbol outside `.opd` names code already: older toolchains' `.foo`.
+            Rule::Opd(opd) if symbol.section == Some(opd.section.index()) => {
+                let code = opd_code(file, opd, symbol.address);
+                self.count(code.is_none());
+                code
+            }
+            _ => Some(symbol),
+        }
+    }
+
+    /// The code at the entry point a linked image states, or [`None`] where it names a
+    /// descriptor that cannot be read.
+    fn entry(&self, file: &object::File<'data>, entry: u64) -> Option<u64> {
+        let code = match &self.rule {
+            Rule::Thumb => return Some(thumb_code(entry)),
+            Rule::Opd(opd) if at(&opd.section, entry).is_some() => {
+                opd_code(file, opd, entry).map(|code| code.address)
+            }
+            Rule::Xcoff => xcoff_entry(file, entry),
+            _ => return Some(entry),
+        };
+        self.count(code.is_none());
+        code
+    }
+
+    fn count(&self, unread: bool) {
+        if unread {
+            self.unread.set(self.unread.get().saturating_add(1));
+        }
+    }
+
+    /// What is said about the functions left out, if any were.
+    fn message(&self) -> Option<LoadMessage> {
+        let unread = self.unread.get();
+        (unread > 0).then(|| {
+            LoadMessage::warning(format!(
+                "Functions left out because their descriptors could not be read: {unread}."
+            ))
+        })
+    }
+}
+
+/// A 32-bit ARM function's code address. The ARM ELF ABI sets bit 0 of a Thumb function's
+/// `st_value`, and of `e_entry`, to say the code is Thumb; the code starts a byte lower.
+/// Only `STT_FUNC` has the flag, and the parse takes no other kind: a label (`STT_NOTYPE`),
+/// the `$a`/`$t`/`$d` mapping symbols among them, is never a function here.
+fn thumb_code(address: u64) -> u64 {
+    address & !1
+}
+
+/// The code a PPC64 ELFv1 function descriptor at `address` in `.opd` names. The first
+/// doubleword of the descriptor, in the file's byte order, is the code's address; the size
+/// a descriptor symbol states is the descriptor's, so none is kept. In a relocatable object
+/// that doubleword is 0 until the linker writes it, so the relocation that fills it is read
+/// instead.
+fn opd_code(file: &object::File<'_>, opd: &Opd<'_, '_>, address: u64) -> Option<Code> {
+    let offset = at(&opd.section, address)?;
+    if file.kind() == ObjectKind::Relocatable {
+        let &(target, addend) = opd.relocations.get(&offset)?;
+        let (base, section) = match target {
+            RelocationTarget::Symbol(index) => {
+                let symbol = file.symbol_by_index(index).ok()?;
+                (symbol.address(), symbol.section().index())
+            }
+            RelocationTarget::Section(index) => {
+                (file.section_by_index(index).ok()?.address(), Some(index))
+            }
+            _ => return None,
+        };
+        return Some(Code {
+            address: base.checked_add_signed(addend)?,
+            section,
+            size: None,
+        });
+    }
+    let endian = Endianness::from_big_endian(!file.is_little_endian())?;
+    let code = read_word(&opd.section, offset, 8, endian)?;
+    let section = file
+        .sections()
+        .find(|section| at(section, code).is_some())
+        .map(|section| section.index());
+    Some(Code {
+        address: code,
+        section,
+        size: None,
+    })
+}
+
+/// The code an XCOFF entry point names. `o_entry` is the address of the entry's function
+/// descriptor, whose first word, 4 or 8 bytes by the file's class and big-endian, is the
+/// code's address.
+fn xcoff_entry(file: &object::File<'_>, entry: u64) -> Option<u64> {
+    let width = if file.is_64() { 8 } else { 4 };
+    file.sections().find_map(|section| {
+        let offset = at(&section, entry)?;
+        read_word(&section, offset, width, BigEndian)
+    })
+}
+
+/// How far into `section` `address` is, where the section covers it.
+fn at(section: &object::Section<'_, '_>, address: u64) -> Option<u64> {
+    address
+        .checked_sub(section.address())
+        .filter(|&offset| offset < section.size())
+}
+
+/// The `width`-byte word, 4 or 8, `offset` bytes into `section`'s data.
+fn read_word(
+    section: &object::Section<'_, '_>,
+    offset: u64,
+    width: usize,
+    endian: impl Endian,
+) -> Option<u64> {
+    let data = section.data().ok()?;
+    let start = usize::try_from(offset).ok()?;
+    let bytes = data.get(start..start.checked_add(width)?)?;
+    match width {
+        8 => Some(endian.read_u64(bytes.try_into().ok()?)),
+        _ => Some(u64::from(endian.read_u32(bytes.try_into().ok()?))),
+    }
+}
+
+/// Older PPC64 ELFv1 toolchains name a function's code `.foo` beside `foo`, its
+/// descriptor. Read through the descriptor, `foo` is at the same place, so `.foo` is the
+/// same function twice. It is dropped, and its size, which is the code's where `foo`'s
+/// was the descriptor's, goes to `foo`.
+fn drop_dot_names(named: &mut Vec<Pending>) {
+    fn spelled(pending: &Pending) -> Option<&str> {
+        match &pending.name {
+            Name::Symbol(name) => Some(name),
+            _ => None,
+        }
+    }
+    let dotted: HashMap<_, usize> = named
+        .iter()
+        .enumerate()
+        .filter_map(|(index, pending)| {
+            let name = spelled(pending)?.strip_prefix('.')?;
+            Some(((name, pending.address, pending.section), index))
+        })
+        .collect();
+    let twins: Vec<(usize, usize)> = named
+        .iter()
+        .enumerate()
+        .filter_map(|(index, pending)| {
+            let key = (spelled(pending)?, pending.address, pending.section);
+            Some((index, *dotted.get(&key)?))
+        })
+        .collect();
+
+    let mut dropped = HashSet::new();
+    for (kept, dot) in twins {
+        named[kept].size = named[kept].size.or(named[dot].size);
+        dropped.insert(dot);
+    }
+    let mut index = 0;
+    named.retain(|_| {
+        let keep = !dropped.contains(&index);
+        index += 1;
+        keep
+    });
+}
+
 /// The address ranges code can be in, each with its section: what [`declared_code`] looks a
 /// declared address up in, and what places an unwind entry's range in its
 /// [`CodeSection::unwind`](crate::CodeSection::unwind). Each is the section's own
@@ -297,12 +573,13 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
     let mut messages = Vec::new();
     let sections = read_sections(&file, &mut messages);
+    let addresses = CodeAddresses::of(&file);
     let SymbolTable {
         named: mut symbols,
         unnamed,
         mut imports,
         next,
-    } = symbol_table(&file);
+    } = symbol_table(&file, &addresses);
     // Keyed by placed address: in a relocatable object every section starts at 0, so an
     // address alone does not say which code it is ([`section_biases`]).
     let place = |symbol: &Pending| {
@@ -322,7 +599,17 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     };
     let unwind = unwind::entries(&file);
     let code = code_sections(&sections);
-    let declared = declared_code(&file, &code, &mut known, &mut imports, next, named, &unwind);
+    let declared = declared_code(
+        &file,
+        &addresses,
+        &code,
+        &mut known,
+        &mut imports,
+        next,
+        named,
+        &unwind,
+    );
+    messages.extend(addresses.message());
     let ranges = place_unwind(&code, &unwind);
 
     // After `declared_code`, so `known` holds every address anything named.
@@ -421,8 +708,9 @@ fn read_sections(
 /// until the rest have claimed their addresses ([`SymbolTable::unnamed`]). An undefined one
 /// is an import and no place in the file: `object` calls an undefined ELF `STT_FUNC` and a
 /// COFF external of function type text too ([`SymbolTable::imports`]). So is a COFF weak
-/// external ([`weak_external`]).
-fn symbol_table(file: &object::File<'_>) -> SymbolTable {
+/// external ([`weak_external`]). A defined one is taken at its code ([`CodeAddresses`]),
+/// and left out where that is a descriptor that cannot be read.
+fn symbol_table(file: &object::File<'_>, addresses: &CodeAddresses<'_, '_>) -> SymbolTable {
     let mut table = SymbolTable {
         named: Vec::new(),
         unnamed: Vec::new(),
@@ -442,15 +730,22 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
             continue;
         }
 
-        let address = SectionAddress::new(symbol.address());
-        let section = symbol.section().index();
+        let stated_at = Code {
+            address: symbol.address(),
+            section: symbol.section().index(),
+            size: stated(symbol.size()),
+        };
+        let Some(code) = addresses.function(file, stated_at) else {
+            continue;
+        };
+        let address = SectionAddress::new(code.address);
 
         let pending = |name: Name| Pending {
             index: symbol.index(),
             name,
             address,
-            size: stated(symbol.size()),
-            section,
+            size: code.size,
+            section: code.section,
         };
         match symbol.name_bytes() {
             Ok(name) => table.named.push(pending(Name::Symbol(
@@ -460,6 +755,9 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
                 .unnamed
                 .push(pending(Name::MadeUp(MadeUp::Function(address)))),
         }
+    }
+    if let Rule::Opd(_) = addresses.rule {
+        drop_dot_names(&mut table.named);
     }
     table
 }
