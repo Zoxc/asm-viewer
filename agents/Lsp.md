@@ -316,7 +316,9 @@ separator is `/` and its path carries a leading slash no drive letter has, so `C
 `file:///C:/x/y.rs` and came back `C:/x/y.rs`. A `Document::Source` was compared as text and is
 never canonicalised (`src/project.rs`), so on Windows every place followed through the
 server was a second tab of a file already open, with the trail, the positions and the
-bookmarks' `matching` split across the two. `path_of` puts the separators back. The drive
+bookmarks' `matching` split across the two. `path_of` puts the separators back, and the
+drive letter in upper case: rust-analyzer lowercases it on purpose, to match VS Code, and
+`Path` tells `c:\x` from `C:\x`, so each answer was the same second tab again. The drive
 letter is what says a path is Windows', not a `cfg`, so the rule is the same everywhere and
 is tested from either platform. It is `cargo.rs`'s rule too: a letter, a colon, then the end
 or a separator. A looser one, any `/X:`, read a Unix `/a:b/x.rs` back as `a:b\x.rs`.

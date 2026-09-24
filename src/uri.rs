@@ -100,12 +100,17 @@ pub fn path_of(uri: &str) -> Option<PathBuf> {
 /// [`Document::Source`](crate::document::Document) is never canonicalised, so the
 /// leading slash made the two spellings two tabs of one file.
 ///
+/// The drive letter comes back upper case, as Windows, MSVC and rustc spell it. A server
+/// may send it lower case (rust-analyzer does, to match VS Code), and `c:\x` and `C:\x`
+/// are two different `Path`s, so two tabs of one file again.
+///
 /// Whether the path is Windows' is [`drive`]'s rule, so a Unix `/a:b/x.rs` keeps its leading
 /// slash and every byte after it. The rule reads bytes, and a `/` byte is never part of a
 /// longer UTF-8 character, so text comes out as it would have as text.
 fn spelled(mut bytes: Vec<u8>) -> Vec<u8> {
     if bytes.first() == Some(&b'/') && drive(&bytes[1..]) {
         bytes.remove(0);
+        bytes[0].make_ascii_uppercase();
         for byte in &mut bytes {
             if *byte == b'/' {
                 *byte = b'\\';

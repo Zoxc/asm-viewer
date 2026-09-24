@@ -44,6 +44,19 @@ fn a_windows_path_comes_back_with_its_own_separators() {
     );
 }
 
+/// A server may spell the drive in lower case, and escape its colon. Either way it is the
+/// file the app spells with an upper case drive, and not a second tab of it.
+#[test]
+fn a_lower_case_drive_comes_back_upper_case() {
+    for uri in [
+        "file:///c:/x/y.rs",
+        "file:///c%3A/x/y.rs",
+        "file:///C:/x/y.rs",
+    ] {
+        assert_eq!(path_of(uri), Some(PathBuf::from(r"C:\x\y.rs")), "{uri}");
+    }
+}
+
 #[test]
 fn a_colon_after_a_unix_directory_name_is_no_drive() {
     let uri = uri_of(Path::new("/a:b/x.rs"));
