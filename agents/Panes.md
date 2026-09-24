@@ -711,7 +711,9 @@ light and the hand with it: nothing lights and nothing shows the hand while it i
 nothing offers the press Alt has taken away. Alt is read in the render only by the row the
 pointer is on, and that render sets the icon over a link from the light, as a move does. A
 modifier going down or up moves nothing, so an icon set only by the move would keep the hand
-over a link Alt has just shut, or the I-beam over a label Ctrl has just opened.
+over a link Alt has just shut, or the I-beam over a label Ctrl has just opened. The question
+about the name under the pointer is no door, so Alt leaves it alone: read on the move, it would
+turn on whether the pointer had moved since Alt went down.
 
 **Every link is text and not an element.** A row's columns are bytes of its text, which is
 what lets a press on a name in the source be the byte offset the language server is asked at,

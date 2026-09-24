@@ -10637,6 +10637,52 @@ fn a_key_takes_the_box_down_and_a_bare_modifier_does_not() {
     assert!(hover_box(&test).is_none(), "a key left the box up");
 }
 
+/// Alt says no to a link's press and not to the question about its name. So the box comes
+/// to a pointer moved onto the name with Alt held, as it stays when Alt goes down under a
+/// resting one: whether a name is asked about must not turn on whether the pointer moved.
+#[test]
+fn alt_held_leaves_the_name_asked_about() {
+    let (file, _directory) = calling_file("hover");
+    let (mut test, roots, _asks) = mount_linking(
+        |job: LspJob| match job {
+            LspJob::Hover { ticket, .. } => Some(LspAnswer::Hovered {
+                ticket,
+                said: Ok(Some(lsp::Hovered {
+                    text: "what it is".to_owned(),
+                    line: 2,
+                    columns: 12..18,
+                })),
+            }),
+            _ => None,
+        },
+        file.clone(),
+    );
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+
+    let mut alt = roots.keys.alt;
+    alt.set(true);
+    settle(&mut test);
+    let at = word_point(&test, "helper");
+    test.move_cursor(at);
+    hovered(&mut test);
+    assert!(
+        hover_box(&test).is_some(),
+        "a pointer moved onto the name with Alt held asked nothing"
+    );
+
+    alt.set(false);
+    settle(&mut test);
+    assert!(hover_box(&test).is_some(), "the box went as Alt came up");
+}
+
 /// A right-click on a link offers the name's uses, and asks for them where the pointer
 /// was: the question carries the name it was on and the column it begins at. A press
 /// elsewhere in the row offers no such thing -- the answer would be to no name.

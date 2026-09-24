@@ -1217,12 +1217,13 @@ fn on_move(
         let sweeping = sweeping_in(&marked.peek());
         // Alt says a press on a link is not a door, so what is under the pointer is text.
         // The link under it is kept all the same: the light asks Alt for itself, so the
-        // link lights again as Alt comes up, with no move to say so.
+        // link lights again as Alt comes up, with no move to say so. The name is said
+        // whatever Alt is: asking about it is no door.
         let alt = *alt.peek();
         let hovered = (!sweeping).then(|| links.as_ref()?.at(column)).flatten();
         over.set_if_modified(hovered);
         if let Some(tell) = &tell {
-            tell(if sweeping || alt { None } else { column });
+            tell(if sweeping { None } else { column });
         }
         let on_text = cells.x_into_text(at).is_some_and(|x| x >= 0.0);
         // The hand over a link, and only while a press on it would be a door: the link's
