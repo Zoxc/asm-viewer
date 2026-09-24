@@ -9,11 +9,11 @@ use super::*;
 /// does not shrink behind their back.
 #[derive(Clone, PartialEq)]
 struct BookmarkRow {
-    /// Which bookmark this is, in the reader's own list -- what its menu removes by.
-    index: usize,
+    /// Which bookmark this is -- what its menu removes.
     bookmark: Bookmark,
     live: Option<Document>,
-    /// Where this row is in the list as it is drawn, which under a filter is not `index`.
+    /// Where this row is in the list as it is drawn, which under a filter is not where it
+    /// is in the reader's own list.
     at: usize,
     /// Where the filter matched in the name the row draws, for the row to mark.
     marks: Vec<Range<usize>>,
@@ -39,7 +39,7 @@ impl Component for BookmarkRow {
             ..
         } = self.states;
         let bookmarked = project.bookmarks;
-        let index = self.index;
+        let bookmark = self.bookmark.clone();
         let at = self.at;
         let pick = Pick::Bookmark(self.bookmark.clone());
         let dead = self.live.is_none();
@@ -69,7 +69,7 @@ impl Component for BookmarkRow {
             &text.clone(),
             tooltip,
             row.on_secondary_down(move |e: Event<PressEventData>| {
-                ContextMenu::open_from_event(&e, remove_menu(bookmarked, index));
+                ContextMenu::open_from_event(&e, remove_menu(bookmarked, bookmark.clone()));
             })
             .child(saved_icon(&self.bookmark.document))
             .child(tree_name_fitted(fitted, text, dead, &self.marks)),
@@ -86,22 +86,23 @@ fn saved_icon(saved: &SavedDocument) -> Element {
     kind_icon(saved.kind())
 }
 
-/// The menu a bookmark row opens on a right-click: one item, removing that row. By index
-/// and not by place, because a dead row is exactly the one that resolves to no place and
-/// the one this is most wanted on. Built per press, as every menu is (`menus.rs`).
-fn remove_menu(bookmarked: State<Bookmarks>, index: usize) -> Menu {
+/// The menu a bookmark row opens on a right-click: one item, removing that row's bookmark.
+/// By its saved form and not by place, because a dead row is exactly the one that resolves
+/// to no place and the one this is most wanted on; and not by index, because Ctrl+D can
+/// change the list while the menu is up. Built per press, as every menu is (`menus.rs`).
+fn remove_menu(bookmarked: State<Bookmarks>, bookmark: Bookmark) -> Menu {
     Menu::new().child(
         MenuButton::new()
             .on_press(move |_| {
                 let mut bookmarked = bookmarked;
-                bookmarked.write().remove(index);
+                bookmarked.write().remove(&bookmark);
             })
             .child("Remove bookmark"),
     )
 }
 
 /// What the panel builds a row from: where the bookmark is in the reader's own list,
-/// which its menu removes by, the bookmark, and the place it resolves to now.
+/// which keys its row, the bookmark, and the place it resolves to now.
 type Listed = (usize, Bookmark, Option<Document>);
 
 /// The Bookmarks list: every bookmark of the project, in the order the reader added them,
@@ -152,7 +153,6 @@ impl Component for BookmarksPanel {
                 .enumerate()
                 .map(|(at, ((index, bookmark, live), text))| {
                     BookmarkRow {
-                        index: *index,
                         bookmark: bookmark.clone(),
                         live: live.clone(),
                         at,

@@ -26036,6 +26036,37 @@ fn a_bookmark_row_is_removed_from_its_menu() {
     assert_eq!(left, [symbols[0].data.display()]);
 }
 
+/// **A bookmark row's menu removes the bookmark it was opened on**, even when the list
+/// changed while it was up: Ctrl+D still reaches the window past an open menu, and taking
+/// out a row above moves every row under it up one.
+#[test]
+fn a_bookmark_menu_removes_its_own_row_after_the_list_moved() {
+    let [a, b, c] = ["/src/a.rs", "/src/b.rs", "/src/c.rs"]
+        .map(|path| bookmark_of(&Document::Source(Arc::from(Path::new(path)))));
+    let (mut test, states) = TestingRunner::new(
+        bookmarks_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let mut bookmarks = states.bookmarks;
+    bookmarks.set(Bookmarks::from_entries(vec![a, b.clone(), c.clone()]));
+    settle(&mut test);
+
+    let row = centre_of(&test, "b.rs");
+    right_click(&mut test, row);
+    // What Ctrl+D on a tab showing a.rs does, with the menu still up.
+    bookmarks.set(Bookmarks::from_entries(vec![b, c.clone()]));
+    settle(&mut test);
+    let entry = centre_of(&test, "Remove bookmark");
+    test.move_cursor(entry);
+    test.press_cursor(entry);
+    test.release_cursor(entry);
+    settle(&mut test);
+
+    assert_eq!(bookmarks.peek().entries(), [c]);
+}
+
 /// **A bookmark row's pick is the bookmark itself, not its place in the list.** Removing
 /// another bookmark moves every row under it up one; a pick held as a position would then
 /// light the row that moved into it, and Enter would open that row.

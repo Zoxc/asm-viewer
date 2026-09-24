@@ -107,17 +107,22 @@ fn a_moved_symbol_still_matches_its_bookmark() {
 }
 
 /// A bookmark whose object is gone matches nothing and is kept; `remove` is how it goes,
-/// and an index past the end is nothing to remove.
+/// and a bookmark not in the list is nothing to remove.
 #[test]
-fn a_dead_bookmark_is_kept_until_removed_by_index() {
+fn a_dead_bookmark_is_kept_until_removed() {
     let object = object("a.o", &[("target", 6)]);
     let mut bookmarks = Bookmarks::default();
     bookmarks.toggle(&symbol(&object, 0), "target", std::slice::from_ref(&object));
+    let dead = bookmarks.entries()[0].clone();
 
     assert_eq!(bookmarks.matching(&symbol(&object, 0), &[]), None);
     assert_eq!(bookmarks.entries().len(), 1);
-    bookmarks.remove(5);
+    let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
+    bookmarks.remove(&Bookmark::new(
+        SavedDocument::from_document(&file),
+        "main.rs",
+    ));
     assert_eq!(bookmarks.entries().len(), 1);
-    bookmarks.remove(0);
+    bookmarks.remove(&dead);
     assert!(bookmarks.entries().is_empty());
 }

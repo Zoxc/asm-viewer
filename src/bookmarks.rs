@@ -97,10 +97,11 @@ impl Bookmarks {
         true
     }
 
-    /// Remove the entry at `index`, which is how a bookmark that no longer resolves — and
-    /// so names no document to be asked about — is let go of.
-    pub fn remove(&mut self, index: usize) {
-        if index < self.entries.len() {
+    /// Remove `bookmark`, which is how one that no longer resolves — and so names no
+    /// document to be asked about — is let go of. By the saved form and not by where it
+    /// was, since the list can change between a row being drawn and its menu's press.
+    pub fn remove(&mut self, bookmark: &Bookmark) {
+        if let Some(index) = self.entries.iter().position(|entry| entry == bookmark) {
             self.entries.remove(index);
         }
     }
