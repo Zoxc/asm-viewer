@@ -296,9 +296,9 @@ fn a_place_with_no_listing_leaves_nothing_waiting() {
 
 /// The base is where the two index spaces meet, and one function crosses it: `touching`
 /// and `places` share it, so the gutter cannot light an edge the pane will not scroll
-/// to. A run opening above this listing starts at its first row, one ending above it
-/// holds nothing of it, and a separator opening the run is inside it while one closing
-/// the run is not -- all of it with a base under the rows.
+/// to. A run is cut to this listing's rows, one wholly above or below holds nothing of
+/// it, and a separator opening the run is inside it while one closing the run is not --
+/// all of it with a base under the rows.
 #[test]
 fn a_run_of_listing_rows_crosses_into_this_listings_instructions_by_its_base() {
     // Branches 0 -> 2 and 3 -> 5 over nine instructions. A separator is drawn above
@@ -337,6 +337,12 @@ fn a_run_of_listing_rows_crosses_into_this_listings_instructions_by_its_base() {
     assert_eq!(lit(106..=107).len(), 1);
     // A run that is the separator alone holds no instruction at all.
     assert!(lit(106..=106).is_empty());
+    // The run reaches on below this listing, into the next stretch: the end is cut to
+    // the last row, and the branch into instruction 5 is lit.
+    assert_eq!(lit(107..=150).len(), 1);
+    assert_eq!(lit(90..=150).len(), 2);
+    // A run wholly below this listing holds none of it.
+    assert!(lit(111..=150).is_empty());
     // And the symbol read alone, with no base, answers the same run shifted down: the
     // two panes ask one function.
     assert_eq!(lit(106..=107), studied.touching(6..=7, 0));

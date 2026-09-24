@@ -601,17 +601,19 @@ impl Studied {
     /// rows is crossed into instruction indices with a base: two answers about the same
     /// run cannot then land a row apart.
     ///
-    /// The start saturates and the end is checked. A run opening above this listing
-    /// starts at its first row; one ending above it holds none of it at all.
-    /// [`Lanes::instructions_in`] settles the ends from there -- a separator opening the
-    /// run is inside it, one closing it is not.
+    /// The run is cut to this listing's rows. One opening above it starts at its first
+    /// row, one ending below it ends at its last, and one wholly above or below holds
+    /// none of it. [`Lanes::instructions_in`] settles the ends from there -- a separator
+    /// opening the run is inside it, one closing it is not. The last row is always an
+    /// instruction, so the cut never closes the run on a separator.
     fn instructions_in(
         &self,
         rows: RangeInclusive<usize>,
         base: usize,
     ) -> Option<RangeInclusive<usize>> {
+        let here = self.lanes.listing_rows();
         let first = rows.start().saturating_sub(base);
-        let last = rows.end().checked_sub(base)?;
+        let last = rows.end().checked_sub(base)?.min(here.checked_sub(1)?);
         self.lanes.instructions_in(first..=last)
     }
 

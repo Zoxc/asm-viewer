@@ -910,10 +910,12 @@ that is one separator lights nothing. In an object's code it is asked per held s
 stretch's lanes speaking its own instructions and its base saying which listing row its first
 instruction is drawn at. **The base is crossed in one place**: `touching` shares a private
 `instructions_in` with `Studied::places`, so the edges the gutter lights and the lines the Source
-pane pairs cannot land a row apart. The run's start saturates and its end is checked -- one opening
-above a stretch starts at the stretch's first row, one ending above it holds none of the stretch at
-all. It was written once per pane, and two spellings of it can disagree over a separator at the
-run's end: one lights an edge the other does not scroll to.
+pane pairs cannot land a row apart. The run is cut to the stretch's rows: one opening above a
+stretch starts at its first row, one ending below it ends at its last, and one wholly above or below
+holds none of it. An end left uncut past the stretch finds no instruction there, so a run swept from
+one function into the next would pair nothing in the first. It was written once per pane, and two
+spellings of it can disagree over a separator at the run's end: one lights an edge the other does
+not scroll to.
 
 **A reveal owed to a pane that has not been measured is kept, not spent.** `reveal_row` needs to
 know what is on screen already -- to leave a row alone that is on it, and to give up the margin
