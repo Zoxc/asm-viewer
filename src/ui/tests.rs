@@ -24508,9 +24508,9 @@ fn inside(area: Area) -> (f64, f64) {
 /// its row's text, and an operand, which is a run inside it -- and with the same pointer
 /// once Alt is up as the control.
 ///
-/// Alt goes down over the **resting** pointer for the label, and comes up over it for the
-/// operand: a light that waited for the next move would be one the reader is looking at
-/// while it is already wrong.
+/// Ctrl and Alt go down over the **resting** pointer for the label, and Alt comes up over
+/// it for the operand: a light or an icon that waited for the next move would be one the
+/// reader is looking at while it is already wrong.
 #[test]
 fn alt_held_darkens_every_link_and_the_hand() {
     let (_path, objects) = fixture_objects(1);
@@ -24541,17 +24541,33 @@ fn alt_held_darkens_every_link_and_the_hand() {
     let operand = link_area(&test, "add").expect("the link is drawn");
     let label = label_area(&test, "sum_to:").expect("sum_to is labelled");
 
-    // The label, lit under Ctrl, and darkened by Alt with the pointer where it was.
-    ctrl.set(true);
-    settle(&mut test);
+    // The label, lit by Ctrl going down under the resting pointer, and darkened by Alt
+    // with the pointer where it was.
     test.move_cursor(inside(label));
     settle(&mut test);
+    assert_eq!(
+        icon_now(),
+        CursorIcon::Text,
+        "the label is a link without Ctrl"
+    );
+    ctrl.set(true);
+    settle(&mut test);
     assert!(lit_over(&test, label), "the label is not lit to begin with");
+    assert_eq!(
+        icon_now(),
+        CursorIcon::Pointer,
+        "the hand waited for a move as Ctrl went down over the label"
+    );
     alt.set(true);
     settle(&mut test);
     assert!(
         lit_links(&test).is_empty(),
         "the label stayed lit as Alt went down under it"
+    );
+    assert_eq!(
+        icon_now(),
+        CursorIcon::Text,
+        "the hand stayed as Alt went down over the label"
     );
 
     // And the operand, moved onto with Alt already held.
@@ -24575,12 +24591,10 @@ fn alt_held_darkens_every_link_and_the_hand() {
         lit_over(&test, operand),
         "the operand stayed dark as Alt came up over it"
     );
-    test.move_cursor(inside(operand));
-    settle(&mut test);
     assert_eq!(
         icon_now(),
         CursorIcon::Pointer,
-        "the hand did not come back"
+        "the hand did not come back as Alt came up over the operand"
     );
 }
 

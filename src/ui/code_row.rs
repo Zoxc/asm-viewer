@@ -21,9 +21,10 @@
 //! three can offer what the others will not do. The box is the row's, placed over the
 //! link's columns ([`lit_box`]), a span having nothing to draw one with.
 //!
-//! The pointer's icon is the row's to set, in one place: an I-beam over the text and to
-//! the right of it, the hand over a link inside it, and the arrow over the gutter and on
-//! leaving the row. Set only
+//! The pointer's icon is the row's to set: an I-beam over the text and to the right of
+//! it, the hand over a link inside it, and the arrow over the gutter and on leaving the
+//! row. Set by the move, and over a link by the render too, which is what a modifier
+//! going down or up causes. Set only
 //! when it changes, since each set is a message to the platform, and kept in one cell for
 //! the whole thread: a row's own memory of it would be wrong the moment the row beside it
 //! set something else.
@@ -742,6 +743,15 @@ pub(crate) fn use_code_row(
         let held = (*alt.read(), *shift.read());
         open(&links) && held == (false, false)
     });
+    // The icon over a link follows the light. A modifier going down or up draws the row
+    // again but moves nothing, so `on_move` alone would leave the icon as it was.
+    if over().is_some() {
+        set_icon(if lit.is_some() {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Text
+        });
+    }
     let columns = lit
         .and_then(|lit| links.as_ref()?.columns.get(lit))
         .cloned();

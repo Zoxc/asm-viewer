@@ -704,8 +704,9 @@ text style carries a colour, a weight and a decoration, and nothing to draw a bo
 why a run of text used to make do with an underline. **Alt shuts every door**, and takes the
 light and the hand with it: nothing lights and nothing shows the hand while it is held, so
 nothing offers the press Alt has taken away. Alt is read in the render only by the row the
-pointer is on, and the icon follows the pointer, so a hand over a link Alt has just shut is put
-right by the next move, as it is for Ctrl.
+pointer is on, and that render sets the icon over a link from the light, as a move does. A
+modifier going down or up moves nothing, so an icon set only by the move would keep the hand
+over a link Alt has just shut, or the I-beam over a label Ctrl has just opened.
 
 **Every link is text and not an element.** A row's columns are bytes of its text, which is
 what lets a press on a name in the source be the byte offset the language server is asked at,
