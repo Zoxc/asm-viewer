@@ -22,6 +22,18 @@ fn a_project_file_is_known_by_its_extension() {
     }
 }
 
+/// A project named on the command line with `..` in it is the same project as the one the
+/// file dialog opens, so both reach the recent list under one spelling.
+#[test]
+fn a_project_path_loses_its_dots() {
+    let here = std::env::current_dir().unwrap();
+    let parent = here.parent().unwrap();
+    assert_eq!(
+        absolute(Path::new("../a/./b.avproj")).unwrap(),
+        parent.join("a").join("b.avproj")
+    );
+}
+
 /// Giving a project a place writes what `Saves` holds, not what the old files hold. The two
 /// differ twice over. A project just **started** has an empty file, so its id is the app's
 /// alone until a write puts it there -- and a project put somewhere without one is a project

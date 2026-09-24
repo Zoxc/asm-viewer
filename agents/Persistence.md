@@ -107,7 +107,9 @@ the app's own. That rule is why **every path a project is named by is absolute i
 relative one would be read where the app was started and written under the store. The two ways
 one can come in relative are made absolute where they enter, lexically (`std::path::absolute`):
 the project named on the command line, in `main`, and a relative `ASSEMBLY_VIEWER_STATE`, whose
-paths would otherwise come back through `Store::path` with the base joined on twice.
+paths would otherwise come back through `Store::path` with the base joined on twice. The
+project's path also has its `..` taken out (`project::absolute`): the recent list compares
+by spelling, so `../app/app.avproj` would sit there beside the same file's plain path.
 The project's directory is a third, typed into a box that takes any spelling. It is made
 absolute where the text becomes a path (`OpenProject::workspace`), with its `..` taken out by
 text (`cargo::lexical`). Kept relative, the files joined to it never matched the debug info's,

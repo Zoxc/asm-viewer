@@ -62,6 +62,13 @@ pub fn is_project_file(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == PROJECT_EXTENSION)
 }
 
+/// `path` as a project is named by: absolute, with its `.` and `..` taken out by text.
+/// Projects are compared by spelling, so `../app/app.avproj` given from `/src/tools` has to
+/// come out as `/src/app/app.avproj`, or the recent list keeps both.
+pub fn absolute(path: &Path) -> std::io::Result<PathBuf> {
+    std::path::absolute(path).map(|path| crate::cargo::lexical(&path))
+}
+
 /// What to call the project kept at `path`: the file's name, or `Unsaved project 3` for one
 /// the app is keeping for want of anywhere else. The whole of the naming rule, and here
 /// rather than in a view because more than one draws it.

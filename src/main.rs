@@ -103,7 +103,7 @@ fn main() {
     // save and by the recent list, so `app.avproj` would be read from here and written
     // under the store.
     let opening = match std::env::args_os().nth(1).map(std::path::PathBuf::from) {
-        Some(path) if project::is_project_file(&path) => match std::path::absolute(&path) {
+        Some(path) if project::is_project_file(&path) => match project::absolute(&path) {
             Ok(path) => Some(path),
             Err(error) => {
                 eprintln!("{}: {error}", path.display());
