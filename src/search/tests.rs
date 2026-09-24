@@ -254,6 +254,23 @@ fn an_end_anchored_pattern_finds_a_crlf_line() {
     assert!(places(&root, &brace) == ["x.rs:2"], "{brace:?}");
 }
 
+/// The `\r` of a `\r\n` is no character a pattern can match: `foo.` does not find a line
+/// that ends in `foo`, which would be a hit with nothing to mark.
+#[test]
+fn a_crlf_lines_carriage_return_is_not_matched() {
+    let root = Temporary::fresh_directory("search-crlf-dot");
+    write(&root.join("x.rs"), "foo\r\nfoox\r\n");
+
+    let dot = Filter {
+        pattern: "foo.".to_owned(),
+        regex: true,
+        ..Filter::default()
+    };
+    let hits = hits(&root, dot);
+
+    assert!(places(&root, &hits) == ["x.rs:2"], "{hits:?}");
+}
+
 /// A match that starts in the whitespace the row does not draw is marked for the part of
 /// it that is drawn. The matches are found over the whole line -- a pattern that needs the
 /// indentation finds it -- and are moved to the drawn text afterwards.

@@ -109,6 +109,11 @@ impl Filter {
     /// it means in the sidebar. `grep-regex`'s own `word` is looser than `\b` on purpose
     /// -- its docs have `-2` matching inside `foo -2 bar` -- and one toggle must not mean
     /// two things in two boxes.
+    ///
+    /// `crlf` makes `\r\n` the matcher's line terminator, as it is the searcher's. Without
+    /// it `.` matched the `\r` of a CRLF line, so `foo.` listed a line ending in `foo` with
+    /// nothing in it to mark. A pattern holding a literal `\r` or `\n` does not build: it
+    /// could only match across a line's end.
     pub fn grep_matcher(&self) -> Option<RegexMatcher> {
         if !self.asks() {
             return None;
@@ -116,6 +121,7 @@ impl Filter {
 
         RegexMatcherBuilder::new()
             .case_insensitive(!self.case_sensitive)
+            .crlf(true)
             .build(&self.expression().ok()?)
             .ok()
     }

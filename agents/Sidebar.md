@@ -326,13 +326,15 @@ every hit can be opened. `follow_links(false)` is the crate's default written ou
 rule and not the crate's: a symlink is not a project file anywhere (`agents/Finding.md`). A line
 ends at `\r\n` as well as `\n`, as it does in the Source pane: the crate's default takes off only
 the `\n`, so a line of a CRLF file reached the matcher ending in `\r` and `;$` found nothing in it.
-The searcher is told and not the matcher: `grep-regex`'s `crlf` changes only a multi-line `$`, and
-the matcher is not multi-line. BOM sniffing is off: the crate's default strips a UTF-8 BOM and
-decodes a UTF-16 file before matching, where the Source pane reads the raw bytes, so a hit on the
-first line of a BOM file opened three bytes early and a UTF-16 file was listed as text. And a
-hit's line is decoded, **then** matched, **then** trimmed and cut, with the spans moved afterwards:
-matching a trimmed line changes what `^` and `\b` answer, and match offsets taken from raw bytes are
-wrong the moment a lossy decode replaces one.
+The matcher is told too, with `grep-regex`'s `crlf`, which makes `\r\n` its line terminator. Without
+it the searcher's fast path ran the regex over the whole buffer, and `.` matched the `\r`: `foo.`
+listed every line ending in `foo`, with nothing on it marked. A pattern holding a literal `\r` or
+`\n` does not build and finds nothing: it could only match across a line's end. BOM sniffing is off:
+the crate's default strips a UTF-8 BOM and decodes a UTF-16 file before matching, where the Source
+pane reads the raw bytes, so a hit on the first line of a BOM file opened three bytes early and a
+UTF-16 file was listed as text. And a hit's line is decoded, **then** matched, **then** trimmed and
+cut, with the spans moved afterwards: matching a trimmed line changes what `^` and `\b` answer, and
+match offsets taken from raw bytes are wrong the moment a lossy decode replaces one.
 
 **A search is a thread and a channel of its own, and cancelling one is letting the receiver go.**
 `start_search` writes state and nothing else -- the id bumped, the hits emptied -- and an effect in
