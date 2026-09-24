@@ -122,11 +122,42 @@ fn contents(path: &Path) -> Option<(Vec<u8>, String)> {
         return None;
     }
 
-    let bytes = fs::read(path).ok()?;
+    let bytes = within(path, MAX_SIZE)?;
     // Lossy rather than strict: a file with one bad byte in a comment is still a source
     // file.
     let text = String::from_utf8_lossy(&bytes).into_owned();
     Some((bytes, text))
+}
+
+/// The bytes of `path`, or [`None`] if it holds more than `limit` of them.
+///
+/// **The gate's answer is not trusted for the read.** What `lstat` saw and what the open
+/// finds can differ: the path may have been swapped for a symlink to a fifo in between, and
+/// a file may have grown. And a size is not what a read returns: a `/proc` file states 0
+/// and `/proc/self/pagemap` then reads as hundreds of gigabytes. So the open follows no
+/// link and does not wait on a fifo, the handle it opened is asked again, and the read
+/// stops one byte past the bound.
+fn within(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return None;
+    }
+
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() as u64 <= limit).then_some(bytes)
 }
 
 counter!(

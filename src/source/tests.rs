@@ -182,6 +182,22 @@ fn a_symlink_is_not_shown_whatever_it_points_at() {
     assert!(!showable(&first));
 }
 
+/// A file's stated size is not what a read of it returns: `/proc` states 0 for all of its
+/// files. The read stops at the bound whatever the size said, where it once read on to the
+/// end -- which for `/proc/self/pagemap` is hundreds of gigabytes.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_read_stops_at_the_bound_whatever_the_size_said() {
+    let status = Path::new("/proc/self/status");
+    assert_eq!(
+        fs::metadata(status).map(|metadata| metadata.len()).ok(),
+        Some(0)
+    );
+
+    assert!(within(status, 16).is_none());
+    assert!(within(status, MAX_SIZE).is_some_and(|bytes| bytes.len() > 16));
+}
+
 /// `read_text` is the pane's rule without the digests, so what the pane refuses it refuses:
 /// a language server answering with a directory must not open it.
 #[test]
