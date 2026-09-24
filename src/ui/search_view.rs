@@ -168,6 +168,11 @@ async fn take_hits(
             return;
         }
     }
+    // The walk is gone without saying it finished: its thread would not start, or died.
+    // Nothing more is coming, so the panel stops saying it is searching.
+    write_if(searched, |state| {
+        state.id == id && std::mem::take(&mut state.running)
+    });
 }
 
 /// The Search view: a box over every hit the last search found.

@@ -1061,7 +1061,10 @@ load *and* the path, since a file closed and reopened while the first parse ran 
 only the second one's objects belong on screen. That is the whole reason a load has an id where an
 analysis answer needs none: an answer is about a `Symbol` that already existed, while a load is
 about work that has produced nothing to be identified by. `take_load` **returning** is what stops
-the worker: it drops the receiver, the next send fails, and the walk breaks. What streaming buys is
+the worker: it drops the receiver, the next send fails, and the walk breaks. The other way round,
+**the channel closing ends every path the load still holds** (`Loads::end`): a reader thread that
+would not start, or died, says `Finished` for none of them, and a path left in `Loads` is drawn as
+loading, refused a reopen, and holds off every save for the rest of the run. What streaming buys is
 not uniform. The 196-member rlib's first member is offered at 102 ms against the 685 ms the whole
 file takes (debug build), while the 331 MB binary is one object and gains no object earlier at all;
 there the win is the row, on screen from the click instead of an empty list for six seconds.

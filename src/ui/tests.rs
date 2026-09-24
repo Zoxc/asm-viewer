@@ -4889,6 +4889,29 @@ fn objects_reach_the_sidebar_as_they_are_parsed() {
     assert_eq!(reading(&states), [("line_fixture.o".to_owned(), 3, false)]);
 }
 
+/// A load whose worker goes without saying it finished -- its thread would not start, or
+/// died -- is finished all the same. Left loading, the file was drawn as being read for
+/// ever, refused a reopen, and held off every save for the rest of the run.
+#[test]
+fn a_load_whose_worker_goes_is_finished() {
+    let (path, objects) = fixture_objects(1);
+    let (mut test, states, sender) = mount_load(&path);
+    test.sync_and_update();
+
+    sender
+        .send_blocking(Progress::Parsed(objects[0].clone()))
+        .expect("the app is still listening");
+    pump(&mut test, |_| states.objects.peek().len() == 1);
+    drop(sender);
+    pump(&mut test, |_| states.loading.peek().is_empty());
+
+    assert_eq!(states.objects.peek().len(), 1, "what was read was dropped");
+    assert!(
+        reading(&states).is_empty(),
+        "the file is still drawn as being read"
+    );
+}
+
 /// **A file being read and a file that has been read are one row.** The pending row was a
 /// component of its own -- fifty-five lines of `ArchiveRow` with three values fixed -- and
 /// is now that row with `folds: None`, so this walks the one file from the first to the
@@ -32409,6 +32432,25 @@ fn hits_arrive_under_their_file_and_fold() {
         "{folded:?}"
     );
     assert!(folded.iter().any(|label| label == "third hit"));
+}
+
+/// A walk that goes without saying it finished -- its thread would not start, or died --
+/// ends the search all the same, rather than leave the panel saying it is searching.
+#[test]
+fn a_search_whose_walk_goes_is_finished() {
+    let file: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
+    let (mut test, states, directory, dock) = search_over(move |_query, emit| {
+        let _ = emit(SearchEvent::Hit(file.clone(), hit_at(3, "a hit")));
+    });
+    ask_for(&states, dock, &directory, "hit");
+    let searched = states.searched;
+    pump(&mut test, |_| !searched.peek().running);
+    assert!(
+        labels(&test)
+            .iter()
+            .any(|label| label == "1 match in 1 file"),
+        "the panel still says it is searching"
+    );
 }
 
 /// A hit row's hover goes with the row across a fold above it, as a place row's does

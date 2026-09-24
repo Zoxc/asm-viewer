@@ -57,6 +57,12 @@ impl Loads {
             .retain(|(entry, loading)| *entry != id || loading != path);
     }
 
+    /// This load has nothing more to say about any path: its worker is gone, whether or
+    /// not it said so for each of them.
+    pub fn end(&mut self, id: LoadId) {
+        self.entries.retain(|(entry, _)| *entry != id);
+    }
+
     /// Whether this load's answers about `path` are still wanted.
     pub fn holds(&self, id: LoadId, path: &Path) -> bool {
         self.entries

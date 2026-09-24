@@ -140,4 +140,12 @@ pub(crate) async fn take_load(
             return;
         }
     }
+
+    // The worker is gone without finishing every path: its thread would not start, or
+    // died. Nothing more is coming, so a path left here would be drawn as loading, refused
+    // a reopen and would hold off every save for the rest of the run.
+    let active = loading.peek().active(id);
+    if active {
+        loading.write().end(id);
+    }
 }
