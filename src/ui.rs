@@ -889,6 +889,10 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
             // not beside it: an element keeps one handler per event, and a second
             // `on_global_pointer_down` would silently replace this.
             hover_gone(hover);
+            // And the keyboard goes wherever the press puts it: an ask still waiting for a
+            // pane is not the reader's any more. A press that asks makes its ask after
+            // this, a press coming after its down.
+            unask_keyboard(keyboard);
             match e.button() {
                 Some(MouseButton::Back) => navigate(open, Nav::Back),
                 Some(MouseButton::Forward) => navigate(open, Nav::Forward),

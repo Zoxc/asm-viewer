@@ -485,12 +485,6 @@ impl Picking {
         self.went((keys.open)(picked.at));
     }
 
-    /// The reader put the keyboard in this list themselves, so any ask still waiting for a
-    /// pane is not theirs and is dropped ([`unask_keyboard`]).
-    pub(crate) fn unasked(self) {
-        unask_keyboard(self.keyboard);
-    }
-
     /// Escape: the keyboard back in the tab on screen, in the pane it was last in there.
     /// The same ask a pressed chip makes ([`return_keyboard`]) and not a focus taken
     /// here, a list knowing nothing about which box the tab has -- and it is the ask that

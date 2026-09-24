@@ -37572,6 +37572,52 @@ fn the_keyboard_is_asked_for_until_there_is_a_pane_to_put_it_in() {
     );
 }
 
+/// **Typing in a box drops an ask still waiting for a pane.** A row opened a tab whose
+/// pane has nothing to draw yet, and the reader went on to type in the list's filter box
+/// meanwhile: the pane arriving must not take the keyboard out of the box mid-word.
+#[test]
+fn typing_in_a_box_drops_an_ask_still_waiting_for_a_pane() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, mounted)) = TestingRunner::new(
+        late_pane_harness,
+        (300., 400.).into(),
+        |runner: &mut _| {
+            let states = runner.provide_root_context(test_roots).states;
+            let mounted = runner
+                .provide_root_context(|| PaneMounted(State::create(false)))
+                .0;
+            (states, mounted)
+        },
+        1.,
+    );
+    let (mut objects, mut mounted) = (states.objects, mounted);
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert!(states.open.active().is_some(), "the press opened nothing");
+
+    // Into the box over the list, and a query typed there.
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum");
+    settle(&mut test);
+    let typed = |test: &TestingRunner, query: &str| labels(test).iter().any(|text| text == query);
+    assert!(typed(&test, "sum"), "the box has not the keyboard");
+
+    // The pane arrives, and the rest of the query still goes into the box.
+    mounted.set(true);
+    settle(&mut test);
+    test.write_text("_t");
+    settle(&mut test);
+    assert!(
+        typed(&test, "sum_t"),
+        "the pane took the keyboard out of the box"
+    );
+}
+
 /// **Opening a tab hands it the keyboard**, by press and by Enter alike: a reader who has
 /// put a listing on screen is reading it. The pick stays where it was and goes grey, which
 /// is what says the list is no longer where a key would land -- and a press with Alt held,

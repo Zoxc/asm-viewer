@@ -353,6 +353,7 @@ pub(crate) fn box_keys(
         if matches!(&e.key, Key::Named(named) if declined.contains(named)) {
             return false;
         }
+        typed_in_box(&e.key);
         answer(&e.key, e.modifiers);
         boxed.tail(&e)
     })
@@ -362,5 +363,8 @@ pub(crate) fn box_keys(
 /// default with the modifiers let through. Every `Input` takes this or [`box_keys`], since
 /// freya's own default hides a held Ctrl or Alt from the root.
 pub(crate) fn plain_keys() -> Callback<Event<KeyboardEventData>, bool> {
-    Callback::new(|e: Event<KeyboardEventData>| Boxed::Input.tail(&e))
+    Callback::new(|e: Event<KeyboardEventData>| {
+        typed_in_box(&e.key);
+        Boxed::Input.tail(&e)
+    })
 }

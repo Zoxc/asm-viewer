@@ -432,16 +432,13 @@ impl ListPane {
     /// focused node has no handler of its own (`notes/upstream/freya.md`).
     fn rows(&self, keys: Rc<ListKeys>, list: impl IntoElement) -> Rect {
         let pane = *self;
-        let (rows, picking) = (self.rows, self.states.picking);
+        let rows = self.rows;
         rect()
             .width(Size::fill())
             .height(Size::flex(1.0))
             .a11y_id(rows)
             .a11y_focusable(true)
-            .on_pointer_down(move |_| {
-                rows.request_focus();
-                picking.unasked();
-            })
+            .on_pointer_down(move |_| rows.request_focus())
             .on_key_down(move |e: Event<KeyboardEventData>| {
                 pane.answer(&keys, &e);
             })

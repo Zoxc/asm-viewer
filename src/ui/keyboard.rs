@@ -272,10 +272,26 @@ fn use_keyboard_left(keyboard: Keyboard, open: Open) {
     });
 }
 
-/// Forget an ask nobody has spent: what a press that puts the keyboard somewhere itself
-/// says. An ask now waits for a box, so one made for a tab that never drew a pane would sit
-/// there and be spent by whatever pane arrived next -- taking the keyboard out of the list
-/// the reader had put it in meanwhile.
+/// Forget an ask nobody has spent: what a press anywhere and a key typed in a text box
+/// say, the reader having put the keyboard somewhere themselves. An ask waits for a box, so
+/// one made for a tab that never drew a pane would sit there and be spent by whatever pane
+/// arrived next -- taking the keyboard out of wherever the reader had put it meanwhile.
 pub(crate) fn unask_keyboard(mut keyboard: Keyboard) {
     keyboard.asked.set_if_modified(None);
+}
+
+/// A key a text box takes: the reader is using the box, so an ask still waiting for a pane
+/// is dropped, or the pane arriving would take the keyboard out of the box mid-word. A
+/// modifier on its own says nothing yet. Called from the box's key handler, so the context
+/// is looked up and not consumed as a hook.
+pub(crate) fn typed_in_box(key: &Key) {
+    if matches!(
+        key,
+        Key::Named(NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::CapsLock)
+    ) {
+        return;
+    }
+    if let Some(keyboard) = try_consume_root_context::<Keyboard>() {
+        unask_keyboard(keyboard);
+    }
 }

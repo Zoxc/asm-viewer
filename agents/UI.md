@@ -620,7 +620,9 @@ than by the press, because the box to focus is a pane the press has only just mo
 a pane with nothing to show registers no box at all, so an ask spent on the `None` it found in that
 pass was every ask a row ever made. The effect reads the boxes as well as the ask, which is what
 wakes it when the pane arrives. What keeps a kept ask from being spent on somebody else's pane later
-is that putting the keyboard in a list by hand drops it (`unask_keyboard`). It is spent on **the
+is that the reader putting the keyboard somewhere by hand drops it (`unask_keyboard`): any press,
+which the root sees on the down and so before the press that may ask again, and any key a text box
+takes (`typed_in_box`), a box being reached by chords as well as by the pointer. It is spent on **the
 pane that leads the tab on screen**, where the ask is not a way back (`leading`, shared with `DocumentBody` so the two cannot drift)
 and not on whichever box registered first: a pane holds its box for as long as it is mounted and the
 temporal tab's panes outlive the documents they draw, so the first box registered is the pane that
