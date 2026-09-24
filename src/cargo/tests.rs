@@ -289,6 +289,29 @@ fn a_library_contributes_its_archive_and_not_its_metadata() {
     );
 }
 
+/// A `cdylib` on `*-windows-msvc` lists its `.pdb` among its files, and on macOS a packed
+/// split lists a `.dSYM` directory. Neither holds the library's code, so neither is a row.
+#[test]
+fn a_library_contributes_no_debug_info_file() {
+    let stdout = concat!(
+        r#"{"reason":"compiler-artifact","manifest_path":"/work/app/Cargo.toml","#,
+        r#""target":{"name":"plugin","kind":["cdylib"]},"executable":null,"#,
+        r#""filenames":["/work/app/target/debug/plugin.dll","#,
+        r#""/work/app/target/debug/plugin.pdb","#,
+        r#""/work/app/target/debug/libplugin.dylib.dSYM"]}"#,
+        "\n",
+        r#"{"reason":"build-finished","success":true}"#,
+        "\n",
+    );
+
+    let Run::Built { artifacts, .. } = outcome(stdout, "", true, &workspace()) else {
+        panic!("a build");
+    };
+
+    let paths: Vec<_> = artifacts.iter().map(|one| one.path.as_path()).collect();
+    assert_eq!(paths, [Path::new("/work/app/target/debug/plugin.dll")]);
+}
+
 /// cargo reports an artifact it did not rebuild too, as `"fresh":true`. The flag is kept, so
 /// a build that wrote nothing is not taken to have written everything.
 #[test]

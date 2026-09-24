@@ -619,7 +619,9 @@ box and `path::absolute` hands a verbatim path back as given. A target contribut
 where it has one and its `filenames` otherwise, which is what puts a library's `.rlib` in the list:
 an archive this app opens like any other, and the most interesting thing a workspace produces for
 it. The `.rmeta` beside it is dropped, the one place here a file is judged by its name, because
-it holds no code and a row for it could only ever fail to parse.
+it holds no code and a row for it could only ever fail to parse. So is a library's debug-info
+file, which cargo lists among its files too: a `.pdb` on `*-windows-msvc`, a `.dSYM` directory
+on macOS with packed split debug info.
 
 **A build replaces the artifacts of the build before it, and nothing else.** A binary is a path, so
 two generations of one file cannot both be in the objects list -- but narrowed: a file the reader

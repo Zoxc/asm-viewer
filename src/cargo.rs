@@ -594,7 +594,9 @@ impl ArtifactMessage {
     /// otherwise, which is what puts a library's `.rlib` in the list -- an archive this app
     /// opens like any other. `.rmeta` is dropped: it is what cargo hands the next compiler
     /// so it can start early, it holds no code, and a row for it could only ever fail to
-    /// parse. The one place here a file is judged by its name.
+    /// parse. So are the debug-info files a library lists beside its code, a `.pdb` or a
+    /// `.dSYM` directory, for the same reason. The one place here a file is judged by its
+    /// name.
     fn built(self, directory: &Path) -> Vec<Artifact> {
         if !inside(&self.manifest_path, directory) {
             return Vec::new();
@@ -606,7 +608,11 @@ impl ArtifactMessage {
             None => self
                 .filenames
                 .into_iter()
-                .filter(|path| path.extension().is_none_or(|end| end != "rmeta"))
+                .filter(|path| {
+                    !path
+                        .extension()
+                        .is_some_and(|end| end == "rmeta" || end == "pdb" || end == "dSYM")
+                })
                 .collect(),
         };
 
