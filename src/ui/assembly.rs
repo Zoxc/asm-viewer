@@ -783,6 +783,12 @@ fn gutter_width(width: usize) -> f32 {
     grid.edge(grid.edge(width as f32 * LANE_WIDTH + ARROW_WIDTH) + GUTTER_PAD)
 }
 
+/// Where a row's text starts in a listing whose gutter is `width` lanes wide: after the
+/// mark's column, the gutter and the address. An empty row draws a selection's stub there.
+pub(crate) fn text_left(width: usize) -> f32 {
+    MARK_COLUMN + gutter_width(width) + ADDRESS_WIDTH
+}
+
 /// The gutter's column, as every row that takes one takes it: `arrows` for a row drawing
 /// its own branches, and [`None`] for a row that draws none and only gives the column up,
 /// so the address beside it starts where an instruction row's does. Nothing at all for a
@@ -935,12 +941,7 @@ impl Component for SeparatorRow {
         .child(block_rule())
         // Where an instruction row's text starts. Last, so no sibling moves when it comes
         // and goes.
-        .maybe_child(self.selected.then(|| {
-            stub(
-                pixel_grid(),
-                MARK_COLUMN + gutter_width(width) + ADDRESS_WIDTH,
-            )
-        }))
+        .maybe_child(self.selected.then(|| stub(pixel_grid(), text_left(width))))
     }
 
     fn render_key(&self) -> DiffKey {

@@ -978,7 +978,8 @@ caret, the lit link's box and every find hit's wash — come out of one `RowCell
 `box_over` (`src/ui/code_row.rs`): the clamp to the row's length, the two `column_x` questions and
 `Grid::span` are written once, so the grid rule and the "nothing before layout" rule cannot hold for
 three of the four. The stub is the highlight's own and stays there; a separator inside a run draws
-it too, where the rows' text starts, since it is an empty row the copy takes. Both marks are
+it too, where the rows' text starts, since it is an empty row the copy takes, and so does the section
+view's `EmptyRow` (`text_left`). Both marks are
 `interactive(false)`, and **both slots are always there**, empty rects when there is nothing to
 mark: freya matches siblings by position (`notes/upstream/freya.md`), so a highlight appearing
 before the paragraph on the press would move the paragraph along one and remount it, between the

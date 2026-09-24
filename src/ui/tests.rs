@@ -23311,6 +23311,65 @@ fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
     assert_eq!(lines[twice + 1], "");
 }
 
+/// The empty rows of an object's code -- the blank under a header, the rule over a
+/// stretch and the rows guessed for one not yet decoded -- show the stub inside a
+/// selection, where the text rows' text starts, or a run across them would read as broken.
+#[test]
+fn the_empty_rows_of_the_section_view_show_a_selections_stub() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    // `add` decoded and `twice` not, so the rows under its label are guesses.
+    let reading = reading_of(&object, &[0]);
+    let rows = rows_of(&reading);
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 60.0 * code_row_height()).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let mut marked = roots.doors.marked;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(object.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    let last = rows.len() - 1;
+    marked.write().assembly = Some(Picked {
+        chars: CharSelection::between(
+            Caret { row: 0, col: 0 },
+            Caret {
+                row: last,
+                col: crate::chars::END,
+            },
+        ),
+        dragging: false,
+        by_rows: false,
+        file: None,
+        owed: Owed::default(),
+    });
+    settle(&mut test);
+
+    // Row 0 is the header, whose text starts where every stub must.
+    let header = paragraphs(&test)[0].0;
+    let stubs = rects_with(&test, palette().text_select_bg);
+    let h = code_row_height();
+    for kind in [Kind::Space { under: true }, Kind::Rule, Kind::Empty(0)] {
+        let row = (0..rows.len())
+            .find(|&row| kind_at(&rows, row) == Some(kind))
+            .expect("the listing has the row");
+        let top = header.min_y() + row as f32 * h;
+        let stub = stubs
+            .iter()
+            .find(|wash| (wash.min_y() - top).abs() < 1.0)
+            .unwrap_or_else(|| panic!("{kind:?} draws nothing of the selection"));
+        assert!((stub.min_x() - header.min_x()).abs() <= 1.0, "{stub:?}");
+        assert_eq!(stub.height(), h);
+    }
+}
+
 /// A click on a source row beside an object's code owes the listing a scroll to the
 /// instruction compiled from that line, paid out of whichever held stretch has one -- and
 /// left owed, for the answer that decodes the stretch to pay, while none does.

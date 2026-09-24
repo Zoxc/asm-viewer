@@ -549,6 +549,9 @@ struct EmptyRow {
     /// is told from the next the way one basic block is told from the one above it, and
     /// the guessed rows of a stretch nobody has decoded do not.
     rule: bool,
+    /// Whether it is inside the pane's character selection, which it shows with the stub
+    /// every empty row draws, or a run across a stretch's edge would read as two.
+    selected: bool,
     key: DiffKey,
 }
 
@@ -574,6 +577,11 @@ impl Component for EmptyRow {
             None,
         )
         .maybe(self.rule, |row| row.child(block_rule()))
+        // Where a text row's text starts. Last, so no sibling moves when it comes and goes.
+        .maybe_child(
+            self.selected
+                .then(|| stub(pixel_grid(), text_left(CODE_LANES))),
+        )
     }
 
     fn render_key(&self) -> DiffKey {
@@ -898,6 +906,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             row: i,
             wash,
             rule,
+            selected: chars.highlight.is_some(),
             key: DiffKey::None,
         }
         .key(key)
