@@ -306,3 +306,73 @@ fn a_thin_archive_says_its_members_are_elsewhere() {
         [analysis::LoadMessage::ThinArchive { members: 2 }]
     );
 }
+
+/// A member no object reader can parse -- bytes of no known kind, or an archive inside the
+/// archive -- is counted on the last object shown. rustc's metadata and an import
+/// library's short entry are not code, and leaving them out says nothing.
+#[test]
+fn an_archive_counts_the_members_that_are_not_objects() {
+    // `IMPORT_OBJECT_HEADER`'s signature, version and machine, and nothing past them.
+    let mut short_import = vec![0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x64, 0x86];
+    short_import.resize(20, 0);
+    let objects = objects_of(archive(&[
+        ("first.o", &caller_and_target()),
+        ("garbage.o", b"not an object file"),
+        ("nested.a", &archive(&[("inner.o", &caller_and_target())])),
+        ("lib.rmeta", b"rust\0\0\0\x08"),
+        ("imported.dll", &short_import),
+        ("last.o", &caller_and_target()),
+    ]));
+    let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+    assert_eq!(names, ["first.o", "last.o"]);
+    assert!(objects[0].messages.is_empty());
+    assert_eq!(
+        objects[1].messages,
+        [analysis::LoadMessage::UnreadableMembers { count: 2 }]
+    );
+}
+
+/// With no member shown there is no object to say it on, so the archive is shown alone to
+/// say it: members that are not objects, and members that stopped at the first.
+#[test]
+fn an_archive_with_nothing_shown_says_why_on_its_own_row() {
+    let unreadable = objects_of(archive(&[("garbage.o", b"not an object file")]));
+    let mut first_cut = archive(&[("first.o", &caller_and_target())]);
+    first_cut.truncate(first_cut.len() - 1);
+    let first_cut = objects_of(first_cut);
+    for (objects, message) in [
+        (
+            unreadable,
+            analysis::LoadMessage::UnreadableMembers { count: 1 },
+        ),
+        (
+            first_cut,
+            analysis::LoadMessage::ArchiveCutShort { member: 1 },
+        ),
+    ] {
+        let [archive] = objects.as_slice() else {
+            panic!("one object, the archive: {}", objects.len());
+        };
+        assert_eq!(archive.name, "lib.a");
+        assert_eq!(archive.format, None);
+        assert_eq!(archive.messages, [message]);
+    }
+}
+
+/// A member whose bytes run past the end of the file is the file cut short inside it: the
+/// last object shown before it says so.
+#[test]
+fn a_member_past_the_end_of_the_file_cuts_the_archive_short() {
+    let mut bytes = archive(&[
+        ("first.o", &caller_and_target()),
+        ("second.o", &caller_and_target()),
+    ]);
+    bytes.truncate(bytes.len() - 1);
+    let objects = objects_of(bytes);
+    let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+    assert_eq!(names, ["first.o"]);
+    assert_eq!(
+        objects[0].messages,
+        [analysis::LoadMessage::ArchiveCutShort { member: 2 }]
+    );
+}

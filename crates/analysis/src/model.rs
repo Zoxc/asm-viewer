@@ -21,9 +21,9 @@ use std::{
 pub struct Object {
     pub path: PathBuf,
     pub name: String,
-    /// [`None`] for a file that is not an object at all: a thin archive, whose members are
-    /// other files, shown only to say so ([`messages`](Self::messages)). It has no sections
-    /// and no symbols.
+    /// [`None`] for a file that is not an object at all, shown only to say why
+    /// ([`messages`](Self::messages)): a thin archive, whose members are other files, or an
+    /// archive none of whose members could be read. It has no sections and no symbols.
     pub format: Option<BinaryFormat>,
 
     /// The machine the code in here is for, as the file's own header declares it. This is
@@ -80,11 +80,15 @@ pub enum LoadMessage {
     /// not be read. They are kept, code and all.
     UnreadableSectionNames { count: usize },
     /// An archive's members stopped at the `member`th (from 1), whose header would not
-    /// read. Said on the last object shown before it.
+    /// read, or whose bytes run past the end of the file. Said on the last object shown
+    /// before it, or on the archive when none was.
     ArchiveCutShort { member: usize },
     /// A thin archive's `members` are other files, named in it and not held in it, which
     /// this reader does not open.
     ThinArchive { members: usize },
+    /// `count` of an archive's members are not object files this reader can read: LLVM
+    /// bitcode, an archive inside the archive, or bytes of no known kind.
+    UnreadableMembers { count: usize },
 }
 
 /// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
@@ -108,6 +112,7 @@ impl LoadMessage {
             LoadMessage::ArchiveCutShort { .. } => Severity::Warning,
             // Nothing shown is wrong; the members are simply not shown.
             LoadMessage::ThinArchive { .. } => Severity::Warning,
+            LoadMessage::UnreadableMembers { .. } => Severity::Warning,
         }
     }
 }
@@ -139,6 +144,11 @@ impl fmt::Display for LoadMessage {
                 f,
                 "The archive is thin: its members are in other files, which are not opened. \
                  Members not shown: {members}."
+            ),
+            LoadMessage::UnreadableMembers { count } => write!(
+                f,
+                "Archive members left out because they are not object files this reader can \
+                 read: {count}."
             ),
         }
     }
@@ -245,13 +255,13 @@ impl Object {
         }
     }
 
-    /// A file with nothing in it to show, standing in the list for what `message` says of
+    /// A file with nothing in it to show, standing in the list for what `messages` say of
     /// it: no format, no sections and no symbols.
     pub(crate) fn unread(
         path: PathBuf,
         name: String,
         data: ObjectData,
-        message: LoadMessage,
+        messages: Vec<LoadMessage>,
     ) -> Object {
         Object {
             path,
@@ -264,7 +274,7 @@ impl Object {
             imports: Vec::new(),
             sections: Vec::new(),
             data,
-            messages: vec![message],
+            messages,
             debug_info: DebugInfoCache::new(None),
             placed: PlacedSymbols(Vec::new()),
         }

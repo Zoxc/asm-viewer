@@ -98,7 +98,7 @@ not read: a GNU `/nnn` past the end of the `//` table or with no `/\n` after it,
 **What it cost**: that member and every member after it were dropped without a word. The walk
 still stops there; `open_one_file` in `crates/analysis/src/open.rs` now puts
 `LoadMessage::ArchiveCutShort` on the last object shown before it, saying which member it
-stopped at. An archive that stops before its first object still says nothing. Pinned by
+stopped at, or on the archive, shown alone, when it stops before its first object. Pinned by
 `streaming.rs`' `an_archive_whose_members_stop_early_says_so_on_the_last_object_shown`.
 
 Not reported.

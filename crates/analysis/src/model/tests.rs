@@ -199,4 +199,11 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         "The archive is thin: its members are in other files, which are not opened. \
          Members not shown: 3."
     );
+
+    let unreadable = LoadMessage::UnreadableMembers { count: 2 };
+    assert_eq!(unreadable.severity(), Severity::Warning);
+    assert_eq!(
+        unreadable.to_string(),
+        "Archive members left out because they are not object files this reader can read: 2."
+    );
 }
