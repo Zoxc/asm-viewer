@@ -1710,7 +1710,12 @@ pub struct SharedObject<'a> {
 /// only its own offset into the section, so the address handed to it is made relative to
 /// the section's `address` first; the terminator is appended by hand, since the writer
 /// leaves it out.
-fn eh_frame_section(address: u64, text: u64, ranges: &[(u64, u64)], big_endian: bool) -> Vec<u8> {
+pub fn eh_frame_section(
+    address: u64,
+    text: u64,
+    ranges: &[(u64, u64)],
+    big_endian: bool,
+) -> Vec<u8> {
     use gimli::write::{
         Address, CommonInformationEntry, EhFrame, EndianVec, FrameDescriptionEntry, FrameTable,
     };

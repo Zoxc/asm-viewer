@@ -668,17 +668,18 @@ fn drop_dot_names(named: &mut Vec<Pending>) {
 /// whose bytes would not decompress was dropped, having nothing to disassemble either — and
 /// only the ones whose bytes have addresses to sit at.
 ///
-/// In the file's own section order, which is what decides the section an address in two
-/// overlapping ranges is taken to be in.
+/// An address in two overlapping ranges is taken to be in the section the file lists first.
+/// Built once: a walk of the sections per address looked up costs names or unwind entries
+/// times sections, and the file chooses both.
 fn code_sections(
     sections: &HashMap<SectionIndex, Section>,
-) -> Vec<(Range<SectionAddress>, SectionIndex)> {
+) -> FirstCovering<SectionAddress, SectionIndex> {
     let mut ranges: Vec<(Range<SectionAddress>, SectionIndex)> = sections
         .values()
         .filter_map(|section| Some((section.bytes_range()?, section.index)))
         .collect();
     ranges.sort_unstable_by_key(|&(_, index)| index.0);
-    ranges
+    FirstCovering::new(ranges)
 }
 
 /// Parse `data` as a single object file. `name` is the display name (an archive member name
@@ -720,13 +721,10 @@ pub(crate) fn parse_unshared(data: ObjectData, name: String, path: PathBuf) -> O
     };
     let unwind = unwind::entries(&file);
     let code = code_sections(&sections);
-    // Built once: a walk of the sections per name offered costs names times sections, both
-    // the file's to choose.
-    let declared_in = FirstCovering::new(code.iter().cloned());
     let declared = declared_code(
         &file,
         &addresses,
-        &declared_in,
+        &code,
         &mut known,
         &mut imports,
         next,
@@ -937,18 +935,15 @@ fn stated(size: u64) -> Option<u64> {
 /// symbol: an export or a procedure at that address takes its extent from the end the entry
 /// states. The first section holding the start takes it.
 fn place_unwind(
-    code: &[(Range<SectionAddress>, SectionIndex)],
+    code: &FirstCovering<SectionAddress, SectionIndex>,
     unwind: &[UnwindEntry],
 ) -> HashMap<SectionIndex, Vec<Range<SectionAddress>>> {
     let mut ranges: HashMap<SectionIndex, Vec<Range<SectionAddress>>> = HashMap::new();
     for UnwindEntry { range, .. } in unwind {
-        let Some((_, index)) = code
-            .iter()
-            .find(|(bounds, _)| bounds.contains(&range.start))
-        else {
+        let Some(index) = code.get(range.start) else {
             continue;
         };
-        ranges.entry(*index).or_default().push(range.clone());
+        ranges.entry(index).or_default().push(range.clone());
     }
     ranges
 }

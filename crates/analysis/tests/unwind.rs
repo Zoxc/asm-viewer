@@ -27,8 +27,9 @@ mod common;
 
 use analysis::{Architecture, Gap, GapKind, MadeUp};
 use common::{
-    at, committed_fixture, elf_shared_object, listing_of, named, names, parse, pe_image,
-    ExportedSymbol, PeDll, SharedObject, TEXT_ADDRESS,
+    at, committed_fixture, eh_frame_section, elf_image, elf_shared_object, listing_of, named,
+    names, parse, pe_image, ElfImage, ExportedSymbol, ImageSection, PeDll, SharedObject,
+    TEXT_ADDRESS,
 };
 use object::{Object as _, ObjectSection as _};
 
@@ -796,5 +797,77 @@ fn the_hidden_shared_objects_functions_are_its_fdes() {
             at(0x268)..at(0x2a6)
         ],
         "the FDEs' ranges"
+    );
+}
+
+/// Where two code sections overlap, an entry starting in both is placed in the one the file
+/// lists first, whichever starts lower.
+#[test]
+fn an_entry_in_two_code_sections_is_placed_in_the_one_listed_first() {
+    const EH_FRAME: u64 = 0x3000;
+    // Offsets from 0x1000: one entry in both sections, one below the inner one, one above.
+    let eh_frame = eh_frame_section(
+        EH_FRAME,
+        0x1000,
+        &[(0xC, 0x10), (4, 8), (0x1C, 0x20)],
+        false,
+    );
+    let lower = || ImageSection {
+        name: ".text.lower",
+        address: 0x1000,
+        code: true,
+        bytes: &[0xC3; 0x20],
+    };
+    let inner = || ImageSection {
+        name: ".text.inner",
+        address: 0x1008,
+        code: true,
+        bytes: &[0xC3; 0x10],
+    };
+    let frames = ImageSection {
+        name: ".eh_frame",
+        address: EH_FRAME,
+        code: false,
+        bytes: &eh_frame,
+    };
+    let image = |code: [ImageSection; 2]| {
+        let [first, second] = code;
+        parse(&elf_image(ElfImage {
+            is_64: true,
+            big_endian: false,
+            machine: object::elf::EM_X86_64,
+            flags: object::elf::FileFlags(0),
+            entry: 0,
+            sections: &[first, second, ImageSection { ..frames }],
+            symbols: &[],
+            dynamic: &[],
+        }))
+    };
+    let unwind = |object: &analysis::Object, name: &str| {
+        let section = object.sections.iter().find(|section| section.name == name);
+        section
+            .unwrap()
+            .code()
+            .expect("a code section")
+            .unwind
+            .clone()
+    };
+
+    let object = image([inner(), lower()]);
+    assert_eq!(unwind(&object, ".text.inner"), [at(0x100C)..at(0x1010)]);
+    assert_eq!(
+        unwind(&object, ".text.lower"),
+        [at(0x1004)..at(0x1008), at(0x101C)..at(0x1020)]
+    );
+
+    let object = image([lower(), inner()]);
+    assert_eq!(unwind(&object, ".text.inner"), []);
+    assert_eq!(
+        unwind(&object, ".text.lower"),
+        [
+            at(0x1004)..at(0x1008),
+            at(0x100C)..at(0x1010),
+            at(0x101C)..at(0x1020)
+        ]
     );
 }

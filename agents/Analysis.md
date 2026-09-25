@@ -203,7 +203,9 @@ the fields say**, for the parse and the tests alike. `Object::new` sorts `symbol
 leaves it for the first line question when there is none; `SymbolData::new` starts the extent
 empty; and a section is one of two kinds, `Section::text` or `Section::other`, which is all its
 `code` says (below). The parse gives each section its unwind ranges through `Section::with_unwind`,
-which drops, clamps, sorts and dedups them. The fields stay `pub` to be read, except the three
+which drops, clamps, sorts and dedups them. An entry goes to the section its start is in, looked up
+as a declared address is (`FirstCovering`, above), so the first one listed where two overlap, and in
+one search per entry rather than a walk of the sections. The fields stay `pub` to be read, except the three
 caches (`debug_info`, `placed`, a symbol's `extent`), which nothing outside the crate can use. No
 test fixture sorts by hand any more, so none can break the binary search a saved place is found by.
 That search is `Object::symbols_named`, the run of one name in index order, and it sits beside the
