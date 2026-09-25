@@ -1,4 +1,4 @@
-# Assembly Viewer
+# <img src="assets/app.svg" width="32" height="32" alt=""> Assembly Viewer
 
 ![Assembly Viewer Screenshot](./media/app.png)
 

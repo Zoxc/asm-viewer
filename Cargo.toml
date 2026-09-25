@@ -178,6 +178,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
 ] }
 
+# The executable's icon (`build.rs`), which is a resource only a Windows host's resource
+# compiler makes. A host dependency, so a build anywhere else compiles none of it. One new
+# package: without its `toml` feature, which reads metadata from the manifest and would bring
+# a second copy of `toml`, all it depends on is `version_check`, already in the lock.
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1", default-features = false }
+
 [features]
 # Opt-in so the devtools server never ends up in a default or release build.
 # See `notes/DevTools.md`.

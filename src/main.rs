@@ -91,6 +91,10 @@ pub(crate) use counter;
 /// box the reader is shown, and the name the language server is told its client has.
 pub const APP_NAME: &str = "Assembly Viewer";
 
+/// The name the desktop knows the window by. Wayland takes a window's icon from the
+/// desktop entry named `assembly-viewer.desktop`, and not from the window.
+const APP_ID: &str = "assembly-viewer";
+
 fn main() {
     env_logger::init();
 
@@ -121,6 +125,10 @@ fn main() {
         LaunchConfig::new().with_window(
             WindowConfig::new_app(ui::Viewer { opening })
                 .with_title(APP_NAME)
+                .with_app_id(APP_ID)
+                .with_icon(LaunchConfig::window_icon(include_bytes!(
+                    "../assets/app.png"
+                )))
                 .with_size(1200., 800.)
                 // The only exit hook freya 0.4 offers, and it is a `Send` callback outside
                 // the component tree, so nothing here can read UI state. It covers the

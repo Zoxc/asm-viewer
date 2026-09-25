@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- A disassembly listing with the arrow gutter's branch looping back up. -->
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="#2b2f3a"/>
+  <g stroke-linecap="round" stroke-width="18">
+    <line x1="112" y1="64" x2="136" y2="64" stroke="#b69ce0"/>
+    <line x1="164" y1="64" x2="204" y2="64" stroke="#8fb3de"/>
+    <line x1="112" y1="104" x2="136" y2="104" stroke="#b69ce0"/>
+    <line x1="164" y1="104" x2="192" y2="104" stroke="#a8c48a"/>
+    <line x1="112" y1="152" x2="136" y2="152" stroke="#b69ce0"/>
+    <line x1="164" y1="152" x2="208" y2="152" stroke="#8fb3de"/>
+    <line x1="112" y1="192" x2="136" y2="192" stroke="#b69ce0"/>
+    <line x1="164" y1="192" x2="188" y2="192" stroke="#a8c48a"/>
+  </g>
+  <path d="M92 192 H68 Q52 192 52 176 V80 Q52 64 68 64 H80" fill="none"
+        stroke="#e8e8e8" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M76 48 L100 64 L76 80 Z" fill="#e8e8e8" stroke="#e8e8e8" stroke-width="6" stroke-linejoin="round"/>
+</svg>

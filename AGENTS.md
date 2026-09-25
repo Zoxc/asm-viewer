@@ -63,6 +63,12 @@ up can be looked at -- and every panic file the app has written. A gesture rathe
 feature or a variable, so it needs neither a rebuild nor a restart. Only the menu is gated:
 a session that names the page puts it back, a reader with one open having asked for it.
 
+The app's icon is `assets/app.svg`. `assets/render.sh` renders it into the committed `app.png`,
+which is the window's icon, and `app.ico`, which `build.rs` links into the Windows executable
+(on a Windows host only). Wayland ignores a window's own icon: KDE takes it from the desktop
+entry named by the app id (`APP_ID`, `src/main.rs`), so there it shows only once one is
+installed.
+
 `cargo run --features devtools` starts freya's devtools server alongside the app (`[::1]:7354`,
 opt-in so it never reaches a release build). The viewer is a separate `cargo install
 freya-devtools-app`, only one devtools-enabled freya app can run at a time, and there is no in-app
