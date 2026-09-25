@@ -701,8 +701,8 @@ on `DebugInfo` beside the backend, not inside one, because it is built from what
 answers and not from any one's internals. It has no net of its own: a dependency's panic inside the
 build is caught where the build calls it (`each_row`, `extent`), and any other panic is a bug here
 and shows. A walk caught part way has already handed over the rows before the panic, so `each_row`
-says whether it finished and the build hands back an empty index when it did not, for the reason the
-budget below does.
+says whether it finished, and the build keeps those rows and marks the index as not whole, which
+counts as one part skipped, as the budget below does.
 It is what the source-driven tab, find-all and the instance picker each need, and it is the whole of
 what the crate owes them. *Where inside* a symbol the line's code sits is the forward direction's
 question and is already answered, so a caller walks index → symbol → `line_info` → rows and there is
@@ -756,8 +756,12 @@ of times, and nothing folds those — `SymbolData::extent` answers each alias it
 100 000 symbols at one address under a line program of 100 000 rows is a few megabytes of file
 asking for 10^10 pairs, and Rust aborts on an allocation failure, which no `catch_unwind` sees. So
 the walk counts the pairs it pushes against 64 a row, never fewer than 64 Ki and never more than
-64 Mi, and past that hands back an **empty** index: empty rather than partial, because an index
-missing the rows the walk skipped would be wrong, where an empty one only says nothing. The rate is what a
+64 Mi, and past that attributes no more rows. What was read before is kept, and the index counts
+as one part skipped (`LoadMessage::DebugInfoSkipped`). It once handed back an empty index instead,
+on the grounds that one missing rows would be wrong where an empty one only says nothing; but the
+empty one said nothing without saying why, over every line of the object. A partial one answers
+what it read and the reader is told the rest is missing, as for a DWARF unit or a PDB module
+skipped. The rate is what a
 crafted file inflates; the ceiling is what a file with rows enough would get around the rate with.
 Measured, a 451 MB build of the app's own binary pushes 1 964 064 pairs over 2 112 859 rows: 0.93 a
 row against the 64 allowed.

@@ -22,8 +22,8 @@
 //!   that can drift.
 //! * **The build has a budget** ([`budget`]). The index is one pair per row per symbol
 //!   covering it, and neither number is the app's to choose, so a file naming one address a
-//!   hundred thousand times is answered with an empty index rather than with the tens of
-//!   gigabytes it asked for.
+//!   hundred thousand times is answered with the rows read up to the budget rather than with
+//!   the tens of gigabytes it asked for, and the index counts as a part skipped.
 //!
 //! **What it costs, measured** (release, first ask against a fully parsed file). On
 //! `viewer-sample` — one object, 115 577 symbols, 267 MB of DWARF — **0.43 s**, down from
@@ -63,16 +63,18 @@ use std::sync::Arc;
 /// `(placed address, symbol index)`, so sorting positions *is* the order an answer is wanted
 /// in and nothing has to be recovered to answer one. Both are good for the object's life:
 /// [`Object::new`] builds `placed` once and nothing rewrites it.
-#[derive(Default)]
 pub(super) struct SourceIndex {
     files: HashMap<Arc<str>, Vec<(u32, u32)>>,
+    /// Whether every row was read into it: `false` where the walk ran over the budget or
+    /// did not finish, and the index holds only the rows read before that.
+    pub(super) whole: bool,
 }
 
 impl SourceIndex {
     /// Walk every line program once and attribute each row to the `ranges` it falls in. No
     /// net of its own: the calls that reach a dependency, the extents and the walk, are each
-    /// guarded at the seam. A walk that panicked part way is an empty index, for the reason
-    /// the budget is below.
+    /// guarded at the seam. A walk that did not finish, or ran over the budget, keeps the rows
+    /// it read and is marked not [`whole`](Self::whole), which counts as a part skipped.
     ///
     /// Given the ranges rather than the object, so the visitor has no object to ask
     /// ([`DebugInfo::each_row`]).
@@ -82,9 +84,7 @@ impl SourceIndex {
         let mut files: HashMap<Arc<str>, Vec<(u32, u32)>> = HashMap::new();
 
         // What the walk has cost against what it is allowed ([`budget`]). Sticky, and no
-        // backend's walk can be cut short, so past the budget a row is attributed to nothing
-        // and the whole index is dropped below: one missing the rows it skipped would be
-        // wrong where an empty one only says nothing.
+        // backend's walk can be cut short, so past the budget a row is attributed to nothing.
         let mut rows = 0usize;
         let mut pairs = 0usize;
         let mut over = false;
@@ -114,10 +114,6 @@ impl SourceIndex {
             }
         });
 
-        if over || !finished {
-            return SourceIndex::default();
-        }
-
         let files = files
             .into_iter()
             .filter(|(_, entries)| !entries.is_empty())
@@ -128,7 +124,10 @@ impl SourceIndex {
             })
             .collect();
 
-        SourceIndex { files }
+        SourceIndex {
+            files,
+            whole: finished && !over,
+        }
     }
 
     /// The `(line, position)` pairs for one file over `first..=last`, in line order. Inclusive

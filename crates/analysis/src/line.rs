@@ -265,16 +265,19 @@ impl DebugInfo {
     /// instead of the object.
     ///
     /// Whether the walk finished: `false` when a backend panicked part way, after `visit` may
-    /// already have been handed some of the rows.
+    /// already have been handed some of the rows. Not under [`net`](Self::net): the index
+    /// counts a walk that did not finish itself.
     fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) -> bool {
         without_panicking(|| self.backend().each_row(visit)).is_some()
     }
 
     /// How many parts of the debug info have been read only in part so far
-    /// ([`LineBackend::skipped`]), and one more where a question panicked ([`net`](Self::net)).
+    /// ([`LineBackend::skipped`]), one more where a question panicked ([`net`](Self::net)),
+    /// and one more where the source index holds only part of the rows.
     fn skipped(&self) -> usize {
         let panicked = usize::from(self.panicked.load(Ordering::Relaxed));
-        self.backend().skipped() + panicked
+        let partial = usize::from(self.index.get().is_some_and(|index| !index.whole));
+        self.backend().skipped() + panicked + partial
     }
 
     /// [`without_panicking`] around a question, noting a panic it catches. One skip however

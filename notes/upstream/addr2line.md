@@ -11,8 +11,8 @@ lower down. So a file the reader merely opened is a subtract-with-overflow panic
 this crate can check without reading the line program a second time, so it is caught instead, by
 `without_panicking` (`crates/analysis/src/line.rs`), and pinned by `robustness.rs`'
 `a_line_program_that_runs_backwards_does_not_panic`. The walk the source index is built from
-hands over rows as it goes, so a panic there leaves the index partial; it is dropped instead,
-pinned by `a_walk_that_panics_part_way_leaves_no_source_index`.
+hands over rows as it goes, so a panic there leaves the index partial; it is kept and counted
+as one part skipped, pinned by `a_walk_that_panics_part_way_keeps_what_it_read_and_says_so`.
 
 **What it cost**: the clip in `RowCollector::push` (`crates/analysis/src/line.rs`). Overflow
 checks are off in a release build, so there the panic is a wrap: the backwards row's length

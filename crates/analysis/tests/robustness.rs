@@ -706,9 +706,10 @@ fn elf_with_backwards_line_program() -> Vec<u8> {
 /// Defect: the walk behind the source index hands over each unit's rows as it goes, so a
 /// later unit's backwards line program panicked after an earlier unit's rows were in, and
 /// the index kept those: a partial index, cached for the object's life, answering as if the
-/// later unit had no rows. The walk not finishing is now an empty index, as the budget is.
+/// later unit had no rows, and said nothing. The rows read before the panic are kept, and the
+/// index counts as one part skipped, as one over the budget does.
 #[test]
-fn a_walk_that_panics_part_way_leaves_no_source_index() {
+fn a_walk_that_panics_part_way_keeps_what_it_read_and_says_so() {
     let good = || HandUnit {
         low: 0,
         high: 0x100,
@@ -730,12 +731,13 @@ fn a_walk_that_panics_part_way_leaves_no_source_index() {
     };
     let symbols = [("good", 0, 0x10)];
 
-    // The good unit alone is indexed, so an empty answer below is the panic's doing.
+    // The good unit alone is indexed.
     let alone = parse(&elf_with_hand_written_dwarf(&[good()], &symbols));
     assert_eq!(alone.source_files(), vec!["good.c".into()]);
 
     let object = parse(&elf_with_hand_written_dwarf(&[good(), bad], &symbols));
-    assert!(object.source_files().is_empty());
+    assert_eq!(object.source_files(), vec!["good.c".into()]);
+    assert_eq!(object.debug_info_skipped(), 1);
 }
 
 /// An ELF with `units` for its DWARF, a `.text` of 0x400 bytes, and `symbols` in it as
@@ -1304,7 +1306,11 @@ fn one_symbol_that_cannot_be_analysed_does_not_take_out_the_others() {
 /// and a symbol table may name one address any number of times. A file crafted with 100 000
 /// symbols at one address and 100 000 rows over them asks for 10^10 pairs — tens of gigabytes
 /// on the worker, and an allocation failure aborts where a panic would have been caught. The
-/// build now has a budget and answers with an empty index past it.
+/// build now has a budget and stops attributing rows past it.
+///
+/// Defect: past the budget the whole index was dropped, so every line of the object quietly
+/// answered nothing. Now it keeps the rows read before the budget ran out, and says it was
+/// cut short.
 #[test]
 fn a_row_attributed_to_every_symbol_at_once_does_not_grow_the_index_without_bound() {
     // Within the budget nothing changes: every alias is named, as several names for one
@@ -1313,13 +1319,16 @@ fn a_row_attributed_to_every_symbol_at_once_does_not_grow_the_index_without_boun
     let object = parse(&data);
     assert_eq!(object.symbols_from_lines("/src/main.c", 1..=1).len(), 8);
     assert_eq!(object.lines_from_source("/src/main.c").len(), 100);
+    assert_eq!(object.debug_info_skipped(), 0);
 
-    // Past it the index says nothing, which is the answer a build that panicked gives. This
+    // Past it the rows before the budget ran out are kept, and the rest are not. This
     // fixture is 35 KB and asks for a million pairs; the shape scales.
     let data = aliased_at_one_address(1000, 1000);
     let object = parse(&data);
-    assert!(object.symbols_from_lines("/src/main.c", 1..=1).is_empty());
-    assert!(object.lines_from_source("/src/main.c").is_empty());
+    assert_eq!(object.symbols_from_lines("/src/main.c", 1..=1).len(), 1000);
+    let lines = object.lines_from_source("/src/main.c").len();
+    assert!(lines > 0 && lines < 1000, "{lines} lines kept");
+    assert_eq!(object.debug_info_skipped(), 1);
 }
 
 /// `aliases` symbols at one address, each covering the whole `.text`, under a line program of
