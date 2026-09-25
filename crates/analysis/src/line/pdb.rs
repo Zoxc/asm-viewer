@@ -52,7 +52,9 @@
 //! A symbol record is parsed only if it is a kind the walks use ([`PROCEDURES`]).
 
 use super::intervals::Intervals;
-use super::{recovered, Declared, LineBackend, LineInfo, RowCollector, Skipped, SourceHash};
+use super::{
+    recovered, Declared, LineBackend, LineInfo, RowCollector, Skipped, SourceHash, Unreadable,
+};
 use crate::parse::Name;
 use crate::{open_regular, Bias, Links, PlacedAddress, Regular, SectionAddress};
 use object::Object as _;
@@ -150,21 +152,24 @@ const PUBLICS: [pdb2::SymbolKind; 2] = [
 
 impl Pdb {
     /// Open and match the `.pdb` this image names, or [`None`]: for an image with no CodeView
-    /// record, a `.pdb` that is nowhere it is looked for, one that is not the image's, or one
-    /// whose tables will not read.
-    pub(super) fn load(file: &object::File<'_>, path: &Path) -> Option<Pdb> {
+    /// record, a `.pdb` that is nowhere it is looked for, or one that is not the image's.
+    /// [`Unreadable`] for the image's own `.pdb` whose address map will not read:
+    /// without it no address it states can be placed.
+    pub(super) fn load(file: &object::File<'_>, path: &Path) -> Option<Result<Pdb, Unreadable>> {
         let codeview = file.pdb_info().ok()??;
         let image_base = SectionAddress::new(file.relative_address_base());
 
         let recorded = String::from_utf8_lossy(codeview.path());
         let (mut pdb, dbi) = find(&recorded, codeview.guid(), codeview.age(), path)?;
 
-        let address_map = pdb.address_map().ok()?;
+        let Ok(address_map) = pdb.address_map() else {
+            return Some(Err(Unreadable));
+        };
         let strings = pdb.string_table().ok();
 
         let contributions = contributions(&dbi, &address_map, image_base)?;
 
-        Some(Pdb {
+        Some(Ok(Pdb {
             pdb: Mutex::new(pdb),
             dbi,
             strings,
@@ -176,7 +181,7 @@ impl Pdb {
             skipped: Skipped::default(),
             #[cfg(test)]
             walks: std::sync::atomic::AtomicUsize::new(0),
-        })
+        }))
     }
 
     /// Every function this PDB names, in the order the parse claims addresses in: every

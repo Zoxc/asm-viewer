@@ -17,7 +17,9 @@ fn fixture() -> (Vec<u8>, PathBuf) {
 fn every_module_is_decoded_in_one_walk_of_the_module_list() {
     let (bytes, path) = fixture();
     let file = object::File::parse(&*bytes).expect("a PE");
-    let pdb = Pdb::load(&file, &path).expect("the .pdb beside it");
+    let pdb = Pdb::load(&file, &path)
+        .and_then(Result::ok)
+        .expect("the .pdb beside it");
 
     let before = pdb.walks.load(Relaxed);
     let mut rows = 0;
@@ -37,7 +39,9 @@ fn every_module_is_decoded_in_one_walk_of_the_module_list() {
 fn the_modules_at_an_address_are_decoded_in_one_walk() {
     let (bytes, path) = fixture();
     let file = object::File::parse(&*bytes).expect("a PE");
-    let mut pdb = Pdb::load(&file, &path).expect("the .pdb beside it");
+    let mut pdb = Pdb::load(&file, &path)
+        .and_then(Result::ok)
+        .expect("the .pdb beside it");
     // An address no procedure begins at, so neither module answers and both are read.
     let start = SectionAddress::new(1);
     let end = SectionAddress::new(2);
@@ -55,7 +59,9 @@ fn the_modules_at_an_address_are_decoded_in_one_walk() {
 fn the_source_index_walks_the_module_list_once() {
     let (bytes, path) = fixture();
     let file = object::File::parse(&*bytes).expect("a PE");
-    let mut pdb = Pdb::load(&file, &path).expect("the .pdb beside it");
+    let mut pdb = Pdb::load(&file, &path)
+        .and_then(Result::ok)
+        .expect("the .pdb beside it");
 
     // Eight one-byte functions, each in a module of its own, some past the end of the list.
     // No procedure begins at any of them, so each asks the PDB.

@@ -94,6 +94,26 @@ pub(crate) struct DebugInfo {
 enum Backend {
     Dwarf(dwarf::Dwarf),
     Pdb(pdb::Pdb),
+    Unreadable(Unreadable),
+}
+
+/// A debug file that is the image's own but whose tables will not read. It answers nothing
+/// and counts as one part skipped, so the reader is told rather than shown an object with no
+/// debug info.
+struct Unreadable;
+
+impl LineBackend for Unreadable {
+    fn line_info(&self, _: Range<PlacedAddress>, _: &mut RowCollector) {}
+
+    fn extent(&self, _: PlacedAddress) -> Option<u64> {
+        None
+    }
+
+    fn each_row(&self, _: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {}
+
+    fn skipped(&self) -> usize {
+        1
+    }
 }
 
 /// The three questions a backend answers, and the one space it answers them in.
@@ -171,7 +191,10 @@ impl Backend {
         if dwarf::Dwarf::present(file) {
             return dwarf().map(Backend::Dwarf);
         }
-        Some(Backend::Pdb(pdb::Pdb::load(file, path)?))
+        Some(match pdb::Pdb::load(file, path)? {
+            Ok(pdb) => Backend::Pdb(pdb),
+            Err(unreadable) => Backend::Unreadable(unreadable),
+        })
     }
 }
 
@@ -215,12 +238,14 @@ impl DebugInfo {
     ) -> Option<(DebugInfo, Vec<Declared>)> {
         without_panicking(|| {
             let backend = Backend::pick(file, path, || None)?;
-            // Unreachable while the PDB is the only backend that names anything, `pick`
-            // having been given no way to build the other one.
-            let Backend::Pdb(pdb) = &backend else {
-                return None;
+            let declared = match &backend {
+                Backend::Pdb(pdb) => pdb.declared(),
+                // Kept though it names nothing, so it is counted from the parse on.
+                Backend::Unreadable(_) => Vec::new(),
+                // Unreachable while the PDB is the only backend that names anything, `pick`
+                // having been given no way to build the other one.
+                Backend::Dwarf(_) => return None,
             };
-            let declared = pdb.declared();
             Some((DebugInfo::of(backend), declared))
         })
         .flatten()
@@ -296,6 +321,7 @@ impl DebugInfo {
         match &self.backend {
             Backend::Dwarf(dwarf) => dwarf,
             Backend::Pdb(pdb) => pdb,
+            Backend::Unreadable(unreadable) => unreadable,
         }
     }
 }

@@ -634,7 +634,9 @@ The age compared is the DBI's, which the linker wrote; the info stream's own age
 that rewrite a PDB afterwards (source indexing) and may legitimately exceed the image's.
 **Addresses**: a PDB states `section:offset`. Every one goes through the PDB's own `AddressMap` to
 an RVA, which is also where an OMAP-rearranged image is undone (a path no fixture exercises beyond
-its identity form), and onto the image base with checked arithmetic. So answers are in the virtual
+its identity form), and onto the image base with checked arithmetic. A matching PDB whose address
+map will not read has nothing that can be placed. It is kept as a backend that answers nothing and
+counts as one part skipped (`Unreadable`, `line.rs`), so the reader is told. So answers are in the virtual
 address space a linked image's symbols already are, which is also the placed space the seam asks
 every backend in: a linked image is one nothing placed, so the two spaces are a `Bias::NONE` apart
 and `own`/`placed` say which is meant rather than leave it to be read off a type. **Per

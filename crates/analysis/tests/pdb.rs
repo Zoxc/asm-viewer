@@ -1003,6 +1003,38 @@ fn a_module_whose_symbols_will_not_open_is_counted() {
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
+/// Where the DBI's optional debug header begins: after its 64-byte header and the six
+/// substreams whose sizes that header states.
+fn debug_header(msf: &Msf) -> usize {
+    [24, 28, 32, 36, 40, 52]
+        .into_iter()
+        .map(|field| msf.u32_at(DBI, field) as usize)
+        .sum::<usize>()
+        + 64
+}
+
+/// The image's own PDB whose address map will not read is counted, from the parse on: no
+/// address it states can be placed, so it names nothing and answers nothing, and before that
+/// was without a word. Here the DBI names a section headers stream the PDB does not have.
+#[test]
+fn a_pdb_whose_address_map_will_not_read_is_counted() {
+    let dll = committed_fixture(NOEXPORT_DLL);
+    let pdb = committed_fixture("line_fixture_noexport.pdb");
+    let mut msf = Msf::new(&pdb);
+    // The section headers' stream is the sixth in the optional debug header.
+    let header = debug_header(&msf);
+    msf.write(DBI, header + 2 * 5, &0x7FFFu16.to_le_bytes());
+    let dir = scratch("address_map_unread");
+    std::fs::write(dir.join("line_fixture_noexport.pdb"), &msf.bytes).unwrap();
+    let object = parse_at(&dll, dir.join(NOEXPORT_DLL));
+
+    assert_eq!(object.debug_info_skipped(), 1);
+    assert_eq!(names(&object), unwind_names());
+    let first = &unwind_names()[0];
+    assert!(symbol(&object, first).line_info(&object).is_none());
+    assert_eq!(object.debug_info_skipped(), 1);
+}
+
 /// The system allocator, refusing any one request past 1 GiB. Nothing a test here reads
 /// comes near that, so a refusal is a count `pdb2` believed ([`CALLEES`]); refused, it is an
 /// abort that fails the run at once, where granted it would have been the machine's memory.
