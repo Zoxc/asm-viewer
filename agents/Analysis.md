@@ -300,9 +300,10 @@ debug sections would be a second one held for as long as the object lives, and t
 267 MB of the 331 MB binary.
 (Every resident figure below predates that rule: each was measured while the parse copied every
 section, and none has been taken again since.) That key is the parse's own doing: `object` hands
-back what the format states, an address in ELF and COFF but an offset from the
-start of the section in Mach-O, which lays its sections out one after another. So `read_sections`
-adds a Mach-O section's address as it builds the map, and `Code::relocations` can ask by address
+back what the format states: an address in COFF, but an offset from the start of the section in
+ELF and Mach-O. A Mach-O `.o` lays its sections out one after another, and an ELF `.o` may state
+an address for a section too (`ld -r` given a linker script), which the instructions are decoded
+at. So `read_sections` adds an ELF or Mach-O section's address as it builds the map, and `Code::relocations` can ask by address
 whatever the file is. The map is a `BTreeMap`, so that question is one range over an instruction's
 bytes, every entry of which is an answer. Each address holds a list, in the file's order: one
 entry per address kept only the last of two relocations at one place, and nothing says a file

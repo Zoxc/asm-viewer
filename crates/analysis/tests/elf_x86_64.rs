@@ -101,6 +101,27 @@ fn the_call_resolves_to_the_target_symbol() {
     assert!(assembly.instructions[1].operand.is_none());
 }
 
+/// An ELF `.o` may state an address for its `.text` (`ld -r` given a linker script, some
+/// embedded toolchains). Its instructions are then decoded at that address, while each
+/// relocation states only an offset into the section, so the call is named only if the
+/// two meet.
+#[test]
+fn a_call_in_a_section_that_states_an_address_resolves_through_its_relocation() {
+    let mut data = caller_and_target();
+    common::elf_place_section(&mut data, ".text", 0x1000);
+    let object = parse(&data);
+    let caller = symbol(&object, "caller");
+    assert_eq!(caller.address, at(0x1000));
+
+    let assembly = caller.assembly(&object).expect("caller disassembles");
+    let call = &assembly.instructions[0];
+    assert!(Arc::ptr_eq(
+        call.symbol().expect("the call is relocated"),
+        &symbol(&object, "target")
+    ));
+    assert_eq!(text(call).trim_end(), "call      target");
+}
+
 #[test]
 fn the_placeholder_operand_is_replaced_when_a_relocation_applies() {
     let object = parse(&caller_and_target());

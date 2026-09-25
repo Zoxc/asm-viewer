@@ -815,15 +815,15 @@ fn read_sections(
             // field the linker has yet to fill. A linked ELF built with `--emit-relocs` keeps
             // its `.rela.text`, but the fields already hold what the linker resolved.
             //
-            // Mach-O states a relocation's place as an offset from the start of its section,
-            // and lays its sections out one after another, so that offset is not the address
-            // for any section but the first. Every lookup here is by address, so the
-            // conversion is done once, where the map is built. ELF and COFF need none: a
-            // relocatable object's sections are all at 0. Only a code section's are
-            // collected, because the only reader is the disassembler's operand lookup; the
-            // DWARF backend takes a debug section's from the file.
+            // ELF and Mach-O state a relocation's place as an offset from the start of its
+            // section, and a section may state an address of its own: every Mach-O section
+            // but the first, and an ELF one where `ld -r` was given a linker script. Every
+            // lookup here is by address, so the section's address is added once, where the
+            // map is built. COFF and XCOFF state the address itself. Only a code section's
+            // are collected, because the only reader is the disassembler's operand lookup;
+            // the DWARF backend takes a debug section's from the file.
             let base = match format {
-                BinaryFormat::MachO => section.address(),
+                BinaryFormat::Elf | BinaryFormat::MachO => section.address(),
                 _ => 0,
             };
             let mut relocations = BTreeMap::<_, Vec<_>>::new();
