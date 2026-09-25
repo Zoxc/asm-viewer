@@ -118,7 +118,8 @@ struct Imports {
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
 ///
-/// Exports that would not read are said on `messages`. An undefined `.dynsym` function whose
+/// Exports that would not read, and a Mach-O entry point that could not be found
+/// ([`macho_entry`]), are said on `messages`. An undefined `.dynsym` function whose
 /// name will not read is counted in `imports`, as the symbol table's are.
 ///
 /// The indices start at `next`, *past* the file's own symbol table, which is the only honest
@@ -272,8 +273,8 @@ fn declared_code(
     // is also `object`'s answer for a file with no auxiliary header. Neither is read as a
     // descriptor. A PE with none gives its image base, which no code section covers.
     let entry = match file {
-        object::File::MachO32(file) => macho_entry(file),
-        object::File::MachO64(file) => macho_entry(file),
+        object::File::MachO32(file) => macho_entry(file, messages),
+        object::File::MachO64(file) => macho_entry(file, messages),
         _ => Some(file.entry()),
     };
     let all_ones = if file.is_64() {
@@ -321,36 +322,80 @@ fn declared_code(
 /// entry can be read, as in `object`'s own walk. Not through `entry()`, which answers
 /// `LC_MAIN`'s `entryoff`, a file offset, as it is (`notes/upstream/object.md`). That offset
 /// is placed through the segment whose file bytes hold it, and is no entry point when none
-/// does. An `LC_UNIXTHREAD`'s PC is already an address ([`thread_pc`]).
+/// does or the address does not fit, which is said on `messages`. An `LC_UNIXTHREAD`'s PC is
+/// already an address ([`thread_pc`]).
+///
+/// A command that states an entry point and will not read is skipped. A load command whose
+/// size will not read ends the walk, since the next one starts where its size says. Either
+/// is said on `messages` when no entry point is found.
 fn macho_entry<'data, Mach: MachHeader, R: ReadRef<'data>>(
     file: &MachOFile<'data, Mach, R>,
+    messages: &mut Vec<LoadMessage>,
 ) -> Option<u64> {
     let endian = file.endian();
-    let mut commands = file.macho_load_commands().ok()?;
-    while let Ok(Some(command)) = commands.next() {
-        if let Ok(Some(main)) = command.entry_point() {
-            let offset = main.entryoff.get(endian);
-            let (segment, into) = file.segments().find_map(|segment| {
-                let (start, size) = segment.file_range();
-                let into = offset.checked_sub(start).filter(|&into| into < size)?;
-                Some((segment, into))
-            })?;
-            return segment.address().checked_add(into);
-        }
-        if let Ok(Some((_, state))) = command.unix_thread() {
-            let cputype = file.macho_header().cputype(endian);
-            if let Some(pc) = thread_pc(endian, cputype, state) {
-                return Some(pc);
+    let cputype = file.macho_header().cputype(endian);
+    let mut unread = 0usize;
+    let mut cut_short = false;
+    match file.macho_load_commands() {
+        Ok(mut commands) => loop {
+            let command = match commands.next() {
+                Ok(Some(command)) => command,
+                Ok(None) => break,
+                Err(_) => {
+                    cut_short = true;
+                    break;
+                }
+            };
+            match command.entry_point() {
+                Ok(Some(main)) => {
+                    let offset = main.entryoff.get(endian);
+                    let address = file.segments().find_map(|segment| {
+                        let (start, size) = segment.file_range();
+                        let into = offset.checked_sub(start).filter(|&into| into < size)?;
+                        Some(segment.address().checked_add(into))
+                    });
+                    let address = address.flatten();
+                    if address.is_none() {
+                        messages.push(LoadMessage::EntryPointWithoutAddress { offset });
+                    }
+                    return address;
+                }
+                Ok(None) => {}
+                Err(_) => unread = unread.saturating_add(1),
             }
-        }
+            match command.unix_thread() {
+                Ok(Some((_, state))) => match thread_pc(endian, cputype, state) {
+                    Pc::At(pc) => return Some(pc),
+                    Pc::Short => unread = unread.saturating_add(1),
+                    Pc::UnknownCpu => {}
+                },
+                Ok(None) => {}
+                Err(_) => unread = unread.saturating_add(1),
+            }
+        },
+        Err(_) => cut_short = true,
+    }
+    if unread > 0 || cut_short {
+        messages.push(LoadMessage::UnreadableEntryCommands {
+            count: unread,
+            cut_short,
+        });
     }
     None
 }
 
+/// What an `LC_UNIXTHREAD` says of its PC ([`thread_pc`]).
+enum Pc {
+    At(u64),
+    /// The state stops before the PC.
+    Short,
+    /// A CPU whose thread state is not read, as `object` reads none.
+    UnknownCpu,
+}
+
 /// The PC in an `LC_UNIXTHREAD`'s thread state, at the place `object` 0.40 reads it from:
-/// past the flavor and the count, then after the registers each CPU puts before it. [`None`]
-/// for any other CPU or a state too short to hold it.
-fn thread_pc<E: Endian>(endian: E, cputype: macho::CpuType, state: &[u8]) -> Option<u64> {
+/// past the flavor and the count, then after the registers each CPU puts before it.
+fn thread_pc<E: Endian>(endian: E, cputype: macho::CpuType, state: &[u8]) -> Pc {
     let (offset, size): (usize, usize) = match cputype {
         // x86_thread_state64: rax to r15, then rip.
         macho::CPU_TYPE_X86_64 => (8 + 16 * 8, 8),
@@ -360,13 +405,19 @@ fn thread_pc<E: Endian>(endian: E, cputype: macho::CpuType, state: &[u8]) -> Opt
         macho::CPU_TYPE_X86 => (8 + 10 * 4, 4),
         // arm_thread_state32: r0 to r12, sp, lr, then pc.
         macho::CPU_TYPE_ARM => (8 + 15 * 4, 4),
-        _ => return None,
+        _ => return Pc::UnknownCpu,
     };
-    let bytes = state.get(offset..offset.checked_add(size)?)?;
-    match size {
-        8 => Some(endian.read_u64(bytes.try_into().ok()?)),
-        _ => Some(u64::from(endian.read_u32(bytes.try_into().ok()?))),
-    }
+    let Some(bytes) = state.get(offset..offset + size) else {
+        return Pc::Short;
+    };
+    let pc = match size {
+        8 => bytes.try_into().ok().map(|bytes| endian.read_u64(bytes)),
+        _ => bytes
+            .try_into()
+            .ok()
+            .map(|bytes| u64::from(endian.read_u32(bytes))),
+    };
+    pc.map_or(Pc::Short, Pc::At)
 }
 
 /// A function's code as the parse takes it: where it is, the section it is in, and the size

@@ -113,6 +113,14 @@ pub enum LoadMessage {
     /// `count` of a linked image's exports would not read and were skipped, and, where
     /// `cut_short`, the export table would not read to its end.
     UnreadableExports { count: usize, cut_short: bool },
+    /// A Mach-O image's entry point was left out: its `LC_MAIN` states file offset `offset`,
+    /// which no segment's file bytes hold, or whose segment's address plus the offset into
+    /// it runs past the end of the address space.
+    EntryPointWithoutAddress { offset: u64 },
+    /// A Mach-O image has no entry point shown because `count` load commands that state one
+    /// (`LC_MAIN`, `LC_UNIXTHREAD`) would not read and were skipped, or, where `cut_short`,
+    /// the load commands would not read to their end.
+    UnreadableEntryCommands { count: usize, cut_short: bool },
     /// An archive's members stopped at the `member`th (from 1), whose header would not
     /// read, or whose bytes run past the end of the file. Said on the last object shown
     /// before it, or on the archive when none was.
@@ -189,6 +197,9 @@ impl LoadMessage {
             LoadMessage::UnreadableUnwindEntries { .. } => Severity::Warning,
             // What is shown is right; some names are missing.
             LoadMessage::UnreadableExports { .. } => Severity::Warning,
+            // What is shown is right; the entry point is missing.
+            LoadMessage::EntryPointWithoutAddress { .. } => Severity::Warning,
+            LoadMessage::UnreadableEntryCommands { .. } => Severity::Warning,
             // What is shown is right; only some of it is missing.
             LoadMessage::ArchiveCutShort { .. } => Severity::Warning,
             // Nothing shown is wrong; the members are simply not shown.
@@ -257,6 +268,28 @@ impl fmt::Display for LoadMessage {
                     (0, _) => write!(f, "{rest}"),
                     (count, false) => write!(f, "Exports that would not read: {count}."),
                     (count, true) => write!(f, "Exports that would not read: {count}. {rest}"),
+                }
+            }
+            LoadMessage::EntryPointWithoutAddress { offset } => write!(
+                f,
+                "The entry point was left out because the address of its file offset \
+                 {offset:#x} could not be worked out."
+            ),
+            LoadMessage::UnreadableEntryCommands { count, cut_short } => {
+                let rest = "The load commands would not read to their end, so the entry point \
+                            may be missing.";
+                match (*count, *cut_short) {
+                    (0, _) => write!(f, "{rest}"),
+                    (count, false) => {
+                        write!(
+                            f,
+                            "Load commands stating the entry point that would not read: {count}."
+                        )
+                    }
+                    (count, true) => write!(
+                        f,
+                        "Load commands stating the entry point that would not read: {count}. {rest}"
+                    ),
                 }
             }
             LoadMessage::ArchiveCutShort { member } => write!(

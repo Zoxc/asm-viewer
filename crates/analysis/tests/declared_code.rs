@@ -298,6 +298,84 @@ fn a_macho_thread_state_without_a_pc_leaves_the_entry_point_to_lc_main() {
     assert!(object::Object::exports(&file).is_ok());
     let object = parse(&data);
     assert_eq!(named(&object, "<entry point>").address, at(TEXT + entry));
+    assert_eq!(object.messages, []);
+}
+
+/// Defect: an `LC_MAIN` whose offset no segment holds meant no entry point, without a word.
+#[test]
+fn a_macho_entry_offset_in_no_segment_is_said() {
+    let offset = 0x10_0000;
+    let object = parse(&macho_executable(0x1_0000_0000, offset, false));
+    assert!(!common::names(&object).contains(&"<entry point>"));
+    assert_eq!(
+        object.messages,
+        [LoadMessage::EntryPointWithoutAddress { offset }]
+    );
+}
+
+/// Defect: an `LC_MAIN` whose segment's address plus the offset into it runs past the end
+/// of the address space meant no entry point, without a word.
+#[test]
+fn a_macho_entry_address_past_the_end_of_the_address_space_is_said() {
+    let offset = MACHO_CODE_OFFSET + 0x180;
+    let object = parse(&macho_executable(u64::MAX - 0x300, offset, false));
+    assert!(!common::names(&object).contains(&"<entry point>"));
+    assert!(
+        object
+            .messages
+            .contains(&LoadMessage::EntryPointWithoutAddress { offset }),
+        "{:?}",
+        object.messages
+    );
+}
+
+/// Defect: a load command that stated the entry point and would not read was passed over
+/// without a word. The `LC_MAIN` after the short thread state is made some other command,
+/// so the thread state is the only one left.
+#[test]
+fn a_macho_entry_command_that_will_not_read_is_skipped_and_counted() {
+    let mut data = macho_executable(0x1_0000_0000, MACHO_CODE_OFFSET + 0x180, true);
+    let main = data
+        .windows(8)
+        .position(|window| window == [0x28, 0, 0, 0x80, 24, 0, 0, 0])
+        .expect("the fixture has an LC_MAIN");
+    data[main..main + 4].copy_from_slice(&0x7fff_ffffu32.to_le_bytes());
+
+    let object = parse(&data);
+    assert!(!common::names(&object).contains(&"<entry point>"));
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableEntryCommands {
+            count: 1,
+            cut_short: false
+        }]
+    );
+}
+
+/// Defect: a load command whose size will not read ended the search for the entry point
+/// without a word. Its size of 4 is too small to step over, so the walk stops there, before
+/// the `LC_MAIN`.
+#[test]
+fn a_macho_load_command_walk_cut_short_before_the_entry_point_is_said() {
+    let mut data = macho_executable(0x1_0000_0000, MACHO_CODE_OFFSET + 0x180, true);
+    let thread = data
+        .windows(8)
+        .position(|window| window == [5, 0, 0, 0, 16, 0, 0, 0])
+        .expect("the fixture has an LC_UNIXTHREAD");
+    data[thread + 4..thread + 8].copy_from_slice(&4u32.to_le_bytes());
+
+    let object = parse(&data);
+    assert!(!common::names(&object).contains(&"<entry point>"));
+    assert!(
+        object
+            .messages
+            .contains(&LoadMessage::UnreadableEntryCommands {
+                count: 0,
+                cut_short: true
+            }),
+        "{:?}",
+        object.messages
+    );
 }
 
 #[test]

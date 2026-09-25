@@ -91,7 +91,8 @@ address could not be worked out (below), sections
 named `<section N>` because their own names would not read (below), code sections left out because
 their bytes would not read or decompress, code relocations left out because their address
 would not fit (below), imports left out because their names would not read
-(below), unwind entries and exports that would not read (below), the three an archive's members
+(below), unwind entries and exports that would not read (below), a Mach-O entry point that
+could not be placed or whose load commands would not read (below), the three an archive's members
 are left out for (above), and the six a whole file shows nothing for (above). Those six are
 `Severity::Fatal`, the file not loading at all, above `Severity::Error`, which is for something
 shown that is wrong. What the debug info could not read is not among them,
@@ -204,8 +205,13 @@ was cut short (`LoadMessage::UnreadableExports`). A relocatable object is skippe
 `entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. For a Mach-O,
 `entry()` answers an `LC_MAIN` as a file offset, so `macho_entry` walks the load commands
 itself and is not asked at all: an `LC_MAIN`'s offset is placed through the segment whose file
-bytes hold it (no such segment, no entry point), and an `LC_UNIXTHREAD`'s PC is read as
-`object` reads it (`notes/upstream/object.md`). **A function's stated address is read through to
+bytes hold it, and an `LC_UNIXTHREAD`'s PC is read as `object` reads it
+(`notes/upstream/object.md`). An offset no segment holds, or whose address runs past the end of
+the address space, is no entry point, and says so (`LoadMessage::EntryPointWithoutAddress`). A
+command stating an entry point that will not read is skipped; a load command whose size will not
+read ends the walk, since the next starts where that size says. When no entry point is found,
+either is one warning, a count and whether the walk was cut short
+(`LoadMessage::UnreadableEntryCommands`). **A function's stated address is read through to
 its code** (`CodeAddresses`), on the formats where `object` hands over a number that is not the
 code's. Where bit 0 says which instruction set the code is in, it is cleared, and `ModeBit` says
 which addresses carry it. On 32-bit ARM ELF (Thumb) and MIPS ELF (MIPS16, microMIPS) it is an

@@ -241,6 +241,37 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         assert_eq!(exports.to_string(), words);
     }
 
+    let unplaced = LoadMessage::EntryPointWithoutAddress { offset: 0x380 };
+    assert_eq!(unplaced.severity(), Severity::Warning);
+    assert_eq!(
+        unplaced.to_string(),
+        "The entry point was left out because the address of its file offset 0x380 could not \
+         be worked out."
+    );
+
+    for (count, cut_short, words) in [
+        (
+            1,
+            false,
+            "Load commands stating the entry point that would not read: 1.",
+        ),
+        (
+            0,
+            true,
+            "The load commands would not read to their end, so the entry point may be missing.",
+        ),
+        (
+            2,
+            true,
+            "Load commands stating the entry point that would not read: 2. The load commands \
+             would not read to their end, so the entry point may be missing.",
+        ),
+    ] {
+        let commands = LoadMessage::UnreadableEntryCommands { count, cut_short };
+        assert_eq!(commands.severity(), Severity::Warning);
+        assert_eq!(commands.to_string(), words);
+    }
+
     let cut = LoadMessage::ArchiveCutShort { member: 2 };
     assert_eq!(cut.severity(), Severity::Warning);
     assert_eq!(
