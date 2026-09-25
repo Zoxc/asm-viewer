@@ -185,6 +185,20 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         "Sections named by their index because their names could not be read: 1."
     );
 
+    for (count, cut_short, words) in [
+        (2, false, "Unwind entries that would not read: 2."),
+        (0, true, "The unwind table would not read to its end."),
+        (
+            1,
+            true,
+            "Unwind entries that would not read: 1. The unwind table would not read to its end.",
+        ),
+    ] {
+        let unwind = LoadMessage::UnreadableUnwindEntries { count, cut_short };
+        assert_eq!(unwind.severity(), Severity::Warning);
+        assert_eq!(unwind.to_string(), words);
+    }
+
     let cut = LoadMessage::ArchiveCutShort { member: 2 };
     assert_eq!(cut.severity(), Severity::Warning);
     assert_eq!(

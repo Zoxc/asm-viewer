@@ -762,7 +762,11 @@ pub(crate) fn parse_unshared(
         Some((info, named)) => (Some(info), named),
         None => (None, Vec::new()),
     };
-    let unwind = unwind::entries(&file);
+    let unwind::UnwindTable {
+        entries: unwind,
+        message,
+    } = unwind::entries(&file);
+    messages.extend(message);
     let code = code_sections(&sections);
     let declared = declared_code(
         &file,

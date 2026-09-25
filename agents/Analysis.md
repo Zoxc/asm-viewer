@@ -85,7 +85,8 @@ went wrong beside its answer rather than reporting it itself, as `section_biases
 loader, which asks the same rule again, drops the second copy. The Objects list marks the row
 (`agents/Sidebar.md`). The cases reported so far: the layout running out of address space,
 functions left out because the descriptor naming their code could not be read (below), sections
-named `<section N>` because their own names would not read (below), the three an archive's members
+named `<section N>` because their own names would not read (below), unwind entries that would not
+read (below), the three an archive's members
 are left out for (above), and the five a whole file shows nothing for (above). Those five are
 `Severity::Fatal`, the file not loading at all, above `Severity::Error`, which is for something
 shown that is wrong. What the debug info could not read is not among them,
@@ -115,7 +116,11 @@ with unwind info, a begin and an end and no name, plus one byte of the `UNWIND_I
 the chained flag). For an ELF it is its
 `.eh_frame` (one FDE per function with any, a start and a length; the same format on every
 architecture, and on x86-64 every function has one by default, leaves included; no fragment flag, so
-a `.cold` part is a function of its own). `unwind::entries` is the one part that reads call-frame
+a `.cold` part is a function of its own). An entry that will not read is skipped and counted, and
+the walk goes on: an FDE whose own parse fails, or a `RUNTIME_FUNCTION` whose range is inverted or
+runs past the address space. An `.eh_frame` record `gimli`'s walk will not step past, a trailing
+partial `RUNTIME_FUNCTION`, or a table that will not read at all, is the table cut short. Both are one warning
+(`LoadMessage::UnreadableUnwindEntries`). `unwind::entries` is the one part that reads call-frame
 information, and only for a linked image, since a relocatable object's FDEs are written before their
 addresses are and, read as they lie, fall inside `.text`. All of them are *declared*, the PDB's by a
 file matched to the image by GUID and age and the unwind table's by the image to its own loader, so

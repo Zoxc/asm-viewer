@@ -11,7 +11,7 @@
 
 use crate::parse::{mode_bit_cleared, ModeBit};
 use crate::sections::runtime_endian;
-use crate::SectionAddress;
+use crate::{LoadMessage, SectionAddress};
 use gimli::{BaseAddresses, CieOrFde, EhFrame, EhFrameOffset, UnwindSection as _};
 use object::pe::ImageRuntimeFunctionEntry;
 use object::{
@@ -24,15 +24,46 @@ use std::{collections::HashMap, ops::Range};
 /// drops one whose begin is not in code. Empty for a file with no table this reads: a
 /// relocatable object among them, whose `.eh_frame` is written before its addresses are —
 /// see [`elf`].
-pub(crate) fn entries(file: &object::File<'_>) -> Vec<UnwindEntry> {
-    match file {
-        object::File::Pe64(pe) => self::pe(pe),
+pub(crate) fn entries(file: &object::File<'_>) -> UnwindTable {
+    let mut unread = Unread::default();
+    let entries = match file {
+        object::File::Pe64(pe) => self::pe(pe, &mut unread),
         object::File::Elf32(_) | object::File::Elf64(_)
             if file.kind() != ObjectKind::Relocatable =>
         {
-            elf(file)
+            elf(file, &mut unread)
         }
         _ => Vec::new(),
+    };
+    UnwindTable {
+        entries,
+        message: unread.message(),
+    }
+}
+
+/// What [`entries`] read: the entries, and what is said about those that would not read.
+pub(crate) struct UnwindTable {
+    pub(crate) entries: Vec<UnwindEntry>,
+    pub(crate) message: Option<LoadMessage>,
+}
+
+/// What would not read of an unwind table: how many entries were skipped, and whether the
+/// table stopped before its end.
+#[derive(Default)]
+struct Unread {
+    count: usize,
+    cut_short: bool,
+}
+
+impl Unread {
+    fn skip(&mut self) {
+        self.count = self.count.saturating_add(1);
+    }
+
+    fn message(self) -> Option<LoadMessage> {
+        let Unread { count, cut_short } = self;
+        (count > 0 || cut_short)
+            .then_some(LoadMessage::UnreadableUnwindEntries { count, cut_short })
     }
 }
 
@@ -52,18 +83,21 @@ pub(crate) fn entries(file: &object::File<'_>) -> Vec<UnwindEntry> {
 /// Read once, front to back: `.eh_frame_hdr` is the unwinder's lookup table over the same
 /// records and says nothing more, and `.debug_frame` is the same format in an object built
 /// without unwind tables, whose extents DWARF's own `DW_AT_high_pc` already gives. The walk
-/// ends at the section's end, at the zero-length terminator, or at the first record that
-/// will not parse — a bad record's length is exactly what cannot be trusted to find the
-/// next — keeping what was read; an FDE whose own parse fails is skipped. Every CIE comes
-/// before the FDEs that use it, so they are kept as they go by and re-read only on a miss.
+/// is `gimli`'s, and ends at the section's end, at the zero-length terminator, or at the first
+/// record that will not parse, which is the table cut short: `gimli` walks no further, and
+/// what was read is kept. An FDE whose own parse fails is skipped and counted. One whose range is
+/// inverted or runs past the address space is counted too; an empty one states nothing
+/// and is dropped without a word. Every CIE comes before the FDEs that use it, so they are
+/// kept as they go by and re-read only on a miss.
 ///
 /// On 32-bit ARM and MIPS both ends are cleared of the mode bit ([`ModeBit`]). No code
 /// starts or ends at an odd address there, so this changes only an end that was tagged.
-fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
+fn elf(file: &object::File<'_>, unread: &mut Unread) -> Vec<UnwindEntry> {
     let Some(section) = file.section_by_name(".eh_frame") else {
         return Vec::new();
     };
     let Ok(data) = section.data() else {
+        unread.cut_short = true;
         return Vec::new();
     };
 
@@ -89,7 +123,15 @@ fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
     let mut cies: HashMap<EhFrameOffset<usize>, gimli::CommonInformationEntry<_>> = HashMap::new();
     let mut entries = Vec::new();
     let mut records = eh_frame.entries(&bases);
-    while let Ok(Some(record)) = records.next() {
+    loop {
+        let record = match records.next() {
+            Ok(Some(record)) => record,
+            Ok(None) => break,
+            Err(_) => {
+                unread.cut_short = true;
+                break;
+            }
+        };
         let partial = match record {
             CieOrFde::Cie(cie) => {
                 cies.insert(EhFrameOffset(cie.offset()), cie);
@@ -102,9 +144,11 @@ fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
             None => section.cie_from_offset(bases, offset),
         });
         let Ok(fde) = fde else {
+            unread.skip();
             continue;
         };
         let Some(end) = fde.initial_address().checked_add(fde.len()) else {
+            unread.skip();
             continue;
         };
         let (begin, end) = if tagged {
@@ -151,19 +195,19 @@ impl UnwindEntry {
 /// function with unwind info, its begin and end RVAs read and placed on the image base, and one
 /// byte of the `UNWIND_INFO` its third field names, for the chained flag; where that field
 /// is odd it names another entry instead, and the entry is chained. A trailing partial
-/// record is dropped. Each is a **declaration of both ends** of a function — the loader's, not
+/// record, or a directory that will not read, is the table cut short. Each is a **declaration of both ends** of a function — the loader's, not
 /// a debugger's — which is what makes it worth reading past the export table: a stripped image
 /// exports a handful of its functions, and every function between two exports is otherwise
 /// nameless and of no known length. In
-/// file order, an entry whose end is not past its begin dropped, and not yet placed in any
-/// section — that is `declared_code`'s lookup, which is also what drops one whose begin is
+/// file order, an empty entry dropped and one whose end is before its begin, or past the
+/// address space, dropped and counted, and not yet placed in any section — that is `declared_code`'s lookup, which is also what drops one whose begin is
 /// not in code. An `UNWIND_INFO` that cannot be read, or is of a version other than 1 or 2,
 /// makes its entry a plain function: the range is still stated.
 ///
 /// x86-64 only: ARM64's `.pdata` record is another shape, 8 bytes, and a PE32 has none. A
 /// COFF `.obj` carries a relocatable `.pdata` section and no data directory; it is not a
 /// `Pe64` and so is skipped, which is `declared_code`'s rule for a relocatable object too.
-fn pe(pe: &PeFile64<'_>) -> Vec<UnwindEntry> {
+fn pe(pe: &PeFile64<'_>, unread: &mut Unread) -> Vec<UnwindEntry> {
     if pe.architecture() != Architecture::X86_64 {
         return Vec::new();
     }
@@ -175,22 +219,34 @@ fn pe(pe: &PeFile64<'_>) -> Vec<UnwindEntry> {
     };
     let sections = pe.section_table();
     let Ok(data) = directory.data(pe.data(), &sections) else {
+        unread.cut_short = true;
         return Vec::new();
     };
 
     let count = data.len() / size_of::<ImageRuntimeFunctionEntry>();
-    let Ok((entries, _)) = object::slice_from_bytes::<ImageRuntimeFunctionEntry>(data, count)
+    let Ok((entries, rest)) = object::slice_from_bytes::<ImageRuntimeFunctionEntry>(data, count)
     else {
+        unread.cut_short = true;
         return Vec::new();
     };
+    if !rest.is_empty() {
+        unread.cut_short = true;
+    }
 
     let base = SectionAddress::new(pe.relative_address_base());
     entries
         .iter()
         .filter_map(|entry| {
-            let begin = base.checked_add(u64::from(entry.begin_address.get(LittleEndian)))?;
-            let end = base.checked_add(u64::from(entry.end_address.get(LittleEndian)))?;
+            let begin = base.checked_add(u64::from(entry.begin_address.get(LittleEndian)));
+            let end = base.checked_add(u64::from(entry.end_address.get(LittleEndian)));
+            let (Some(begin), Some(end)) = (begin, end) else {
+                unread.skip();
+                return None;
+            };
             if begin >= end {
+                if begin > end {
+                    unread.skip();
+                }
                 return None;
             }
             // An odd RVA (`RUNTIME_FUNCTION_INDIRECT`) names another `RUNTIME_FUNCTION`,

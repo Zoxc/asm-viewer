@@ -25,7 +25,7 @@
 
 mod common;
 
-use analysis::{Architecture, Gap, GapKind, MadeUp};
+use analysis::{Architecture, Gap, GapKind, LoadMessage, MadeUp};
 use common::{
     at, committed_fixture, eh_frame_section, elf_image, elf_shared_object, listing_of, named,
     names, parse, pe_image, ElfImage, ExportedSymbol, ImageSection, PeDll, SharedObject,
@@ -163,6 +163,27 @@ fn an_entry_at_a_named_address_adds_no_symbol_and_a_malformed_one_nothing() {
             at(TEXT_ADDRESS + 6)..at(TEXT_ADDRESS + 7),
         ],
         "the three that state something"
+    );
+}
+
+/// A `RUNTIME_FUNCTION` whose end is before its begin is skipped and counted; an empty one
+/// states nothing and is dropped without a word.
+#[test]
+fn an_inverted_runtime_function_is_counted() {
+    let object = parse(&image_with(None, &[(0, 4), (4, 4), (9, 8), (7, 10)]));
+    assert_eq!(
+        names(&object),
+        [
+            format!("<function {:#x}>", TEXT_ADDRESS + 7),
+            "first".to_owned()
+        ]
+    );
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableUnwindEntries {
+            count: 1,
+            cut_short: false
+        }]
     );
 }
 
@@ -692,25 +713,31 @@ fn an_aarch64_elfs_eh_frame_is_read() {
     );
 }
 
+/// Where in `image` its `.eh_frame`'s two FDEs start: the CIE comes first, and each
+/// record's length word says where the next begins.
+fn fde_offsets(image: &[u8]) -> [usize; 2] {
+    let file = object::File::parse(image).unwrap();
+    let (offset, size) = file
+        .section_by_name(".eh_frame")
+        .unwrap()
+        .file_range()
+        .unwrap();
+    let start = offset as usize;
+    let bytes = &image[start..start + size as usize];
+    let length = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let fde1 = 4 + length(0);
+    let fde2 = fde1 + 4 + length(fde1);
+    [start + fde1, start + fde2]
+}
+
 /// A record whose length cannot be trusted ends the walk where it stands: the FDEs before
-/// it are kept, nothing after it is guessed at, and nothing panics.
+/// it are kept, nothing after it is guessed at, nothing panics, and the table is said to
+/// be cut short.
 #[test]
 fn a_cut_eh_frame_yields_what_parsed_before_the_cut() {
     let mut image = shared_with(&[FIRST], None, &[(4, 6), (7, 10)]);
-    let (offset, size) = {
-        let file = object::File::parse(image.as_slice()).unwrap();
-        let section = file.section_by_name(".eh_frame").unwrap();
-        section.file_range().unwrap()
-    };
-    let start = offset as usize;
-    let bytes = &image[start..start + size as usize];
-    // The CIE, then the first FDE, then the second: each record's length word says where
-    // the next begins.
-    let cie_len = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
-    let fde1 = 4 + cie_len;
-    let fde1_len = u32::from_le_bytes(bytes[fde1..fde1 + 4].try_into().unwrap()) as usize;
-    let fde2 = fde1 + 4 + fde1_len;
-    image[start + fde2..start + fde2 + 4].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
+    let [_, fde2] = fde_offsets(&image);
+    image[fde2..fde2 + 4].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
 
     let object = parse(&image);
     assert_eq!(
@@ -719,6 +746,39 @@ fn a_cut_eh_frame_yields_what_parsed_before_the_cut() {
             format!("<function {:#x}>", TEXT_ADDRESS + 4),
             "first".to_owned()
         ]
+    );
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableUnwindEntries {
+            count: 0,
+            cut_short: true
+        }]
+    );
+}
+
+/// An FDE that will not parse is skipped and counted, and the walk goes on to the next: here
+/// one whose CIE pointer points at itself, which is no CIE.
+#[test]
+fn an_fde_that_will_not_parse_is_skipped_and_counted() {
+    let mut image = shared_with(&[FIRST], None, &[(4, 6), (7, 10)]);
+    let [fde1, _] = fde_offsets(&image);
+    // The pointer counts back from where it is, past the record's 4-byte length.
+    image[fde1 + 4..fde1 + 8].copy_from_slice(&4u32.to_le_bytes());
+
+    let object = parse(&image);
+    assert_eq!(
+        names(&object),
+        [
+            format!("<function {:#x}>", TEXT_ADDRESS + 7),
+            "first".to_owned()
+        ]
+    );
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableUnwindEntries {
+            count: 1,
+            cut_short: false
+        }]
     );
 }
 
