@@ -153,14 +153,17 @@ const PUBLICS: [pdb2::SymbolKind; 2] = [
 impl Pdb {
     /// Open and match the `.pdb` this image names, or [`None`]: for an image with no CodeView
     /// record, a `.pdb` that is nowhere it is looked for, or one that is not the image's.
-    /// [`Unreadable`] for the image's own `.pdb` whose address map will not read:
-    /// without it no address it states can be placed.
+    /// [`Unreadable`] for the image's own `.pdb` whose DBI ([`find`]), or address map will
+    /// not read: without them nothing it states can be found or placed.
     pub(super) fn load(file: &object::File<'_>, path: &Path) -> Option<Result<Pdb, Unreadable>> {
         let codeview = file.pdb_info().ok()??;
         let image_base = SectionAddress::new(file.relative_address_base());
 
         let recorded = String::from_utf8_lossy(codeview.path());
-        let (mut pdb, dbi) = find(&recorded, codeview.guid(), codeview.age(), path)?;
+        let (mut pdb, dbi) = match find(&recorded, codeview.guid(), codeview.age(), path)? {
+            Ok(found) => found,
+            Err(unreadable) => return Some(Err(unreadable)),
+        };
 
         let Ok(address_map) = pdb.address_map() else {
             return Some(Err(Unreadable));
@@ -627,13 +630,18 @@ fn placed(range: Range<SectionAddress>) -> Range<PlacedAddress> {
 /// what the linker wrote; the info stream's own age is bumped by tools that rewrite a PDB
 /// afterwards (source indexing, `pdbstr`) and may legitimately exceed the image's. A PDB
 /// so old it states no DBI age predates the line-table format read here, and is declined.
+///
+/// A PDB whose GUID matches but whose DBI will not read is passed over for the next
+/// candidate. Where no candidate matches, it is [`Unreadable`]: most likely the image's own,
+/// and the reader is told.
 fn find(
     recorded: &str,
     guid: [u8; 16],
     age: u32,
     binary: &Path,
-) -> Option<(PDB<'static, BoundedFile>, DebugInformation<'static>)> {
-    candidates(recorded, binary).into_iter().find_map(|path| {
+) -> Option<Result<(PDB<'static, BoundedFile>, DebugInformation<'static>), Unreadable>> {
+    let mut unreadable = false;
+    let found = candidates(recorded, binary).into_iter().find_map(|path| {
         let file = BoundedFile::open(&path)?;
         let mut pdb = PDB::open(file).ok()?;
         let info = pdb.pdb_information().ok()?;
@@ -643,12 +651,19 @@ fn find(
         if info.guid.to_bytes_le() != guid {
             return None;
         }
-        let dbi = pdb.debug_information().ok()?;
+        let Ok(dbi) = pdb.debug_information() else {
+            unreadable = true;
+            return None;
+        };
         if dbi.age() != Some(age) {
             return None;
         }
         Some((pdb, dbi))
-    })
+    });
+    match found {
+        Some(found) => Some(Ok(found)),
+        None => unreadable.then_some(Err(Unreadable)),
+    }
 }
 
 /// The `len` bytes the PDB states at `offset`, as the ranges of the image's own address

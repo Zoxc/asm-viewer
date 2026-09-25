@@ -631,7 +631,10 @@ not block the parse thread until a writer appears. **Matching it**: GUID *and* a
 build and the age the relink. An incremental relink keeps the GUID and bumps the age, and its `.pdb`
 then describes code the image no longer has, which is worse than none.
 The age compared is the DBI's, which the linker wrote; the info stream's own age is bumped by tools
-that rewrite a PDB afterwards (source indexing) and may legitimately exceed the image's.
+that rewrite a PDB afterwards (source indexing) and may legitimately exceed the image's. A PDB
+whose GUID matches but whose DBI will not read gives no age to compare, so the next candidate is
+tried; where none matches, it is counted as the image's own that would not read (`Unreadable`,
+below).
 **Addresses**: a PDB states `section:offset`. Every one goes through the PDB's own `AddressMap` to
 an RVA, which is also where an OMAP-rearranged image is undone (a path no fixture exercises beyond
 its identity form), and onto the image base with checked arithmetic. A matching PDB whose address

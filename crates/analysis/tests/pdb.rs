@@ -1035,6 +1035,23 @@ fn a_pdb_whose_address_map_will_not_read_is_counted() {
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
+/// A PDB whose GUID is the image's but whose DBI will not read is counted, from the parse on:
+/// before, it was passed over as if it were some other build's. Here the DBI's signature is
+/// not the one `pdb2` reads.
+#[test]
+fn a_pdb_whose_dbi_will_not_read_is_counted() {
+    let dll = committed_fixture(NOEXPORT_DLL);
+    let pdb = committed_fixture("line_fixture_noexport.pdb");
+    let mut msf = Msf::new(&pdb);
+    msf.write(DBI, 0, &0u32.to_le_bytes());
+    let dir = scratch("dbi_unread");
+    std::fs::write(dir.join("line_fixture_noexport.pdb"), &msf.bytes).unwrap();
+    let object = parse_at(&dll, dir.join(NOEXPORT_DLL));
+
+    assert_eq!(object.debug_info_skipped(), 1);
+    assert_eq!(names(&object), unwind_names());
+}
+
 /// The system allocator, refusing any one request past 1 GiB. Nothing a test here reads
 /// comes near that, so a refusal is a count `pdb2` believed ([`CALLEES`]); refused, it is an
 /// abort that fails the run at once, where granted it would have been the machine's memory.
