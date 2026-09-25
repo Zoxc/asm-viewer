@@ -211,6 +211,17 @@ pub(crate) struct PlacedSymbol {
     pub(crate) symbol: Arc<SymbolData>,
 }
 
+impl PlacedSymbol {
+    /// Whether the symbol is in `section`. Two code sections can overlap where they are
+    /// placed, so an entry inside a section's placed range is not always its own.
+    pub(crate) fn is_in(&self, section: &Arc<Section>) -> bool {
+        self.symbol
+            .section
+            .as_ref()
+            .is_some_and(|own| Arc::ptr_eq(own, section))
+    }
+}
+
 impl Object {
     /// An object holding `symbols`, which may come in any order, and no imports. This is
     /// where [`symbols_sorted`](Self::symbols_sorted) and [`placed`](Self::placed) are

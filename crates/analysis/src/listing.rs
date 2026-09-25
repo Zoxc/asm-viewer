@@ -93,21 +93,27 @@ pub enum GapKind {
 
 impl Listing {
     /// The skeleton for `section`, whose bytes are placed at `range`: one stretch per
-    /// distinct symbol address inside them, plus a leading one when the first symbol is not
+    /// distinct address of its own symbols, plus a leading one when the first symbol is not
     /// at their start. Decodes nothing.
     ///
     /// A symbol placed outside the section's bytes — a wild `st_value` — is left out.
     pub(crate) fn new(object: &Object, section: Arc<Section>, range: Range<PlacedAddress>) -> Self {
         let bytes = section.local(range.start)..section.local(range.end);
-        // The object's symbols over the section's placed range, already sorted by address
-        // and then by index: two sections of a relocatable object share address 0, and
-        // their places do not. Each placed address less the bias is the address in the
-        // section, which for the section's own symbols is the address they state.
-        let symbols = object.placed_in(range);
+        // The section's own symbols among the object's over its placed range, already
+        // sorted by address and then by index. Two sections can share placed addresses --
+        // a header can claim it, and a relocatable object's sections stay at 0 when they
+        // cannot be placed apart -- so the other one's symbols are left out: their bytes
+        // are not this section's. Each placed address less the bias is the address in the
+        // section, the one the symbol states.
+        let symbols: Vec<&PlacedSymbol> = object
+            .placed_in(range)
+            .iter()
+            .filter(|entry| entry.is_in(&section))
+            .collect();
         let local = |entry: &PlacedSymbol| section.local(entry.placed);
 
         let mut stretches = Vec::new();
-        let first = symbols.first().map_or(bytes.end, local);
+        let first = symbols.first().map_or(bytes.end, |entry| local(entry));
         if bytes.start < first {
             stretches.push(Stretch {
                 range: bytes.start..first,
@@ -118,9 +124,9 @@ impl Listing {
         // One stretch per address, running to the next address or the section's end.
         let mut groups = symbols.chunk_by(|a, b| a.placed == b.placed).peekable();
         while let Some(group) = groups.next() {
-            let next = groups.peek().map_or(bytes.end, |after| local(&after[0]));
+            let next = groups.peek().map_or(bytes.end, |after| local(after[0]));
             stretches.push(Stretch {
-                range: local(&group[0])..next,
+                range: local(group[0])..next,
                 symbols: group.iter().map(|entry| entry.symbol.clone()).collect(),
             });
         }

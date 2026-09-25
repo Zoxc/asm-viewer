@@ -76,19 +76,22 @@ impl SymbolData {
     /// linked image and wrong on every relocatable object. Only the answer leaves, and a
     /// count of bytes is the same number in either space.
     fn derived(&self, object: &Object) -> Option<u64> {
-        let range = self.section.as_ref()?.placed_range()?;
+        let section = self.section.as_ref()?;
+        let range = section.placed_range()?;
         let placed = self.place_in(&range)?;
 
         // The next symbol is the first entry at a greater address, so a second name at this
         // one bounds nothing, and it counts only inside this section's bytes: past them, the
-        // section's end is the bound. A wild address in the symbol table is in no entry, so it
-        // cannot cut short the symbol before it.
+        // section's end is the bound. It has to be this section's own: another section
+        // placed over this one has its own bytes there. A wild address in the symbol table
+        // is in no entry, so it cannot cut short the symbol before it.
         let all = object.placed_symbols();
         let after = all.partition_point(|entry| entry.placed <= placed);
-        let next = all
-            .get(after)
-            .map(|entry| entry.placed)
-            .filter(|next| range.contains(next));
+        let next = all[after..]
+            .iter()
+            .take_while(|entry| range.contains(&entry.placed))
+            .find(|entry| entry.is_in(section))
+            .map(|entry| entry.placed);
 
         placed.bytes_to(next.unwrap_or(range.end))
     }

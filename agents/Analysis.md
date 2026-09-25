@@ -339,7 +339,8 @@ symbol table, `.opd`'s relocations and `relocate` (through `symbol_address`) all
 address from it. Without it, a `.o` from `ld -r --section-start=.text=0x1000` had every function
 below its bytes, so none disassembled, and a DWARF relocation against a symbol landed 0x1000 below
 one against the section. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in `Object::placed`,
-**clipped to the section's own bytes**. The index holds only symbols inside a code section's bytes,
+**clipped to the section's own bytes** and taken only from the section's own symbols, since a header
+can put another section's on top of them (see the index below). The index holds only symbols inside a code section's bytes,
 since an address is a number out of the file and one wild `st_value` would otherwise cost the symbol
 *above* it its listing rather than only itself. The derivation is in **placed** addresses throughout,
 the symbol's own included, because the index it reads is: it used to take the bias back off the next
@@ -918,9 +919,12 @@ side in the file's order. It holds a symbol only where its section holds code an
 inside that code's bytes (`SymbolData::code_place`). The placed layout is what lets one index serve
 the whole object: a linked image's addresses are real, and a relocatable object's code sections each
 have a place of their own. A section that is not code has no place, so its symbols would land on
-some code section's addresses; it keeps no bytes either, so they never had an extent to read. Where
-a header makes two places overlap, each of the two listings also labels the other's symbols; nothing
-breaks, and `CodeListing` draws only the first. `Object::new` builds the index from `symbols`, so it
+some code section's addresses; it keeps no bytes either, so they never had an extent to read. Two
+code sections can still overlap -- a linked image's headers can claim it, and a relocatable object's
+sections the layout could not place apart stay on top of each other -- so each reader keeps to its
+own section's entries: a listing labels only its own symbols, and an estimate stops only at its own
+section's next one. A foreign label used to cut a stretch short and decode the other section's bytes
+inside this one's. `CodeListing` draws only the first of two sections that overlap. `Object::new` builds the index from `symbols`, so it
 cannot disagree with them, and nothing rewrites it afterwards — which is what lets the source index
 name a symbol by its position in it. It is built there, on the loading thread, and not lazily on
 first use, because a render reaches it: the Back/Forward tooltip names a restored `Place::Code` stop
@@ -1010,9 +1014,9 @@ section as one address-keyed listing, beside the symbol view and not instead of 
 index-keyed changed for it. `Listing::new` is the **skeleton**, and it decodes nothing: one
 `Stretch` per distinct symbol address inside the section's bytes, its range running to the next
 address or the section's end, plus a leading stretch with no label when the first symbol is not at
-the start (or there is no symbol at all). Its symbols are the run of `Object::placed` over the
-section's placed range, two binary searches away (two sections of a relocatable object share address
-0; their places do not), and already ordered by `(address, SymbolIndex)`, so two names at one
+the start (or there is no symbol at all). Its symbols are the section's own entries in the run of
+`Object::placed` over its placed range, two binary searches away (two sections of a relocatable object
+share address 0; their places do not), and already ordered by `(address, SymbolIndex)`, so two names at one
 address are one stretch with two labels in the file's order. A symbol placed outside the section's
 bytes is not in the index. That is free, and it is what gives a view a stable structure to scroll
 while instructions arrive. `Listing::new` is crate-private, so every `Listing` outside the crate is

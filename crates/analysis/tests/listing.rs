@@ -1082,3 +1082,54 @@ fn a_listing_reads_its_bytes_in_the_objects_byte_order() {
         assert_eq!(placed.listing.endianness(), endian);
     }
 }
+
+/// A linked image whose headers put `.text.b` inside `.text`. The listing keeps `.text`
+/// and drops `.text.b`. `.text`'s stretches are its own symbols only: `b` is not a label
+/// in it, and `a1`, which states no size, runs on to `a2`.
+#[test]
+fn a_section_lists_only_its_own_symbols_under_another_placed_on_it() {
+    use common::{elf_image, ElfImage, ImageSection, ImageSymbol};
+
+    let symbol = |name, value, section| ImageSymbol {
+        name,
+        value,
+        size: 0,
+        kind: object::elf::STT_FUNC,
+        section: Some(section),
+    };
+    let object = parse(&elf_image(ElfImage {
+        is_64: true,
+        big_endian: false,
+        machine: object::elf::EM_X86_64,
+        flags: object::elf::FileFlags(0),
+        entry: 0,
+        sections: &[
+            ImageSection {
+                name: ".text",
+                address: 0x1000,
+                code: true,
+                bytes: &[0x90; 0x10],
+            },
+            ImageSection {
+                name: ".text.b",
+                address: 0x1004,
+                code: true,
+                bytes: &[0xC3; 4],
+            },
+        ],
+        symbols: &[
+            symbol("a1", 0x1000, 0),
+            symbol("b", 0x1004, 1),
+            symbol("a2", 0x1008, 0),
+        ],
+        dynamic: &[],
+    }));
+
+    let code = CodeListing::new(&object);
+    assert_eq!(placed_names(&code), [".text"]);
+    let listing = &code.sections()[0].listing;
+    assert_eq!(labels(listing), [["a1"], ["a2"]]);
+    assert_eq!(ranges(listing), [(0x1000, 0x1008), (0x1008, 0x1010)]);
+    let a1 = code.decode(&object, 0).expect("a1's stretch");
+    assert_eq!(a1.gap, None, "a1's extent runs to a2, not to b");
+}
