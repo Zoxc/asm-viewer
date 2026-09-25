@@ -3,6 +3,7 @@
 
 use crate::demangle;
 use crate::line::{DebugInfo, Declared};
+use crate::model::FirstCovering;
 use crate::sections::{bias_of, section_biases, section_data, section_name, Placement};
 use crate::unwind::{self, UnwindEntry};
 use crate::{
@@ -111,7 +112,7 @@ struct SymbolTable {
 fn declared_code(
     file: &object::File<'_>,
     addresses: &CodeAddresses<'_, '_>,
-    code: &[(Range<SectionAddress>, SectionIndex)],
+    code: &FirstCovering<SectionAddress, SectionIndex>,
     known: &mut HashSet<PlacedAddress>,
     imports: &mut Vec<Import>,
     next: usize,
@@ -125,7 +126,7 @@ fn declared_code(
 
     // Which kind of name it is decides whether it is offered to the demanglers.
     let mut take = |name: Name, address: SectionAddress, size: Option<u64>| {
-        let Some((_, section)) = code.iter().find(|(range, _)| range.contains(&address)) else {
+        let Some(section) = code.get(address) else {
             return;
         };
         // `known` is keyed by placed address, and nothing here is a relocatable object's
@@ -138,7 +139,7 @@ fn declared_code(
             name,
             address,
             size,
-            section: Some(*section),
+            section: Some(section),
         });
     };
 
@@ -719,10 +720,13 @@ pub(crate) fn parse_unshared(data: ObjectData, name: String, path: PathBuf) -> O
     };
     let unwind = unwind::entries(&file);
     let code = code_sections(&sections);
+    // Built once: a walk of the sections per name offered costs names times sections, both
+    // the file's to choose.
+    let declared_in = FirstCovering::new(code.iter().cloned());
     let declared = declared_code(
         &file,
         &addresses,
-        &code,
+        &declared_in,
         &mut known,
         &mut imports,
         next,

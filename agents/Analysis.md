@@ -139,7 +139,10 @@ claimant stands at that address and bounds the symbol below it. `known` holds pl
 relocatable object is another place and claims nothing. Not quite always: a claimant outside every
 code section's bytes drops the symbol without taking its place, and the symbol below then runs on to
 the next one listed. It takes an unreadable name to get there. The section comes from looking the address up in the kept **text** sections, which
-doubles as the filter keeping exported *data* out. A bad export is skipped and the walk reads on,
+doubles as the filter keeping exported *data* out. Where two overlap, the one the file lists first
+wins. The lookup (`FirstCovering`, in `model.rs`) is built once, by cutting the sections at every
+start and end into pieces that each belong to the first section over them, and each address is a
+binary search: a walk of the sections per name costs names times sections, and a file chooses both. A bad export is skipped and the walk reads on,
 except in a Mach-O's export trie, where `object` answers the same error forever and the first one
 ends the walk (`notes/upstream/object.md`). A relocatable object is skipped entirely:
 `entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. For a Mach-O,

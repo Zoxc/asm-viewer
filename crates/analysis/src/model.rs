@@ -2,7 +2,7 @@
 //! from, and the [`LoadMessage`]s saying what went wrong while it was read. Built by
 //! [`parse_object`](crate::parse_object) and read by everything else.
 //! Also [`covering`], the one search the crate looks an address up in a sorted list of
-//! ranges with.
+//! ranges with, and [`FirstCovering`], the lookup over ranges that may overlap built on it.
 
 use crate::disasm::Code;
 use crate::extent::ExtentCache;
@@ -10,7 +10,7 @@ use crate::line::{DebugInfo, DebugInfoCache};
 use crate::{Assembly, Bias, MadeUp, PlacedAddress, SectionAddress};
 use object::{Architecture, BinaryFormat, Endianness, Relocation, SectionIndex, SymbolIndex};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
     hash::{Hash, Hasher},
     ops::Range,
@@ -793,6 +793,69 @@ pub(crate) fn covering<T, A: Ord>(
         .partition_point(|item| range(item).start <= address)
         .checked_sub(1)?;
     range(&items[index]).contains(&address).then_some(index)
+}
+
+/// Ranges that may overlap, each carrying a value, looked up by address: the value of the
+/// first range, in the order they were given, that holds it. What `find` over the list
+/// answers, for the cost of a [`covering`] search rather than a walk per address.
+///
+/// Built by cutting the ranges at every start and end: each piece belongs to the first
+/// range over it, or to none, so the pieces are disjoint and one search finds the answer.
+pub(crate) struct FirstCovering<A, T> {
+    /// Disjoint and sorted by start. A piece nothing covers is left out.
+    pieces: Vec<(Range<A>, T)>,
+}
+
+impl<A: Ord + Copy, T: Copy> FirstCovering<A, T> {
+    /// From ranges in the order that decides which one an address in two of them is
+    /// taken to be in. An empty or backwards range holds nothing and is dropped.
+    pub(crate) fn new(ranges: impl IntoIterator<Item = (Range<A>, T)>) -> Self {
+        let ranges: Vec<(Range<A>, T)> = ranges
+            .into_iter()
+            .filter(|(range, _)| range.start < range.end)
+            .collect();
+        // Where a range starts or ends, with its place in the order and which of the two.
+        let mut edges: Vec<(A, usize, bool)> = ranges
+            .iter()
+            .enumerate()
+            .flat_map(|(order, (range, _))| [(range.start, order, true), (range.end, order, false)])
+            .collect();
+        edges.sort_unstable_by_key(|&(at, ..)| at);
+
+        // The ranges open between one edge and the next, by their place in the order.
+        let mut open = BTreeSet::new();
+        let mut pieces: Vec<(Range<A>, usize)> = Vec::new();
+        let mut edges = edges.into_iter().peekable();
+        while let Some(&(at, ..)) = edges.peek() {
+            while let Some((_, order, starts)) = edges.next_if(|&(edge, ..)| edge == at) {
+                if starts {
+                    open.insert(order);
+                } else {
+                    open.remove(&order);
+                }
+            }
+            let (Some(&first), Some(&(next, ..))) = (open.first(), edges.peek()) else {
+                continue;
+            };
+            match pieces.last_mut() {
+                Some((piece, owner)) if piece.end == at && *owner == first => piece.end = next,
+                _ => pieces.push((at..next, first)),
+            }
+        }
+
+        FirstCovering {
+            pieces: pieces
+                .into_iter()
+                .map(|(piece, owner)| (piece, ranges[owner].1))
+                .collect(),
+        }
+    }
+
+    /// The value of the first range holding `address`, or [`None`] where none does.
+    pub(crate) fn get(&self, address: A) -> Option<T> {
+        let index = covering(&self.pieces, |(piece, _)| piece.clone(), address)?;
+        Some(self.pieces[index].1)
+    }
 }
 
 #[cfg(test)]

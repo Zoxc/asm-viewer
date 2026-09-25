@@ -7,8 +7,9 @@
 mod common;
 
 use common::{
-    at, elf_shared_object, macho_arm_executable, macho_executable, named, parse, pe_dll,
-    ExportedSymbol, SharedObject, MACHO_ARM_TEXT, MACHO_CODE_OFFSET, TEXT_ADDRESS,
+    at, elf_image, elf_shared_object, macho_arm_executable, macho_executable, named, parse, pe_dll,
+    ElfImage, ExportedSymbol, ImageSection, ImageSymbol, SharedObject, MACHO_ARM_TEXT,
+    MACHO_CODE_OFFSET, TEXT_ADDRESS,
 };
 use std::sync::mpsc;
 use std::thread;
@@ -320,4 +321,56 @@ fn a_macho_export_trie_cut_inside_an_edge_ends_the_export_walk() {
         named(&object, "<entry point>").address,
         at(MACHO_ARM_TEXT + 4)
     );
+}
+
+/// Where two code sections overlap, a declared function is in the one the file lists first,
+/// whichever starts lower.
+#[test]
+fn a_declared_function_in_two_code_sections_is_in_the_one_listed_first() {
+    let function = |name, value| ImageSymbol {
+        name,
+        value,
+        size: 0,
+        kind: object::elf::STT_FUNC,
+        section: Some(0),
+    };
+    let lower = || ImageSection {
+        name: ".text.lower",
+        address: 0x1000,
+        code: true,
+        bytes: &[0xC3; 0x20],
+    };
+    let inner = || ImageSection {
+        name: ".text.inner",
+        address: 0x1008,
+        code: true,
+        bytes: &[0xC3; 0x10],
+    };
+    let image = |sections: &[ImageSection]| {
+        parse(&elf_image(ElfImage {
+            is_64: true,
+            big_endian: false,
+            machine: object::elf::EM_X86_64,
+            flags: object::elf::FileFlags(0),
+            entry: 0,
+            sections,
+            symbols: &[],
+            dynamic: &[
+                function("in_both", 0x100C),
+                function("below", 0x1004),
+                function("above", 0x101C),
+            ],
+        }))
+    };
+    let section = |object: &analysis::Object, name| {
+        named(object, name).section.as_ref().unwrap().name.clone()
+    };
+
+    let object = image(&[inner(), lower()]);
+    assert_eq!(section(&object, "in_both"), ".text.inner");
+    assert_eq!(section(&object, "below"), ".text.lower");
+    assert_eq!(section(&object, "above"), ".text.lower");
+
+    let object = image(&[lower(), inner()]);
+    assert_eq!(section(&object, "in_both"), ".text.lower");
 }

@@ -1,5 +1,6 @@
 use super::{
-    covering, Bias, LoadMessage, Object, ObjectData, Section, SectionAddress, Severity, SymbolData,
+    covering, Bias, FirstCovering, LoadMessage, Object, ObjectData, Section, SectionAddress,
+    Severity, SymbolData,
 };
 use object::{Architecture, BinaryFormat, SectionIndex, SymbolIndex};
 use std::{
@@ -115,6 +116,46 @@ fn covering_answers_only_for_the_last_start_at_or_before() {
     // not answered with the outer one that still contains it.
     let nested = [0x10..0x40, 0x20..0x28];
     assert_eq!(covering(&nested, Range::clone, 0x30), None);
+}
+
+/// The first range in the order given wins where two overlap, whichever starts first, and
+/// an address answers exactly what `find` over the list would.
+#[test]
+fn first_covering_answers_what_find_would() {
+    let ranges = [
+        (0x20..0x30, 'a'),
+        (0x10..0x40, 'b'),
+        (0x28..0x50, 'c'),
+        (0x60..0x60, 'd'),
+        (
+            Range {
+                start: 0x70,
+                end: 0x68,
+            },
+            'e',
+        ),
+        (0x80..0x90, 'f'),
+        (0x90..0x98, 'g'),
+    ];
+    let lookup = FirstCovering::new(ranges.iter().cloned());
+    for address in 0..0xA0 {
+        let found = ranges
+            .iter()
+            .find(|(range, _)| range.contains(&address))
+            .map(|&(_, value)| value);
+        assert_eq!(lookup.get(address), found, "at {address:#x}");
+    }
+    assert_eq!(lookup.get(0x2C), Some('a'));
+    assert_eq!(lookup.get(0x18), Some('b'));
+    assert_eq!(lookup.get(0x3C), Some('b'));
+    assert_eq!(lookup.get(0x48), Some('c'));
+    assert_eq!(lookup.get(0x90), Some('g'));
+
+    // Ends at the top of the type are ends like any other.
+    let top = FirstCovering::new([(u64::MAX - 1..u64::MAX, 1), (0..u64::MAX, 2)]);
+    assert_eq!(top.get(u64::MAX - 1), Some(1));
+    assert_eq!(top.get(0), Some(2));
+    assert_eq!(top.get(u64::MAX), None);
 }
 
 /// The one test of what a load message says; every other test matches on the variant.
