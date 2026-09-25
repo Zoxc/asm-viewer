@@ -206,4 +206,31 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         unreadable.to_string(),
         "Archive members left out because they are not object files this reader can read: 2."
     );
+
+    let whole = [
+        (
+            LoadMessage::EmptyArchive,
+            "The archive holds no object files.",
+        ),
+        (
+            LoadMessage::NotAnObject,
+            "This file is not an object file or an archive.",
+        ),
+        (
+            LoadMessage::Malformed {
+                error: "Invalid ELF header".to_owned(),
+            },
+            "This file would not parse: Invalid ELF header.",
+        ),
+        (
+            LoadMessage::CouldNotRead {
+                error: "not a regular file".to_owned(),
+            },
+            "This file could not be read: not a regular file.",
+        ),
+    ];
+    for (message, words) in whole {
+        assert_eq!(message.severity(), Severity::Warning);
+        assert_eq!(message.to_string(), words);
+    }
 }

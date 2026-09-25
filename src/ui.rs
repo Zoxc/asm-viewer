@@ -70,7 +70,7 @@ pub(crate) use crate::source::{self, showable, SourceFile};
 pub(crate) use crate::store::Store;
 pub(crate) use crate::tabs::{Along, Page, Strip, Tab};
 pub(crate) use crate::tree::{
-    format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
+    object_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };
 pub(crate) use crate::verdict::{counted, Verdict};
 pub(crate) use crate::visits::Visits;

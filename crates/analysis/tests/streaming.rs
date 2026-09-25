@@ -88,7 +88,7 @@ fn each_file_is_finished_before_the_next_one_starts() {
     );
 }
 
-/// A caller drawing a pending file has no other way to learn that nothing is coming.
+/// A caller drawing a pending file has no other way to learn that nothing more is coming.
 #[test]
 fn a_file_that_yields_nothing_is_still_finished() {
     assert_eq!(
@@ -96,7 +96,10 @@ fn a_file_that_yields_nothing_is_still_finished() {
             "garbage",
             b"not an object file, nor an archive".to_vec()
         )]),
-        [Event::Finished("garbage".into())]
+        [
+            Event::Parsed("garbage".into()),
+            Event::Finished("garbage".into())
+        ]
     );
 }
 
@@ -108,7 +111,13 @@ fn a_path_that_cannot_be_read_is_still_finished() {
     let missing =
         std::env::temp_dir().join(format!("analysis-was-never-here-{}", std::process::id()));
 
-    assert_eq!(events(vec![missing.clone()]), [Event::Finished(missing)]);
+    assert_eq!(
+        events(vec![missing.clone()]),
+        [
+            Event::Parsed(missing.file_name().unwrap().to_string_lossy().into()),
+            Event::Finished(missing)
+        ]
+    );
 }
 
 /// A caller that breaks on the first object sees nothing after it — not the rest of the
@@ -182,7 +191,10 @@ fn streaming_does_not_hash_a_file_once_per_object() {
 fn a_path_with_no_file_name_still_finishes() {
     assert_eq!(
         events(vec![PathBuf::from("..")]),
-        [Event::Finished(Path::new("..").to_path_buf())]
+        [
+            Event::Parsed("..".into()),
+            Event::Finished(Path::new("..").to_path_buf())
+        ]
     );
 }
 
@@ -210,6 +222,7 @@ fn a_fifo_is_finished_without_waiting_for_a_writer() {
     assert_eq!(
         seen,
         [
+            Event::Parsed("binary.o".into()),
             Event::Finished(fifo),
             Event::Parsed("after.o".into()),
             Event::Finished(after),
@@ -375,4 +388,62 @@ fn a_member_past_the_end_of_the_file_cuts_the_archive_short() {
         objects[0].messages,
         [analysis::LoadMessage::ArchiveCutShort { member: 2 }]
     );
+}
+
+/// What the one object a file that yields nothing is handed over as says, and whether it
+/// stands for an archive.
+fn stand_in(objects: Vec<Arc<analysis::Object>>) -> (Vec<analysis::LoadMessage>, bool) {
+    let [object] = objects.as_slice() else {
+        panic!("one object, the file: {}", objects.len());
+    };
+    assert_eq!(object.format, None);
+    assert!(object.symbols.is_empty() && object.sections.is_empty());
+    (object.messages.clone(), object.is_archive())
+}
+
+/// A whole file that yields no object is shown to say why: it is no object at all, it is
+/// one that would not parse, or it is an archive that would not, or that holds nothing.
+#[test]
+fn a_file_that_yields_nothing_says_why() {
+    use analysis::LoadMessage::{EmptyArchive, Malformed, NotAnObject};
+    let garbage = b"not an object file, nor an archive".to_vec();
+    // An ELF header whose section headers lie past the end of the file.
+    let mut elf = caller_and_target();
+    elf.truncate(64);
+    // An archive whose first member names a long name no `//` table holds, which
+    // `object` reads as it parses the archive's tables.
+    let mut damaged = archive(&[("first.o", &caller_and_target())]);
+    damaged[8..24].copy_from_slice(b"/999            ");
+
+    assert_eq!(stand_in(objects_of(garbage)), (vec![NotAnObject], false));
+    for (bytes, archive) in [(elf, false), (damaged, true)] {
+        let (messages, is_archive) = stand_in(objects_of(bytes));
+        assert!(
+            matches!(messages.as_slice(), [Malformed { .. }]),
+            "{messages:?}"
+        );
+        assert_eq!(is_archive, archive);
+    }
+    assert_eq!(
+        stand_in(objects_of(b"!<arch>\n".to_vec())),
+        (vec![EmptyArchive], true)
+    );
+}
+
+/// A path that could not be read is shown to say why, with the reason the open or the read
+/// gave: a file that is not there, and one that is not a regular file.
+#[test]
+fn a_path_that_cannot_be_read_says_why() {
+    let scratch = Scratch::new("unread");
+    let missing = scratch.0.join("was-never-here.o");
+    for path in [missing, scratch.0.clone()] {
+        let objects = open_files(vec![path.clone()]);
+        assert_eq!(objects[0].path, path);
+        let (messages, archive) = stand_in(objects);
+        assert!(!archive);
+        let [analysis::LoadMessage::CouldNotRead { error }] = messages.as_slice() else {
+            panic!("{messages:?}");
+        };
+        assert!(!error.is_empty());
+    }
 }

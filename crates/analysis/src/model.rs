@@ -22,8 +22,10 @@ pub struct Object {
     pub path: PathBuf,
     pub name: String,
     /// [`None`] for a file that is not an object at all, shown only to say why
-    /// ([`messages`](Self::messages)): a thin archive, whose members are other files, or an
-    /// archive none of whose members could be read. It has no sections and no symbols.
+    /// ([`messages`](Self::messages)): a file that could not be read, one that is no object
+    /// this reader can parse, or an archive with none of its members shown. It has no
+    /// sections and no symbols. Which of these is an archive is
+    /// [`is_archive`](Self::is_archive).
     pub format: Option<BinaryFormat>,
 
     /// The machine the code in here is for, as the file's own header declares it. This is
@@ -62,6 +64,9 @@ pub struct Object {
     /// `symbols` has no estimate and no label, and no call is named after it. See
     /// `PlacedSymbols`.
     pub(crate) placed: PlacedSymbols,
+
+    /// See [`Object::is_archive`].
+    archive: bool,
 }
 
 /// Something that went wrong while an object was read, one variant per problem with the
@@ -89,6 +94,17 @@ pub enum LoadMessage {
     /// `count` of an archive's members are not object files this reader can read: LLVM
     /// bitcode, an archive inside the archive, or bytes of no known kind.
     UnreadableMembers { count: usize },
+    /// An archive that holds no object file at all.
+    EmptyArchive,
+    /// The file is not an object file or an archive: its first bytes are no kind `object`
+    /// knows.
+    NotAnObject,
+    /// The file starts as an object file or an archive of a kind `object` knows, and `error`
+    /// is what `object` said when it would not parse.
+    Malformed { error: String },
+    /// The file could not be read at all, for the reason `error` gives: it is missing, it
+    /// is not a regular file, or it may not be read.
+    CouldNotRead { error: String },
 }
 
 /// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
@@ -113,6 +129,12 @@ impl LoadMessage {
             // Nothing shown is wrong; the members are simply not shown.
             LoadMessage::ThinArchive { .. } => Severity::Warning,
             LoadMessage::UnreadableMembers { .. } => Severity::Warning,
+            // The four below stand for a whole file that shows nothing, and nothing shown
+            // is wrong.
+            LoadMessage::EmptyArchive => Severity::Warning,
+            LoadMessage::NotAnObject => Severity::Warning,
+            LoadMessage::Malformed { .. } => Severity::Warning,
+            LoadMessage::CouldNotRead { .. } => Severity::Warning,
         }
     }
 }
@@ -150,6 +172,14 @@ impl fmt::Display for LoadMessage {
                 "Archive members left out because they are not object files this reader can \
                  read: {count}."
             ),
+            LoadMessage::EmptyArchive => write!(f, "The archive holds no object files."),
+            LoadMessage::NotAnObject => {
+                write!(f, "This file is not an object file or an archive.")
+            }
+            LoadMessage::Malformed { error } => write!(f, "This file would not parse: {error}."),
+            LoadMessage::CouldNotRead { error } => {
+                write!(f, "This file could not be read: {error}.")
+            }
         }
     }
 }
@@ -252,15 +282,17 @@ impl Object {
             messages: Vec::new(),
             debug_info: DebugInfoCache::new(preloaded),
             placed: PlacedSymbols(placed),
+            archive: false,
         }
     }
 
     /// A file with nothing in it to show, standing in the list for what `messages` say of
-    /// it: no format, no sections and no symbols.
+    /// it: no format, no sections and no symbols. `archive` is whether the file is one.
     pub(crate) fn unread(
         path: PathBuf,
         name: String,
         data: ObjectData,
+        archive: bool,
         messages: Vec<LoadMessage>,
     ) -> Object {
         Object {
@@ -277,7 +309,15 @@ impl Object {
             messages,
             debug_info: DebugInfoCache::new(None),
             placed: PlacedSymbols(Vec::new()),
+            archive,
         }
+    }
+
+    /// Whether this stands for a whole archive, none of whose members is shown: an object
+    /// with no [`format`](Self::format) made for an archive. A member of one answers
+    /// `false`, being an object in its own right.
+    pub fn is_archive(&self) -> bool {
+        self.archive
     }
 
     /// The symbols named exactly `name`, in the file's index order; empty where none is.

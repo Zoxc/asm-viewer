@@ -6,30 +6,42 @@ knows freya.
 
 **Parse pipeline** (`open_files_streaming` -> `parse_object`): each selected file is first tried as
 an `ArchiveFile`, with every member parsed as a separate `Object`, and a file that is not one is
-parsed as a plain object. So a non-archive contributes one `Object` and an archive one per member. A
-file that will not parse at all just never appears. **An archive says what it left out**, and each
-member's object is handed over one member late so the last one shown can carry it. Three things are
-left out. The members from the first one `object`'s walk cannot read on: the walk ends at the first
-member header it cannot read (`notes/upstream/object.md`), and a member whose bytes run past the end
-of the file is the file cut short there, so the walk ends at it too
+parsed as a plain object. So a non-archive contributes one `Object` and an archive one per member.
+
+**A file that shows nothing says why.** Every path the walk reaches is handed over as at least one
+object, and one with nothing to show stands in for itself: `Object::unread`, with no format
+(`Object::format` is `None`), no sections and no symbols, carrying the messages that say why. That
+object is the whole mechanism. The Objects list already draws a row, a mark and a tooltip for any
+object with a message, and the binaries a project saves are the paths its objects came from, so the
+file is listed, marked, closed and saved like any other. A file stands in for itself when it could
+not be read (`LoadMessage::CouldNotRead`, with the reason the open or the read gave: missing, not a
+regular file, not allowed), when its first bytes are no kind `object` knows
+(`LoadMessage::NotAnObject`), when they are one but the file would not parse
+(`LoadMessage::Malformed`, with what `object` said, which is also what an archive whose symbol or
+name table will not read gets), and when it is an archive with no member shown. One read of nothing
+has no bytes, so it holds an empty `ObjectData`, whose digest a later restore finds changed. The
+app changes in one place: a row with no format wears the archive's tag if `Object::is_archive`
+says it stands for one and a question mark otherwise, and the bar over its tab says which.
+
+**An archive says what it left out**, and each member's object is handed over one member late so
+the last one shown can carry it, or, with none shown, the archive's own stand-in; an archive that
+has nothing else to say and shows nothing holds no object at all (`LoadMessage::EmptyArchive`).
+Three things are left out. The members from the first one `object`'s walk cannot read on: the walk
+ends at the first member header it cannot read (`notes/upstream/object.md`), and a member whose
+bytes run past the end of the file is the file cut short there, so the walk ends at it too
 (`LoadMessage::ArchiveCutShort`). Members that are not objects this reader can read, such as LLVM
 bitcode from LTO or an archive inside the archive (`LoadMessage::UnreadableMembers`, a count). Two
 kinds of member are expected not to be code and are left out without a word: rustc's metadata in an
 rlib (`lib.rmeta`, `lib.rmeta-link`), which is an object on the targets rustc can wrap it for and
-bare bytes elsewhere, and an import library's short entries, each only a name a DLL exports. So what
-is counted is members that should have held code: across the 478 rlibs and `.a` files a workspace
-build leaves in `target/`, none is. The archive's symbol and name tables never reach the walk:
-`object` takes them at parse. And a **thin archive**'s members (`!<thin>`, from `ar --thin`), which
-are other files, named in it and not held in it: `object` gives each an offset of 0 and the other
-file's size, so a member cut from the archive would be the archive's own first bytes. They are
-skipped and counted (`LoadMessage::ThinArchive`). Reading them from their own files was the
-alternative, left out for now. An archive with something to say and no member shown has no object
-for it to go on, so one is made for it: `Object::unread`, with no format (`Object::format` is
-`None`), no sections and no symbols, carrying the messages. That object is the whole mechanism. The
-Objects list already draws a row, a mark and a tooltip for any object with a message, and the
-binaries a project saves are the paths its objects came from, so the archive is listed, marked,
-closed and saved like any other file. The one change in the app is that a row with no format wears
-the archive's tag.
+bare bytes elsewhere, and an import library's short entries, each only a name a DLL exports. So
+what is counted is members that should have held code: across the 478 rlibs and `.a` files a
+workspace build leaves in `target/`, none is. The archive's symbol and name tables never reach the
+walk: `object` takes them at parse. And a **thin archive**'s members (`!<thin>`, from
+`ar --thin`), which are other files, named in it and not held in it: `object` gives each an offset
+of 0 and the other file's size, so a member cut from the archive would be the archive's own first
+bytes. They are skipped and counted (`LoadMessage::ThinArchive`). Reading them from their own files
+was the alternative, left out for now.
+
 Every path is read through `open_regular` (`src/regular.rs`), since a project file, which a stranger may write,
 lists them: the open does not wait on a fifo, anything the handle it opened says is not a regular
 file (a fifo, `/dev/zero`) is refused, and so is a file that reads more than it stated. A symlink is
@@ -52,7 +64,7 @@ one file is closed goes on parsing that file and drops the rest at the caller. `
 same callback closing over a `Vec`, for the tests and anything with nowhere to put objects one at a
 time. `open_data_streaming` is the same walk over files already in memory, each with the path it is
 to be called by: the reading is the only thing `open_files_streaming` does that it does not, which
-is why it has no `Finished`-for-an-unreadable-path case. It is what lets the ordering tests assert
+is why it has no unreadable-path case (`CouldNotRead`). It is what lets the ordering tests assert
 against archives the `object` writer built, with nothing on a disk. The digest stays **one pass per file**: `ObjectData::whole_file` is built once at the top of
 each path and every member is cut from it. That is the thing streaming must not quietly turn into
 196 hashes of the same 20 MB.
@@ -62,21 +74,21 @@ enum with a variant per problem, carrying what it names (a section and its addre
 `Severity`, an error or a warning, comes from the variant, and so does what the reader is told:
 `Display` says it in a sentence or two, in the crate beside the variants, so a new variant cannot
 be added without its words and every caller, the UI and a test, reads the same ones. Tests match
-the variant and its data; one test in `model/tests.rs` pins the words. A file that will not
-parse at all is still dropped, having nothing to show, but for an archive with something to say
-(above); a message is for an object that is shown but that cannot be trusted in part. The parse
-collects them. A rule the parse follows hands back what went wrong beside its answer rather than
-reporting it itself, as `section_biases` does, so the DWARF loader, which asks the same rule again,
-drops the second copy. The Objects list marks the row
-(`agents/Sidebar.md`). Six cases are reported so far: the layout running out of address space,
+the variant and its data; one test in `model/tests.rs` pins the words. A message is for an object
+that is shown but cannot be trusted in part, or for a file that shows nothing, on the object made to
+stand in for it (above). The parse collects them. A rule the parse follows hands back what
+went wrong beside its answer rather than reporting it itself, as `section_biases` does, so the DWARF
+loader, which asks the same rule again, drops the second copy. The Objects list marks the row
+(`agents/Sidebar.md`). The cases reported so far: the layout running out of address space,
 functions left out because the descriptor naming their code could not be read (below), sections
-named `<section N>` because their own names would not read (below), and the three an archive's
-members are left out for (above), which go on an object made only to carry them when no member
-is shown. What the debug info could not read is not among them, because most of it is found
-after the parse, as the questions reach it, and `messages` is settled by then. Each backend
-counts the parts it went past or read only in part instead, a DWARF unit or a PDB module, each
-once however often it is read (`Skipped`, `line.rs`), and `Object::debug_info_skipped` answers
-the count so far. Nothing shows it to the reader yet.
+named `<section N>` because their own names would not read (below), the three an archive's members
+are left out for (above), and the four a whole file shows nothing for (above). Every message a
+stand-in carries is a warning: `Severity::Error` is for something shown that is wrong, and a
+stand-in shows nothing but its name. What the debug info could not read is not among them,
+because most of it is found after the parse, as the questions reach it, and `messages` is settled
+by then. Each backend counts the parts it went past or read only in part instead, a DWARF unit or
+a PDB module, each once however often it is read (`Skipped`, `line.rs`), and
+`Object::debug_info_skipped` answers the count so far. Nothing shows it to the reader yet.
 
 **Data model**, built once at open time and shared via `Arc`. Only *defined* `SymbolKind::Text`
 symbols are kept. `object` calls an undefined ELF `STT_FUNC` or COFF function text too, but it has

@@ -119,8 +119,8 @@ nothing. **The fold set is keyed by the file's path**, the one identity a file r
 outlives its objects. It was the first object's address, which a closed file frees for the next
 object to take, and an entry nothing prunes could then open another file's row. By path, a file
 reloaded after a build comes back folded as it was left. Each row has a text tag
-(`ELF`/`PE`/`COFF`/`MACH`/`AR`) rather than an icon, because nothing in Lucide's 1640 icons names
-an object format.
+(`ELF`/`PE`/`COFF`/`MACH`/`AR`, and `?` for a file that is no object) rather than an icon,
+because nothing in Lucide's 1640 icons names an object format.
 
 **A tree row is four columns and one of them is elastic.** The triangle and the format tag are fixed
 widths every row keeps whether or not it has one, so the tags and the names line up down the list.

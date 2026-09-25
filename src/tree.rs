@@ -355,5 +355,16 @@ pub fn format_tag(format: BinaryFormat) -> &'static str {
 /// so has no `BinaryFormat`.
 pub const ARCHIVE_TAG: &str = "AR";
 
+/// The tag a row wears for what `object` is: its format's, the archive's for an archive
+/// none of whose members is shown, and a question mark for a file of no known kind, which
+/// is shown only to say why it shows nothing.
+pub fn object_tag(object: &Object) -> &'static str {
+    match object.format {
+        Some(format) => format_tag(format),
+        None if object.is_archive() => ARCHIVE_TAG,
+        None => "?",
+    }
+}
+
 #[cfg(test)]
 mod tests;

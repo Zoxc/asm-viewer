@@ -550,12 +550,15 @@ against: they are what the project file currently *says*, and a write that is no
 binaries writes them back rather than the app's own list. Otherwise a change during the startup
 parse, or after a restore that opened none of them, would forget a file through a change that had
 nothing to do with it.
-The same holds for a binary the load produced nothing for -- deleted, being relinked, never built
-on this machine -- while others did load: the reader did not remove it. `Saves::unheld` is the
-file's binaries the app has not held since the project was opened, and a write about the binaries
-puts them back where they were in the list. One leaves the set only by being held, so closing it
-after that is a removal like any other. The cost is that one gone for good stays in the file, and
-nothing in the app shows it or takes it out.
+The same holds for a binary the load produced nothing for while others did load: the reader did not
+remove it. `Saves::unheld` is the file's binaries the app has not held since the project was opened,
+and a write about the binaries puts them back where they were in the list. One leaves the set only
+by being held, so closing it after that is a removal like any other. A binary that is deleted, being
+relinked or never built on this machine is held all the same: the load hands over an object for
+every path it reaches, one saying why it shows nothing where the file could not be read or is no
+object (`agents/Analysis.md`). So the Objects list shows it, marked, the reader can close it, and a
+build that writes it again replaces it as it does any artifact of the build before
+(`agents/Sidebar.md`). What is left unheld is a binary a load stopped before.
 
 **`Saves::stored` is the session file itself**, beside the empty baseline rather than instead
 of it. The baseline answers "has this changed", which needs the boot state; `put_in` asks

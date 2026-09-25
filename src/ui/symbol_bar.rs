@@ -168,9 +168,11 @@ fn facts(heading: &Heading) -> Vec<Element> {
         Heading::Object(object) => vec![
             fact(
                 "Format",
-                object
-                    .format
-                    .map_or("Archive".to_owned(), |format| format!("{format:?}")),
+                match object.format {
+                    Some(format) => format!("{format:?}"),
+                    None if object.is_archive() => "Archive".to_owned(),
+                    None => "Not an object".to_owned(),
+                },
             )
             .into_element(),
             fact("Symbols", object.symbols.len().to_string()).into_element(),

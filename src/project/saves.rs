@@ -90,10 +90,12 @@ pub(super) struct Saves {
     /// the `unheld` ones, which this never has.
     binaries: Vec<PathBuf>,
     /// The binaries the file named when the project was opened that the app has not held
-    /// since: the ones the load produced nothing for, because they were missing, unreadable
-    /// or not an object at all. Not the reader's to have removed, so a write about the
-    /// binaries puts them back where they were in the list. One leaves this set only by
-    /// being held, after which closing it is a removal like any other.
+    /// since: the ones the load produced nothing for. A path the load reaches always yields
+    /// an object, one saying why it shows nothing where it is missing, unreadable or not an
+    /// object at all, so these are the ones a load stopped before. Not the reader's to have
+    /// removed, so a write about the binaries puts them back where they were in the list.
+    /// One leaves this set only by being held, after which closing it is a removal like any
+    /// other.
     unheld: Vec<PathBuf>,
     /// The session as last written, empty for `binaries`' reason.
     session: Session,

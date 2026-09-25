@@ -15050,6 +15050,84 @@ fn the_symbol_section_is_remembered_per_tab() {
     );
 }
 
+/// A file that yields no object is still an object in the list -- no format, no sections,
+/// no symbols, a message saying why -- and every place that draws an object draws it: its
+/// row wears a question mark, the bar over its tab says it is no object, and its code is an
+/// empty listing.
+#[test]
+fn a_file_that_is_no_object_is_drawn_like_one() {
+    let mut objects = Vec::new();
+    analysis::open_data_streaming(
+        vec![(
+            PathBuf::from("/notes.txt"),
+            Arc::from(&b"plain text, no object"[..]),
+        )],
+        |progress| {
+            if let Progress::Parsed(object) = progress {
+                objects.push(object);
+            }
+            ControlFlow::Continue(())
+        },
+    );
+    let [object] = objects.as_slice() else {
+        panic!("one stand-in: {}", objects.len());
+    };
+    let object = object.clone();
+    assert!(object.format.is_none() && !object.is_archive());
+
+    let (mut test, mut states) = TestingRunner::new(
+        objects_harness,
+        (300., 300.).into(),
+        |runner| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    states.objects.write().push(object.clone());
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"?".to_owned()), "{drawn:?}");
+    drop(test);
+
+    let tab = Document::Object(object.clone());
+    let (mut test, (states, showing)) = TestingRunner::new(
+        tab_pane_harness,
+        (600., 400.).into(),
+        {
+            let tab = tab.clone();
+            move |runner| {
+                let showing = runner
+                    .provide_root_context(|| PaneTab(State::create(tab.clone())))
+                    .0;
+                (runner.provide_root_context(test_roots).states, showing)
+            }
+        },
+        1.,
+    );
+    open_document(states.open, states.visits, tab, Reach::NewTab);
+    settle(&mut test);
+    let triangle = triangle_of(&test);
+    test.move_cursor(triangle);
+    test.press_cursor(triangle);
+    test.release_cursor(triangle);
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"Not an object".to_owned()), "{drawn:?}");
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
+    let mut showing = showing;
+    showing.set(code);
+    settle(&mut test);
+    drop(test);
+
+    let (mut test, _roots) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        move |runner| runner.provide_root_context(|| code_states(reading_of(&object, &[]))),
+        1.,
+    );
+    settle(&mut test);
+    assert!(address_labels(&test).is_empty());
+}
+
 /// Whether [`source_pane_harness`] has the pane mounted at all, which is how a test asks
 /// for the first open of a tab and then for a later one: `app()` mounts both panes afresh
 /// for every document, so an unmount and a remount is what leaving a tab and coming back

@@ -724,12 +724,17 @@ fn code_sections(
 /// or the file name) and `path` the file it came from. Anything that fails to parse yields
 /// [`None`]. `data` is kept in the returned [`Object`]; see [`ObjectData`].
 pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc<Object>> {
-    parse_unshared(data, name, path).map(Arc::new)
+    parse_unshared(data, name, path).ok().map(Arc::new)
 }
 
-/// [`parse_object`] before the [`Arc`], for a caller with a message to add.
-pub(crate) fn parse_unshared(data: ObjectData, name: String, path: PathBuf) -> Option<Object> {
-    let file = object::File::parse(data.bytes()).ok()?;
+/// [`parse_object`] before the [`Arc`], for a caller with a message to add, and with what
+/// `object` said when the file would not parse.
+pub(crate) fn parse_unshared(
+    data: ObjectData,
+    name: String,
+    path: PathBuf,
+) -> Result<Object, object::Error> {
+    let file = object::File::parse(data.bytes())?;
 
     let mut messages = Vec::new();
     let sections = read_sections(&file, &mut messages);
@@ -803,7 +808,7 @@ pub(crate) fn parse_unshared(data: ObjectData, name: String, path: PathBuf) -> O
     );
     object.messages = messages;
     object.endianness = endianness;
-    Some(object)
+    Ok(object)
 }
 
 /// Every section the file states, by index. Each code section's place is decided here, once,
