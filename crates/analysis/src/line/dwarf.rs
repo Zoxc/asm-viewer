@@ -428,8 +428,7 @@ fn stale_range_lists(
 
 /// Read one DWARF section, decompressing it and, for a relocatable object, relocating it. A
 /// section that is missing or unreadable becomes an empty reader, which is what `gimli`
-/// expects for "not present". A relocation that will not resolve is noted in `skipped`
-/// ([`relocate`]).
+/// expects for "not present". A relocation that will not apply sets `lost` ([`relocate`]).
 fn load_section(
     file: &object::File<'_>,
     id: gimli::SectionId,
@@ -548,11 +547,16 @@ fn relocate<'data, 'file>(
             None => Some(0),
         };
 
-        let Ok(offset) = usize::try_from(offset) else {
-            continue;
-        };
-        let size = usize::from(relocation.size()) / 8;
-        let Some(bytes) = data.get_mut(offset..offset.wrapping_add(size)) else {
+        // A field outside the section, or of a width [`write_uint`] cannot write, keeps what
+        // the compiler wrote, so the object's DWARF is lost.
+        let size = usize::from(relocation.size());
+        let field = usize::try_from(offset)
+            .ok()
+            .filter(|_| size % 8 == 0)
+            .and_then(|offset| data.get_mut(offset..offset.checked_add(size / 8)?))
+            .filter(|bytes| (1..=8).contains(&bytes.len()));
+        let Some(bytes) = field else {
+            lost.set(true);
             continue;
         };
         let (Some(target), Some(subtracted)) = (target, subtracted) else {
@@ -574,24 +578,34 @@ fn relocate<'data, 'file>(
     }
 }
 
-/// The 4- or 8-byte unsigned at `bytes`. Any other width is not a DWARF address or offset and
-/// answers 0.
+/// The unsigned at `bytes`, 1 to 8 bytes wide. Any other width answers 0.
 fn read_uint(bytes: &[u8], endian: RunTimeEndian) -> u64 {
-    // The length is matched first: `Endianity`'s reads panic on a short slice.
-    match bytes.len() {
-        4 => u64::from(endian.read_u32(bytes)),
-        8 => endian.read_u64(bytes),
-        _ => 0,
+    if !(1..=8).contains(&bytes.len()) {
+        return 0;
+    }
+    let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
+    if endian.is_big_endian() {
+        bytes.iter().fold(0, fold)
+    } else {
+        bytes.iter().rev().fold(0, fold)
     }
 }
 
-/// The inverse of [`read_uint`]: a 4-byte field takes the low word, and a width it does not
-/// understand is left untouched.
+/// The inverse of [`read_uint`]: a narrower field takes the low bytes of `value`, and any
+/// other width is left untouched.
 fn write_uint(bytes: &mut [u8], endian: RunTimeEndian, value: u64) {
-    match bytes.len() {
-        4 => endian.write_u32(bytes, value as u32),
-        8 => endian.write_u64(bytes, value),
-        _ => {}
+    if !(1..=8).contains(&bytes.len()) {
+        return;
+    }
+    let little = value.to_le_bytes();
+    let low = &little[..bytes.len()];
+    if endian.is_big_endian() {
+        bytes
+            .iter_mut()
+            .zip(low.iter().rev())
+            .for_each(|(b, &v)| *b = v);
+    } else {
+        bytes.copy_from_slice(low);
     }
 }
 

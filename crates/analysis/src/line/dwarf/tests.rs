@@ -32,10 +32,28 @@ fn relocation_fields_read_and_write_in_either_byte_order() {
     assert_eq!(read_uint(&field, Big), 0x0102_0304_0506_0708);
 }
 
+/// A narrower field takes the low bytes of what is written, in either byte order.
+#[test]
+fn narrow_fields_read_and_write_in_either_byte_order() {
+    let mut field = [0u8; 2];
+    write_uint(&mut field, Little, 0xaaaa_0102);
+    assert_eq!(field, [2, 1]);
+    assert_eq!(read_uint(&field, Little), 0x0102);
+
+    write_uint(&mut field, Big, 0xaaaa_0102);
+    assert_eq!(field, [1, 2]);
+    assert_eq!(read_uint(&field, Big), 0x0102);
+
+    let mut field = [0u8; 1];
+    write_uint(&mut field, Big, 0x1ff);
+    assert_eq!(field, [0xff]);
+    assert_eq!(read_uint(&field, Little), 0xff);
+}
+
 /// Any other width reads as 0 and is left as it was, rather than panicking.
 #[test]
 fn other_widths_are_neither_read_nor_written() {
-    for len in [0, 1, 2, 3, 5, 7, 9] {
+    for len in [0, 9, 16] {
         let mut field = vec![0xffu8; len];
         assert_eq!(read_uint(&field, Little), 0);
         assert_eq!(read_uint(&field, Big), 0);
@@ -316,4 +334,58 @@ fn a_relocation_with_no_symbol_writes_its_addend() {
     );
     assert_eq!(read_uint(&data, Little), 0x1234);
     assert!(!lost.get());
+}
+
+/// A 2-byte field is relocated like a wider one: DWARF for a 16-bit target states its
+/// addresses in two bytes. A relocation past the end of the section loses the object's DWARF,
+/// as nothing can be written there.
+#[test]
+fn a_two_byte_field_is_relocated_and_one_outside_the_section_is_lost() {
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let text = obj.section_id(write::StandardSection::Text);
+    obj.append_section_data(text, &[0xC3], 1);
+    let function = obj.add_symbol(write::Symbol {
+        name: b"function".to_vec(),
+        value: 0,
+        size: 1,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+    let debug = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);
+    obj.append_section_data(debug, &[0; 2], 1);
+    for offset in [0, 2] {
+        obj.add_relocation(
+            debug,
+            write::Relocation {
+                offset,
+                symbol: function,
+                addend: 0x1234,
+                flags: RelocationFlags::Elf {
+                    r_type: object::elf::R_X86_64_16,
+                },
+            },
+        )
+        .expect("adding a relocation");
+    }
+    let bytes = obj.write().expect("writing the fixture object");
+
+    let file = object::File::parse(&*bytes).expect("parsing the fixture object");
+    let section = file
+        .section_by_name(".debug_info")
+        .expect("the fixture has a debug section");
+    let mut data = section.data().expect("the debug section reads").to_vec();
+    let lost = Cell::new(false);
+    relocate(
+        &mut data,
+        &file,
+        &section,
+        Little,
+        &section_biases(&file).biases,
+        &lost,
+    );
+    assert_eq!(read_uint(&data, Little), 0x1234);
+    assert!(lost.get());
 }
