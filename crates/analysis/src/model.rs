@@ -108,6 +108,9 @@ pub enum LoadMessage {
     UnreadableMembers { count: usize },
     /// An archive that holds no object file at all.
     EmptyArchive,
+    /// An archive none of whose members is shown, for the reasons the messages after this
+    /// one give: they are thin, not objects this reader can read, or cut short.
+    ArchiveShowsNothing,
     /// The file is not an object file or an archive: its first bytes are no kind `object`
     /// knows.
     NotAnObject,
@@ -166,8 +169,9 @@ impl LoadMessage {
             // Nothing shown is wrong; the members are simply not shown.
             LoadMessage::ThinArchive { .. } => Severity::Warning,
             LoadMessage::UnreadableMembers { .. } => Severity::Warning,
-            // The five below stand for a whole file that shows nothing.
+            // The six below stand for a whole file that shows nothing.
             LoadMessage::EmptyArchive => Severity::Fatal,
+            LoadMessage::ArchiveShowsNothing => Severity::Fatal,
             LoadMessage::NotAnObject => Severity::Fatal,
             LoadMessage::Malformed { .. } => Severity::Fatal,
             LoadMessage::Unsupported { .. } => Severity::Fatal,
@@ -230,6 +234,9 @@ impl fmt::Display for LoadMessage {
                  read: {count}."
             ),
             LoadMessage::EmptyArchive => write!(f, "The archive holds no object files."),
+            LoadMessage::ArchiveShowsNothing => {
+                write!(f, "Nothing in this archive could be shown.")
+            }
             LoadMessage::NotAnObject => {
                 write!(f, "This file is not an object file or an archive.")
             }

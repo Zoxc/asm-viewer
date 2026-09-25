@@ -33,7 +33,8 @@ pub enum Progress {
 /// that stopped early ([`LoadMessage::ArchiveCutShort`]), members that are not objects
 /// ([`LoadMessage::UnreadableMembers`]), or a thin archive's, which are not read
 /// ([`LoadMessage::ThinArchive`]). An archive with no member shown is handed over alone, with
-/// no format, to say why, if only that it holds none ([`LoadMessage::EmptyArchive`]).
+/// no format, to say so ([`LoadMessage::ArchiveShowsNothing`]) and why, or only that it holds
+/// none ([`LoadMessage::EmptyArchive`]).
 ///
 /// A callback rather than a channel or an iterator: a channel would make this crate pick a
 /// backpressure policy belonging to whoever draws the result, and an iterator would mean
@@ -203,11 +204,15 @@ fn open_one_file(
             emit(Progress::Parsed(Arc::new(last)))?;
         }
         // An archive does not parse as an object, so with no member shown there is no row
-        // to say this on but one made for it.
+        // to say this on but one made for it. Showing nothing is fatal, so a fatal message
+        // heads the warnings that say why.
         None => {
-            if said.is_empty() {
-                said.push(LoadMessage::EmptyArchive);
-            }
+            let nothing = if said.is_empty() {
+                LoadMessage::EmptyArchive
+            } else {
+                LoadMessage::ArchiveShowsNothing
+            };
+            said.insert(0, nothing);
             let object = Object::unread(path.to_path_buf(), name, file, true, said);
             emit(Progress::Parsed(Arc::new(object)))?;
         }

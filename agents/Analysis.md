@@ -27,8 +27,10 @@ app changes in one place: a row with no format wears the archive's tag if `Objec
 says it stands for one and a question mark otherwise, and the bar over its tab says which.
 
 **An archive says what it left out**, and each member's object is handed over one member late so
-the last one shown can carry it, or, with none shown, the archive's own stand-in; an archive that
-has nothing else to say and shows nothing holds no object at all (`LoadMessage::EmptyArchive`).
+the last one shown can carry it, or, with none shown, the archive's own stand-in. Showing nothing
+is fatal whatever the reason, so the stand-in's messages start with a fatal one: that nothing in it
+could be shown (`LoadMessage::ArchiveShowsNothing`), ahead of the warnings saying why, or, with
+nothing else to say, that it holds no object at all (`LoadMessage::EmptyArchive`).
 Three things are left out. The members from the first one `object`'s walk cannot read on: the walk
 ends at the first member header it cannot read (`notes/upstream/object.md`), and a member whose
 bytes run past the end of the file is the file cut short there, so the walk ends at it too
@@ -87,7 +89,7 @@ loader, which asks the same rule again, drops the second copy. The Objects list 
 functions left out because the descriptor naming their code could not be read (below), sections
 named `<section N>` because their own names would not read (below), unwind entries and exports that would
 not read (below), the three an archive's members
-are left out for (above), and the five a whole file shows nothing for (above). Those five are
+are left out for (above), and the six a whole file shows nothing for (above). Those six are
 `Severity::Fatal`, the file not loading at all, above `Severity::Error`, which is for something
 shown that is wrong. What the debug info could not read is not among them,
 because most of it is found after the parse, as the questions reach it, and `messages` is settled

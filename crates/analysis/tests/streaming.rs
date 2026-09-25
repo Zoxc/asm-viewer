@@ -303,7 +303,8 @@ fn thin_archive(members: &[(&str, u64)]) -> Vec<u8> {
 
 /// A thin archive's members are in other files. `object` gives each an offset of 0 and the
 /// other file's size, so cutting the member from the archive would parse the archive's own
-/// first bytes. None is parsed, and the archive is shown alone to say why.
+/// first bytes. None is parsed, and the archive is shown alone to say why, and that it
+/// shows nothing.
 #[test]
 fn a_thin_archive_says_its_members_are_elsewhere() {
     // Sizes that fit in the archive, so a member cut from it would be its first bytes.
@@ -316,8 +317,12 @@ fn a_thin_archive_says_its_members_are_elsewhere() {
     assert!(archive.symbols.is_empty() && archive.sections.is_empty());
     assert_eq!(
         archive.messages,
-        [analysis::LoadMessage::ThinArchive { members: 2 }]
+        [
+            analysis::LoadMessage::ArchiveShowsNothing,
+            analysis::LoadMessage::ThinArchive { members: 2 }
+        ]
     );
+    assert_eq!(archive.worst(), Some(analysis::Severity::Fatal));
 }
 
 /// A member no object reader can parse -- bytes of no known kind, or an archive inside the
@@ -346,7 +351,8 @@ fn an_archive_counts_the_members_that_are_not_objects() {
 }
 
 /// With no member shown there is no object to say it on, so the archive is shown alone to
-/// say it: members that are not objects, and members that stopped at the first.
+/// say it: members that are not objects, and members that stopped at the first. It shows
+/// nothing, which is fatal whatever the reason.
 #[test]
 fn an_archive_with_nothing_shown_says_why_on_its_own_row() {
     let unreadable = objects_of(archive(&[("garbage.o", b"not an object file")]));
@@ -368,7 +374,11 @@ fn an_archive_with_nothing_shown_says_why_on_its_own_row() {
         };
         assert_eq!(archive.name, "lib.a");
         assert_eq!(archive.format, None);
-        assert_eq!(archive.messages, [message]);
+        assert_eq!(
+            archive.messages,
+            [analysis::LoadMessage::ArchiveShowsNothing, message]
+        );
+        assert_eq!(archive.worst(), Some(analysis::Severity::Fatal));
     }
 }
 

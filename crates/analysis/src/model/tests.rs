@@ -248,6 +248,10 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
             "The archive holds no object files.",
         ),
         (
+            LoadMessage::ArchiveShowsNothing,
+            "Nothing in this archive could be shown.",
+        ),
+        (
             LoadMessage::NotAnObject,
             "This file is not an object file or an archive.",
         ),
