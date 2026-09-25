@@ -86,10 +86,18 @@ impl Regular {
         }
     }
 
-    /// All of the file, if it holds no more than it stated.
+    /// All of the file, if it holds what it stated when it was opened. One that reads more
+    /// or less than that changed in between (a build still writing it, say), and the error
+    /// says so rather than naming a size.
     pub fn read_stated(self) -> io::Result<Vec<u8>> {
         let len = self.len;
-        self.read(len)
+        let changed = || io::Error::other("it changed while it was being read");
+        match self.read(len) {
+            Ok(bytes) if bytes.len() as u64 == len => Ok(bytes),
+            Ok(_) => Err(changed()),
+            Err(error) if error.kind() == ErrorKind::FileTooLarge => Err(changed()),
+            Err(error) => Err(error),
+        }
     }
 }
 

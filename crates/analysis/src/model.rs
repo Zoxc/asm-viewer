@@ -108,7 +108,7 @@ pub enum LoadMessage {
     /// is what `object` said when it would not parse.
     Malformed { error: String },
     /// The file could not be read at all, for the reason `error` gives: it is missing, it
-    /// is not a regular file, or it may not be read.
+    /// is not a regular file, it may not be read, or it changed while it was read.
     CouldNotRead { error: String },
     /// `count` parts of the debug info (a DWARF unit, a PDB module) would not read in whole,
     /// and were passed over or read only up to the fault. Never in

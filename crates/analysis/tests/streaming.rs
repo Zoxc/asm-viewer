@@ -447,3 +447,24 @@ fn a_path_that_cannot_be_read_says_why() {
         assert!(!error.is_empty());
     }
 }
+
+/// A file that grows or shrinks between the open and the read, as one a build is still
+/// writing does, is said to have changed, not to be over some size.
+#[test]
+fn a_file_that_changes_while_it_is_read_says_so() {
+    let scratch = Scratch::new("changed");
+    let path = scratch.write("binary.o", b"12345678");
+    for len in [16, 4] {
+        std::fs::write(&path, b"12345678").expect("rewriting the fixture");
+        let opened = analysis::open_regular(&path, analysis::Links::Follow).expect("opened");
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_len(len))
+            .expect("resizing the fixture");
+        let error = opened
+            .read_stated()
+            .expect_err("read what it did not state");
+        assert_eq!(error.to_string(), "it changed while it was being read");
+    }
+}

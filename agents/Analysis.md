@@ -15,7 +15,7 @@ object is the whole mechanism. The Objects list already draws a row, a mark and 
 object with a message, and the binaries a project saves are the paths its objects came from, so the
 file is listed, marked, closed and saved like any other. A file stands in for itself when it could
 not be read (`LoadMessage::CouldNotRead`, with the reason the open or the read gave: missing, not a
-regular file, not allowed), when its first bytes are no kind `object` knows
+regular file, not allowed, changed while it was read), when its first bytes are no kind `object` knows
 (`LoadMessage::NotAnObject`), when they are one but the file would not parse
 (`LoadMessage::Malformed`, with what `object` said, which is also what an archive whose symbol or
 name table will not read gets), and when it is an archive with no member shown. One read of nothing
@@ -44,7 +44,8 @@ was the alternative, left out for now.
 
 Every path is read through `open_regular` (`src/regular.rs`), since a project file, which a stranger may write,
 lists them: the open does not wait on a fifo, anything the handle it opened says is not a regular
-file (a fifo, `/dev/zero`) is refused, and so is a file that reads more than it stated. A symlink is
+file (a fifo, `/dev/zero`) is refused, and so is a file that reads more or less than it stated,
+which is said to have changed while it was read: a build still writing it, not a size limit. A symlink is
 followed, since a binary the reader chose may be one. There is no cap beyond the stated length: a
 linked debug binary is hundreds of megabytes. Reading
 and parsing run on a `std::thread` and come back over an `async_channel`, so a large binary does not
