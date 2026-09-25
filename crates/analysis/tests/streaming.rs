@@ -417,6 +417,21 @@ fn stand_in(objects: Vec<Arc<analysis::Object>>) -> (Vec<analysis::LoadMessage>,
     (object.messages.clone(), object.is_archive())
 }
 
+/// rustc's metadata is told by its magic as well as by its name, so metadata under another
+/// name (older rustc's `rust.metadata.bin`, or a rename to come) is left out without a word
+/// too. The name here is short, since `archive` writes no long-name table.
+#[test]
+fn an_archive_passes_over_metadata_under_any_name() {
+    let objects = objects_of(archive(&[
+        ("first.o", &caller_and_target()),
+        ("metadata.bin", b"rust\0\0\0\x08"),
+    ]));
+    let [object] = objects.as_slice() else {
+        panic!("one object, the first member: {}", objects.len());
+    };
+    assert_eq!(object.messages, []);
+}
+
 /// A cgo package's archive may also hold `preferlinkext` and `dynimportfail`, the empty files
 /// the go command writes to tell Go's linker to link externally. Neither is code, so both are
 /// left out without a word.

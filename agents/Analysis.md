@@ -76,8 +76,10 @@ a Go package's code in Go's own object format (`go object `), which is code, so 
 rather than passed over (`LoadMessage::UnsupportedMembers`), and the rest
 (`LoadMessage::UnreadableMembers`); each a count. Four
 kinds of member are expected not to be code and are left out without a word: rustc's metadata in an
-rlib (`lib.rmeta`, `lib.rmeta-link`), which is an object on the targets rustc can wrap it for and
-bare bytes elsewhere, the Go compiler's export data in a Go package's archive (`__.PKGDEF`, told
+rlib, which is an object on the targets rustc can wrap it for and bare bytes elsewhere, told by
+its name (`lib.rmeta`, and `lib.rmeta-link`, the list of the rlib's objects, which has no magic)
+and, bare, by its magic too (`rust\0\0\0`), so older rustc's `rust.metadata.bin` or a rename is
+passed over as well; the Go compiler's export data in a Go package's archive (`__.PKGDEF`, told
 by its name, since it starts `go object ` as the code does), the empty `preferlinkext` and
 `dynimportfail` the go command packs into a cgo package's archive to tell Go's linker to link
 externally (by name, as `cmd/link` finds them), and an import library's short entries, each only

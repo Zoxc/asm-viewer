@@ -284,8 +284,7 @@ fn unknown_to_object(bytes: &[u8]) -> Option<Unsupported> {
     match bytes {
         [b'B', b'C', 0xc0, 0xde, ..] | [0xde, 0xc0, 0x17, 0x0b, ..] => Some(Unsupported::Bitcode),
         [0x00, b'a', b's', b'm', ..] => Some(Unsupported::Wasm),
-        // rustc's `METADATA_HEADER`, less the version byte after it.
-        [b'r', b'u', b's', b't', 0, 0, 0, ..] => Some(Unsupported::RustMetadata),
+        _ if bytes.starts_with(RUST_METADATA_MAGIC) => Some(Unsupported::RustMetadata),
         _ if bytes.starts_with(PDB_MAGIC) => Some(Unsupported::Pdb),
         _ if bytes.starts_with(OLD_PDB_MAGIC) => Some(Unsupported::OldPdb),
         _ if linker_script(bytes) => Some(Unsupported::LinkerScript),
@@ -333,6 +332,9 @@ fn lzma_alone(bytes: &[u8]) -> bool {
     let size = u64::from_le_bytes(*size);
     d.wrapping_add(1) == dictionary && (size == u64::MAX || size < 1 << 38)
 }
+
+/// rustc's `METADATA_HEADER`, less the version byte after it.
+const RUST_METADATA_MAGIC: &[u8] = b"rust\0\0\0";
 
 /// The first 32 bytes of a PDB, the MSF 7.00 superblock's magic.
 const PDB_MAGIC: &[u8] = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\0\0\0";
@@ -540,18 +542,21 @@ pub(crate) fn name_of(path: &Path) -> String {
 }
 
 /// Whether an archive member that did not parse was never meant to hold code, so leaving it
-/// out is nothing to report: rustc's metadata in an rlib, which is an object on the targets
-/// rustc knows how to wrap it for and bare bytes elsewhere, the Go compiler's export data in
-/// a Go package's archive, which starts as a Go object file does, the two empty files the go
-/// command packs into a cgo package's archive to tell Go's linker to link externally, and an
-/// import library's short entries, each only a name the DLL exports. The archive's symbol and name tables are
-/// not among the members `object` hands over at all.
+/// out is nothing to report. That is rustc's metadata in an rlib, which is an object on the
+/// targets rustc knows how to wrap it for and bare bytes elsewhere: `lib.rmeta`, and bare
+/// metadata under any name, by its magic; and `lib.rmeta-link`, the list of the rlib's
+/// objects, which has no magic. It is the Go compiler's export data in a Go package's
+/// archive, which starts as a Go object file does; the two empty files the go command packs
+/// into a cgo package's archive to tell Go's linker to link externally; and an import
+/// library's short entries, each only a name the DLL exports. The archive's symbol and name
+/// tables are not among the members `object` hands over at all.
 fn not_code(name: &[u8], bytes: &[u8]) -> bool {
     name == b"lib.rmeta"
         || name == b"lib.rmeta-link"
         || name == b"__.PKGDEF"
         || name == b"preferlinkext"
         || name == b"dynimportfail"
+        || bytes.starts_with(RUST_METADATA_MAGIC)
         || matches!(FileKind::parse(bytes), Ok(FileKind::CoffImport))
 }
 
