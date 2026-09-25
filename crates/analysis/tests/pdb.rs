@@ -982,6 +982,27 @@ fn a_module_list_that_stops_short_is_counted() {
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
+/// A module whose stream will not open is counted, from the parse on: its procedures are
+/// lost, and before that was without a word. The object's module in the no-export pair names
+/// a stream the PDB does not have, at 34 in its record. The publics still name the three
+/// functions.
+#[test]
+fn a_module_whose_symbols_will_not_open_is_counted() {
+    let dll = committed_fixture(NOEXPORT_DLL);
+    let pdb = committed_fixture("line_fixture_noexport.pdb");
+    let mut msf = Msf::new(&pdb);
+    let record = module_record(&msf, 0);
+    msf.write(DBI, record + 34, &0x7FFFu16.to_le_bytes());
+    let dir = scratch("stream_missing");
+    std::fs::write(dir.join("line_fixture_noexport.pdb"), &msf.bytes).unwrap();
+    let object = parse_at(&dll, dir.join(NOEXPORT_DLL));
+
+    assert_eq!(object.debug_info_skipped(), 1);
+    assert_eq!(names(&object), ["add", "sum_to", "twice"], "the publics");
+    assert_eq!(symbol(&object, "add").debug_extent(&object), None);
+    assert_eq!(object.debug_info_skipped(), 1);
+}
+
 /// The system allocator, refusing any one request past 1 GiB. Nothing a test here reads
 /// comes near that, so a refusal is a count `pdb2` believed ([`CALLEES`]); refused, it is an
 /// abort that fails the run at once, where granted it would have been the machine's memory.

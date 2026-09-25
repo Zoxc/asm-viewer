@@ -195,11 +195,11 @@ impl Pdb {
 
         // Every procedure with a length, in module order and then the order the module's
         // symbols are in. One pass over every module stream; a module whose stream will not
-        // read, or a record that will not parse, is skipped and the walk goes on. A
-        // procedure's name is the compiler's display name (`add`,
+        // read is counted and skipped, a record that will not parse is skipped, and the walk
+        // goes on. A procedure's name is the compiler's display name (`add`,
         // `core::ptr::drop_in_place<T>`), which no demangler claims.
         for (index, module) in self.modules() {
-            let Ok(Some(info)) = pdb.module_info(&module) else {
+            let Some(info) = self.module_info(&mut pdb, index, &module) else {
                 continue;
             };
             declared.extend(self.procedures_in(index, &info).into_iter().map(
@@ -247,11 +247,26 @@ impl Pdb {
         declared
     }
 
+    /// Module `index`'s stream, opened: [`None`] for a module with no stream, which is common
+    /// and says nothing is wrong, and for one whose stream will not open, which is counted
+    /// ([`Skipped`]).
+    fn module_info<'s>(
+        &self,
+        pdb: &mut PDB<'s, BoundedFile>,
+        index: usize,
+        module: &pdb2::Module<'_>,
+    ) -> Option<pdb2::ModuleInfo<'s>> {
+        pdb.module_info(module).unwrap_or_else(|_| {
+            self.skipped.note(index as u64);
+            None
+        })
+    }
+
     /// Every procedure with a length in module `index`, with its address, in the order the
     /// module's symbols are in: what every read of a module stream takes of its symbols. A
-    /// stream that will not read has none, a record of another kind is not parsed
-    /// ([`PROCEDURES`]), and a procedure that will not parse or whose address will not map is
-    /// skipped.
+    /// symbol stream that will not read has none, and is counted ([`Skipped`]); a record of
+    /// another kind is not parsed ([`PROCEDURES`]); and a procedure that will not parse or
+    /// whose address will not map is skipped.
     ///
     /// A record that will not read at all ends the walk, and the module is counted
     /// ([`Skipped`]). It is one whose stated length runs past the stream, which leaves nothing
@@ -267,6 +282,7 @@ impl Pdb {
     ) -> Vec<(SectionAddress, pdb2::ProcedureSymbol<'a>)> {
         let mut procedures = Vec::new();
         let Ok(mut symbols) = info.symbols() else {
+            self.skipped.note(index as u64);
             return procedures;
         };
         loop {
@@ -414,7 +430,7 @@ impl Pdb {
     fn decode(&self, index: usize, module: &pdb2::Module<'_>) -> Option<ModuleLines> {
         let info = {
             let mut pdb = recovered(&self.pdb);
-            pdb.module_info(module).ok()??
+            self.module_info(&mut pdb, index, module)?
         };
 
         // The module whole, in the image's own addresses: nothing is clipped and nothing
