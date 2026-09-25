@@ -1010,6 +1010,47 @@ fn a_section_near_the_top_of_the_address_space_is_a_load_error() {
     );
 }
 
+/// A section the layout has no room for stays where the file put it. Here that is `.text`,
+/// whose 0x200 bytes will not fit above a crafted section near the top of the address space:
+/// moved there, its bytes would run past the end of it and it would drop out of the listing.
+#[test]
+fn a_section_the_layout_has_no_room_for_stays_where_the_file_put_it() {
+    use object::write;
+    use object::{BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope};
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    for (name, length) in [(".text", 0x200), (".text.high", 0x10)] {
+        let section = obj.add_section(Vec::new(), name.as_bytes().to_vec(), SectionKind::Text);
+        obj.append_section_data(section, &vec![0xC3; length], 1);
+        obj.add_symbol(write::Symbol {
+            name: name[1..].replace('.', "_").into_bytes(),
+            value: 0,
+            size: 1,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(section),
+            flags: SymbolFlags::None,
+        });
+    }
+    let mut data = obj.write().expect("writing the fixture object");
+    common::elf_place_section(&mut data, ".text.high", 0xffff_ffff_ffff_ff00);
+    let object = parse(&data);
+
+    assert_eq!(
+        object.messages,
+        [LoadMessage::CodeSectionsOverlap {
+            section: ".text.high".to_owned(),
+            address: 0xffff_ffff_ffff_ff00,
+        }]
+    );
+    let text = named(&object, "text");
+    let section = text.section.as_ref().expect("text has a section");
+    assert_eq!(section.bias(), Bias::NONE);
+    assert_eq!(text.placed_start(), placed_at(0));
+    assert!(CodeListing::new(&object).section_of(section).is_some());
+}
+
 /// A listing says the byte order its object stores values in, which is what a row of bytes
 /// no instruction claims is read as words in: the file's own, and not x86's.
 #[test]

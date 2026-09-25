@@ -66,22 +66,17 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> Placement {
     // usual relocatable object, whose text sections all state 0; a Mach-O `.o` lays its
     // sections out with addresses of their own and does state more.
     let highest = text().max_by_key(|section| section.address());
-    let mut next: u64 = highest.as_ref().map_or(0, |section| section.address());
+    // Where the next section goes: `None` once the last slot's round-up ran past the end of
+    // the address space.
+    let mut next = Some(highest.as_ref().map_or(0, |section| section.address()));
 
     for section in text() {
-        // `next` starts at or above every text address and only grows, so this is the plain
-        // difference. `wrapping_sub` and not `-` so that a proof going wrong is not a panic.
-        placement.biases.insert(
-            section.index(),
-            Bias::new(next.wrapping_sub(section.address())),
-        );
-
-        // Somewhere for the next section to go, past the bytes `section_data` keeps: for a
-        // compressed section the size its header says it decompresses to, not the `size()` it
-        // takes in the file. A section `section_data` drops takes no more room than an empty
-        // one, and a zero-length section still takes an address of its own, so that two of
-        // them are two places. Each slot is then at most `MAX_SECTION_DATA`, so the layout
-        // runs out of address space only for a file stating an address near the top of it.
+        // How long a slot is: the bytes `section_data` keeps, which for a compressed section
+        // is the size its header says it decompresses to, not the `size()` it takes in the
+        // file. A section `section_data` drops takes no more room than an empty one, and a
+        // zero-length section still takes an address of its own, so that two of them are two
+        // places. Each slot is then at most `MAX_SECTION_DATA`, so the layout runs out of
+        // address space only for a file stating an address near the top of it.
         // FIXME: warn the reader where the two sizes disagree -- a compressed loadable section,
         // which the ELF spec forbids.
         let length = section
@@ -89,16 +84,21 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> Placement {
             .ok()
             .and_then(|compressed| kept_size(&compressed))
             .unwrap_or(0);
-        let aligned = next
-            .checked_add(length.max(1))
-            .and_then(|end| end.checked_next_multiple_of(SECTION_ALIGNMENT));
-        let Some(aligned) = aligned else {
-            // No room left. The sections not placed yet stay where the file put them, on
-            // top of each other, and the reader is told so rather than the layout moved.
+        let slot = next.and_then(|start| Some((start, start.checked_add(length.max(1))?)));
+        let Some((start, end)) = slot else {
+            // No room left. This section and the ones after it stay where the file put them,
+            // on top of each other, and the reader is told so rather than the layout moved.
             placement.message = highest.as_ref().map(out_of_room);
             break;
         };
-        next = aligned;
+
+        // `start` is at or above every text address, so this is the plain difference.
+        // `wrapping_sub` and not `-` so that a proof going wrong is not a panic.
+        placement.biases.insert(
+            section.index(),
+            Bias::new(start.wrapping_sub(section.address())),
+        );
+        next = end.checked_next_multiple_of(SECTION_ALIGNMENT);
     }
 
     placement
