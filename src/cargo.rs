@@ -12,7 +12,6 @@
 use std::{
     borrow::Cow,
     ffi::OsString,
-    fs,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -295,7 +294,7 @@ fn as_cargo_names_it(directory: &Path) -> PathBuf {
     #[cfg(windows)]
     let full = std::path::absolute(directory);
     #[cfg(not(windows))]
-    let full = fs::canonicalize(directory);
+    let full = std::fs::canonicalize(directory);
 
     full.unwrap_or_else(|_| directory.to_owned())
 }

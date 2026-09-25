@@ -103,7 +103,67 @@ stopped at, or on the archive, shown alone, when it stops before its first objec
 
 Not reported.
 
+**A PE's addresses are the image base plus an RVA, added with a wrapping add.**
+`PeFile::entry` (`read/pe/file.rs`) answers `AddressOfEntryPoint` plus `ImageBase` by
+`wrapping_add`, and so do a section's address (`read/pe/section.rs`), an export's
+(`read/pe/export.rs`) and a COFF symbol's (`read/coff/symbol.rs`). A PE32+ image base near the
+top of the address space puts each of them at a low address the file never stated. `entry()`
+also answers the image base for an `AddressOfEntryPoint` of 0, which is a PE with no entry
+point, such as a resource-only DLL.
+
+**What it cost**: nothing of our own. No linker writes an image base that close to the top, so
+the wrapped addresses are shown as `object` gives them.
+
+Not reported.
+
+**A COFF object is told by its machine field, and only eight machines are known.**
+`FileKind::parse` (`read/mod.rs`, under `// TODO: more COFF machines`) takes a file as COFF
+only when its first two bytes are x86, x86-64, ARMNT, ARM64, ARM64EC or one of the three
+PowerPC machines. A COFF object for any other, RISC-V (0x5032, 0x5064, 0x5128), LoongArch
+(0x6232, 0x6264), MIPS, Alpha, SuperH, Windows CE's ARM and Thumb, Itanium, ARM64X, CHPE x86
+and the rest of winnt.h's list, fails as "Unknown file magic", the same as bytes of no kind.
+`pe.rs` does not define LoongArch's two.
+
+**What it cost**: such an object was said not to be an object file. `other_coff_machine` in
+`crates/analysis/src/open.rs` parses the file with `CoffFile::parse`, which does not check the
+machine, and names the machine (`Unsupported::CoffMachine`, the names in `coff_machine` in
+`model.rs`) only when that parse succeeds, since two bytes alone are weak.
+
+Not reported.
+
+**An EFI Terse Executable is not known.** A TE image (`VZ`, from the UEFI Platform
+Initialization spec) is a PE image whose DOS, PE and optional headers are replaced by one
+40-byte header, as firmware's early phases run. `object` has no reader for it, and
+`FileKind::parse` fails with "Unknown file magic".
+
+**What it cost**: such a file was said not to be an object file. `terse_executable` in
+`crates/analysis/src/open.rs` names it (`Unsupported::TerseExecutable`) when its header names
+a COFF machine and a section table inside the file.
+
+Not reported.
+
+**A PE's CodeView record is read only in its RSDS form.** `PeFile::pdb_info`
+(`read/pe/file.rs`) answers `None` for a debug directory whose CodeView record is not
+`RSDS`, which names an MSF 7.00 PDB by GUID and age. The NB10 record older linkers wrote,
+naming a PDB in the 2.00 format by a timestamp and age, reads as no PDB at all, though `pdb2`
+reads that format.
+
+**What it cost**: such an image's PDB is never found, and a 2.00 PDB opened on its own
+cannot be pointed at its image. `told_by_magic` in `crates/analysis/src/open.rs` names it
+(`Unsupported::OldPdb`) and reads nothing.
+
+Not reported.
+
 ## Wanted
+
+**COFF objects for the machines `FileKind::parse` does not know**, above. What the crate does
+instead: names the machine and reads nothing.
+
+**EFI Terse Executables**, above. What the crate does instead:
+names them and reads nothing.
+
+**An NB10 CodeView record**, above. What the crate does instead: names a 2.00 PDB opened on
+its own and reads nothing.
 
 **An XCOFF image writer.** `write::Object` writes an XCOFF relocatable object and nothing
 else: no auxiliary header, so no `o_entry`, and it picks every section's address itself,

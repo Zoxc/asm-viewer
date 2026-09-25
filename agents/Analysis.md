@@ -16,12 +16,47 @@ object with a message, and the binaries a project saves are the paths its object
 file is listed, marked, closed and saved like any other. A file stands in for itself when it could
 not be read (`LoadMessage::CouldNotRead`, with the reason the open or the read gave: missing, not a
 regular file, not allowed, changed while it was read), when its first bytes are no kind `object` knows
-(`LoadMessage::NotAnObject`), when they are a kind it knows and this reader does not read
-(`LoadMessage::Unsupported`: a universal Mach-O, a dyld shared cache, a lone Windows import entry,
-each said in words of its own rather than as a parse failure), when they are one but the file
+(`LoadMessage::NotAnObject`), when they are a kind this reader knows and does not read
+(`LoadMessage::Unsupported`: a universal Mach-O, and a Java class file, which `object` takes for
+one, since both start `CAFEBABE`, told apart as LLVM's `identify_magic` does, by whether the next
+four bytes are under 43; a dyld shared cache, a lone Windows import entry,
+kinds told by a magic `object` does not know here: LLVM bitcode, a WebAssembly module
+(`object`'s `wasm` feature is off), rustc's metadata opened on its own (`rust\0\0\0`, an
+`.rmeta`; in an rlib it is left out without a word, below), a PDB (its MSF 7.00 magic; it is
+read beside its image, never as a binary), and one in the old 2.00 format, which is not read
+beside its image either, since `object` follows only the RSDS CodeView record and such an
+image names it by an NB10 one, a GNU ld script, as a
+distribution installs in place of `libc.so` (its comment, or a bare `INPUT (` or `GROUP (`), an
+Apple text-based stub (`.tbd`: YAML starting `--- !tapi` or version 1's `---\narchs:`, as LLVM's
+`identify_magic` tells one, or version 5's JSON by its first key), a Go object file
+(`go object `), and
+a file compressed with gzip, bzip2, xz, zstd, lz4 or lzip, such as a kernel module installed as
+`.ko.xz`, named by what it is compressed with and never decompressed here; the legacy `.lzma`
+format has no magic, so it is told by its whole 13-byte header, which must be one xz-utils'
+`lzma_alone` decoder takes when it guesses the format (properties `5d`, a dictionary of 2^n or
+2^n + 2^(n-1) bytes, a size unknown or under 256 GiB); an
+MS-DOS executable, whose `e_lfanew` points at no PE
+header, and an anonymous object header (`00 00 ff ff`) that is neither an import entry nor bigobj
+COFF: MSVC's `/GL` intermediate code when its class ID is the one LLVM tells that by
+(`ClGlObjMagic`), and otherwise named only as an anonymous object when its version is not
+bigobj's 2; and a COFF object for a machine `object` does not take, such as RISC-V, LoongArch
+or MIPS, named by its machine only when `object`'s own `CoffFile::parse` reads the rest as an
+object (the section and symbol tables inside the file), since two bytes of machine field are
+little to go on (`notes/upstream/object.md`); and an EFI Terse Executable (`VZ`), only when its
+header names a COFF machine and a section table inside the file, for the same reason; each said in words of its own rather than as a parse failure
+or as no object at all), when they are one but the file
 would not parse
-(`LoadMessage::Malformed`, with what `object` said, which is also what an archive whose symbol or
-name table will not read gets), and when it is an archive with no member shown. One read of nothing
+(`LoadMessage::Malformed`, naming the kind the magic promised, with what `object` said as the
+detail, since its words alone are terse; an archive whose symbol or name table will not read gets
+the same, and so does a file whose magic `object` knows but whose kind it will not tell: one
+that ends before the 16 bytes it reads to tell any kind (a COFF object for a machine `object`
+reads, or an XCOFF file, only when it holds its section count and the rest of the header agrees
+as far as it goes, since its magic is two bytes; a universal Mach-O or a dyld shared cache too,
+which would be named as unread were they whole, but a `CAFEBABE` file only with the four bytes
+that tell it from a Java class file, which is named as one when they say so), an ELF whose class byte is neither 1 nor
+2, a bigobj COFF header with the wrong class ID, and a PE file cut off inside its headers or
+with an unknown optional header magic, each named by its magic and said why in this reader's own
+words, since `object` says little more than that it does not know the file), and when it is an archive with no member shown. One read of nothing
 has no bytes, so it holds an empty `ObjectData`, whose digest a later restore finds changed. The
 app changes in one place: a row with no format wears the archive's tag if `Object::is_archive`
 says it stands for one and a question mark otherwise, and the bar over its tab says which.
@@ -34,11 +69,17 @@ nothing else to say, that it holds no object at all (`LoadMessage::EmptyArchive`
 Three things are left out. The members from the first one `object`'s walk cannot read on: the walk
 ends at the first member header it cannot read (`notes/upstream/object.md`), and a member whose
 bytes run past the end of the file is the file cut short there, so the walk ends at it too
-(`LoadMessage::ArchiveCutShort`). Members that are not objects this reader can read, such as LLVM
-bitcode from LTO or an archive inside the archive (`LoadMessage::UnreadableMembers`, a count). Two
+(`LoadMessage::ArchiveCutShort`). Members that are not objects this reader can read: those of a
+kind it knows and does not read, counted and named per kind, since an LTO build's `.a` may hold
+nothing but LLVM bitcode, and among them an archive inside the archive, which is not opened, and
+a Go package's code in Go's own object format (`go object `), which is code, so it is counted
+rather than passed over (`LoadMessage::UnsupportedMembers`), and the rest
+(`LoadMessage::UnreadableMembers`); each a count. Three
 kinds of member are expected not to be code and are left out without a word: rustc's metadata in an
 rlib (`lib.rmeta`, `lib.rmeta-link`), which is an object on the targets rustc can wrap it for and
-bare bytes elsewhere, and an import library's short entries, each only a name a DLL exports. So
+bare bytes elsewhere, the Go compiler's export data in a Go package's archive (`__.PKGDEF`, told
+by its name, since it starts `go object ` as the code does), and an import library's short
+entries, each only a name a DLL exports. So
 what is counted is members that should have held code: across the 478 rlibs and `.a` files a
 workspace build leaves in `target/`, none is. The archive's symbol and name tables never reach the
 walk: `object` takes them at parse. And a **thin archive**'s members (`!<thin>`, from

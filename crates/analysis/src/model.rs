@@ -131,8 +131,12 @@ pub enum LoadMessage {
     /// A thin archive's `members` are other files, named in it and not held in it, which
     /// this reader does not open.
     ThinArchive { members: usize },
-    /// `count` of an archive's members are not object files this reader can read: LLVM
-    /// bitcode, an archive inside the archive, or bytes of no known kind.
+    /// `count` of an archive's members are of a kind this reader knows and does not read,
+    /// as `format` says: most often LLVM bitcode, which link-time optimization writes in
+    /// place of an object.
+    UnsupportedMembers { format: Unsupported, count: usize },
+    /// `count` of an archive's members are not object files this reader can read: an
+    /// archive inside the archive, or bytes of no known kind.
     UnreadableMembers { count: usize },
     /// An archive that holds no object file at all.
     EmptyArchive,
@@ -142,10 +146,14 @@ pub enum LoadMessage {
     /// The file is not an object file or an archive: its first bytes are no kind `object`
     /// knows.
     NotAnObject,
-    /// The file starts as an object file or an archive of a kind `object` knows, and `error`
-    /// is what `object` said when it would not parse.
-    Malformed { error: String },
-    /// The file is of a kind `object` knows but this reader does not read, as `format` says.
+    /// The file starts as an object file or an archive of a kind `object` knows, named by
+    /// `format` where this reader has a name for it, and `error` says why it would not
+    /// parse: what `object` said, or, where that says too little, this reader's own words.
+    Malformed {
+        format: Option<Promised>,
+        error: String,
+    },
+    /// The file is of a kind this reader knows and does not read, as `format` says.
     Unsupported { format: Unsupported },
     /// The file could not be read at all, for the reason `error` gives: it is missing, it
     /// is not a regular file, it may not be read, or it changed while it was read.
@@ -157,8 +165,25 @@ pub enum LoadMessage {
     DebugInfoSkipped { count: usize },
 }
 
-/// A kind of file `object` recognizes that this reader does not read
-/// ([`LoadMessage::Unsupported`]).
+/// The kind of file a file's first bytes say it is, named when it would not parse
+/// ([`LoadMessage::Malformed`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Promised {
+    Elf,
+    /// A linked Windows image.
+    Pe,
+    /// A Windows object file.
+    Coff,
+    MachO,
+    Xcoff,
+    Archive,
+    /// A universal Mach-O, which is not read whole either; named only when it is cut off.
+    FatMachO,
+    /// A dyld shared cache, likewise.
+    DyldCache,
+}
+
+/// A kind of file this reader recognizes and does not read ([`LoadMessage::Unsupported`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unsupported {
     /// A universal Mach-O: one binary per architecture in one file.
@@ -167,6 +192,114 @@ pub enum Unsupported {
     DyldCache,
     /// A Windows import library's short import entry, on its own rather than in an archive.
     CoffImport,
+    /// LLVM bitcode, bare or in its wrapper: what link-time optimization writes in place of
+    /// an object.
+    Bitcode,
+    /// A WebAssembly module. `object` can read one, but its `wasm` feature is off here.
+    Wasm,
+    /// An MS-DOS executable with no PE header after its DOS one.
+    MsDos,
+    /// MSVC's intermediate code, which `cl.exe /GL` writes in place of an object: an
+    /// anonymous object header with its class ID.
+    ClGl,
+    /// Any other anonymous object header (winnt.h's `ANON_OBJECT_HEADER`) that is not a
+    /// bigobj COFF file's.
+    AnonObject,
+    /// A COFF object for a machine `object` does not read, named by its file header's
+    /// machine field: one [`coff_machine`] has a name for.
+    CoffMachine { machine: u16 },
+    /// A GNU ld script, which a distribution installs in place of a shared library's `.so`.
+    LinkerScript,
+    /// rustc's metadata for a crate, bare, as `--emit=metadata` writes it to an `.rmeta`.
+    RustMetadata,
+    /// A PDB: a Windows image's debug info, read beside the image rather than on its own.
+    Pdb,
+    /// An EFI Terse Executable (`VZ`), a PE image with most of its headers stripped, as
+    /// firmware's early phases run.
+    TerseExecutable,
+    /// An archive inside an archive, which is not opened. Only ever an archive member: an
+    /// archive on its own is read.
+    NestedArchive,
+    /// A Java class file, which shares its magic with a universal Mach-O.
+    JavaClass,
+    /// A PDB in the old 2.00 format, which an image names by a CodeView record this viewer
+    /// does not follow.
+    OldPdb,
+    /// A compressed file, such as a kernel module installed as `.ko.xz`, which is not
+    /// decompressed here.
+    Compressed { with: Compression },
+    /// An Apple text-based stub, the `.tbd` an SDK holds in place of a system library.
+    TextStub,
+    /// Go's own object file, as the Go compiler writes it into a package's archive.
+    GoObject,
+}
+
+/// What a compressed file ([`Unsupported::Compressed`]) was compressed with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compression {
+    Gzip,
+    Bzip2,
+    Xz,
+    Zstd,
+    Lz4,
+    /// The legacy `.lzma` format, which xz reads as `lzma_alone`.
+    Lzma,
+    Lzip,
+}
+
+impl fmt::Display for Compression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Compression::Gzip => "gzip",
+            Compression::Bzip2 => "bzip2",
+            Compression::Xz => "xz",
+            Compression::Zstd => "zstd",
+            Compression::Lz4 => "lz4",
+            Compression::Lzma => "lzma",
+            Compression::Lzip => "lzip",
+        })
+    }
+}
+
+/// What a COFF object's machine field names, for each machine `object` does not read a
+/// COFF object for. `object` names every one of them but 0x0160, big-endian MIPS, and
+/// LoongArch's two (`notes/upstream/object.md`).
+pub(crate) fn coff_machine(machine: u16) -> Option<&'static str> {
+    use object::pe::*;
+
+    Some(match Machine(machine) {
+        Machine(0x0160)
+        | IMAGE_FILE_MACHINE_R3000
+        | IMAGE_FILE_MACHINE_R4000
+        | IMAGE_FILE_MACHINE_R10000
+        | IMAGE_FILE_MACHINE_WCEMIPSV2
+        | IMAGE_FILE_MACHINE_MIPS16
+        | IMAGE_FILE_MACHINE_MIPSFPU
+        | IMAGE_FILE_MACHINE_MIPSFPU16 => "MIPS",
+        IMAGE_FILE_MACHINE_ALPHA => "Alpha",
+        IMAGE_FILE_MACHINE_ALPHA64 => "64-bit Alpha",
+        IMAGE_FILE_MACHINE_SH3
+        | IMAGE_FILE_MACHINE_SH3DSP
+        | IMAGE_FILE_MACHINE_SH3E
+        | IMAGE_FILE_MACHINE_SH4
+        | IMAGE_FILE_MACHINE_SH5 => "SuperH",
+        IMAGE_FILE_MACHINE_ARM | IMAGE_FILE_MACHINE_THUMB => "Windows CE's 32-bit ARM",
+        IMAGE_FILE_MACHINE_AM33 => "AM33",
+        IMAGE_FILE_MACHINE_IA64 => "Itanium",
+        IMAGE_FILE_MACHINE_TRICORE => "TriCore",
+        IMAGE_FILE_MACHINE_CEF => "CEF",
+        IMAGE_FILE_MACHINE_EBC => "EFI byte code",
+        IMAGE_FILE_MACHINE_CHPE_X86 => "CHPE x86",
+        IMAGE_FILE_MACHINE_RISCV32 => "32-bit RISC-V",
+        IMAGE_FILE_MACHINE_RISCV64 => "64-bit RISC-V",
+        IMAGE_FILE_MACHINE_RISCV128 => "128-bit RISC-V",
+        Machine(0x6232) => "32-bit LoongArch",
+        Machine(0x6264) => "64-bit LoongArch",
+        IMAGE_FILE_MACHINE_M32R => "M32R",
+        IMAGE_FILE_MACHINE_ARM64X => "ARM64X",
+        IMAGE_FILE_MACHINE_CEE => "CEE",
+        _ => return None,
+    })
 }
 
 /// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
@@ -208,6 +341,7 @@ impl LoadMessage {
             LoadMessage::ArchiveCutShort { .. } => Severity::Warning,
             // Nothing shown is wrong; the members are simply not shown.
             LoadMessage::ThinArchive { .. } => Severity::Warning,
+            LoadMessage::UnsupportedMembers { .. } => Severity::Warning,
             LoadMessage::UnreadableMembers { .. } => Severity::Warning,
             // The six below stand for a whole file that shows nothing.
             LoadMessage::EmptyArchive => Severity::Fatal,
@@ -218,6 +352,18 @@ impl LoadMessage {
             LoadMessage::CouldNotRead { .. } => Severity::Fatal,
             // Some code has no source lines; the lines shown are right.
             LoadMessage::DebugInfoSkipped { .. } => Severity::Warning,
+        }
+    }
+}
+
+/// A COFF machine field as the words say it: its name, and the number it is.
+struct MachineName(u16);
+
+impl fmt::Display for MachineName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match coff_machine(self.0) {
+            Some(name) => write!(f, "{name} (machine {:#06x})", self.0),
+            None => write!(f, "machine {:#06x}", self.0),
         }
     }
 }
@@ -311,6 +457,46 @@ impl fmt::Display for LoadMessage {
                 "The archive is thin: its members are in other files, which are not opened. \
                  Members not shown: {members}."
             ),
+            LoadMessage::UnsupportedMembers { format, count } => {
+                let what = match format {
+                    Unsupported::FatMachO => "universal (fat) Mach-O binaries",
+                    Unsupported::DyldCache => "dyld shared caches",
+                    Unsupported::CoffImport => "Windows import entries",
+                    Unsupported::Bitcode => "LLVM bitcode, as link-time optimization writes it",
+                    Unsupported::Wasm => "WebAssembly modules",
+                    Unsupported::MsDos => "MS-DOS executables with no PE header",
+                    Unsupported::ClGl => "MSVC's intermediate code, as cl.exe writes it under /GL",
+                    Unsupported::AnonObject => "Windows anonymous objects",
+                    Unsupported::LinkerScript => "linker scripts",
+                    Unsupported::RustMetadata => "rustc's metadata",
+                    Unsupported::Pdb => "PDBs",
+                    Unsupported::TerseExecutable => "EFI Terse Executables",
+                    Unsupported::NestedArchive => "archives",
+                    Unsupported::JavaClass => "Java class files",
+                    Unsupported::OldPdb => "PDBs in the old 2.00 format",
+                    Unsupported::TextStub => "text-based stubs",
+                    Unsupported::GoObject => "Go object files",
+                    Unsupported::CoffMachine { machine } => {
+                        return write!(
+                            f,
+                            "Archive members left out because they are COFF objects for {}: \
+                             {count}.",
+                            MachineName(*machine)
+                        );
+                    }
+                    Unsupported::Compressed { with } => {
+                        return write!(
+                            f,
+                            "Archive members left out because they are compressed with {with}: \
+                             {count}."
+                        );
+                    }
+                };
+                write!(
+                    f,
+                    "Archive members left out because they are {what}: {count}."
+                )
+            }
             LoadMessage::UnreadableMembers { count } => write!(
                 f,
                 "Archive members left out because they are not object files this reader can \
@@ -323,7 +509,23 @@ impl fmt::Display for LoadMessage {
             LoadMessage::NotAnObject => {
                 write!(f, "This file is not an object file or an archive.")
             }
-            LoadMessage::Malformed { error } => write!(f, "This file would not parse: {error}."),
+            LoadMessage::Malformed { format, error } => {
+                let kind = match format {
+                    Some(Promised::Elf) => "an ELF file",
+                    Some(Promised::Pe) => "a PE file",
+                    Some(Promised::Coff) => "a COFF object file",
+                    Some(Promised::MachO) => "a Mach-O file",
+                    Some(Promised::Xcoff) => "an XCOFF file",
+                    Some(Promised::Archive) => "an archive",
+                    Some(Promised::FatMachO) => "a universal (fat) Mach-O binary",
+                    Some(Promised::DyldCache) => "a dyld shared cache",
+                    None => return write!(f, "This file would not parse: {error}."),
+                };
+                write!(
+                    f,
+                    "This looks like {kind}, but it would not parse: {error}."
+                )
+            }
             LoadMessage::Unsupported { format } => match format {
                 Unsupported::FatMachO => write!(
                     f,
@@ -338,6 +540,82 @@ impl fmt::Display for LoadMessage {
                     f,
                     "This is a Windows import entry, which only names a function a DLL exports \
                      and holds no code."
+                ),
+                Unsupported::Bitcode => write!(
+                    f,
+                    "This is LLVM bitcode, as link-time optimization writes it, which this \
+                     viewer does not read."
+                ),
+                Unsupported::Wasm => write!(
+                    f,
+                    "This is a WebAssembly module, which this viewer does not read."
+                ),
+                Unsupported::MsDos => write!(
+                    f,
+                    "This is an MS-DOS executable with no PE header, which this viewer does not \
+                     read."
+                ),
+                Unsupported::ClGl => write!(
+                    f,
+                    "This is MSVC's intermediate code, as cl.exe writes it under /GL, which \
+                     this viewer does not read."
+                ),
+                Unsupported::AnonObject => write!(
+                    f,
+                    "This is a Windows anonymous object, which this viewer does not read."
+                ),
+                Unsupported::CoffMachine { machine } => write!(
+                    f,
+                    "This is a COFF object for {}, which this viewer does not read.",
+                    MachineName(*machine)
+                ),
+                Unsupported::LinkerScript => write!(
+                    f,
+                    "This is a linker script, which names the libraries to link rather than \
+                     holding code."
+                ),
+                Unsupported::RustMetadata => write!(
+                    f,
+                    "This is rustc's metadata for a crate, which describes it to the compiler \
+                     and holds no code."
+                ),
+                Unsupported::Pdb => write!(
+                    f,
+                    "This is a PDB, a Windows image's debug info, which this viewer reads \
+                     beside the image it belongs to. Open the image instead."
+                ),
+                Unsupported::TerseExecutable => write!(
+                    f,
+                    "This is an EFI Terse Executable, which this viewer does not read."
+                ),
+                Unsupported::NestedArchive => write!(
+                    f,
+                    "This is an archive inside an archive, which this viewer does not read."
+                ),
+                Unsupported::JavaClass => write!(
+                    f,
+                    "This is a Java class file, which holds JVM bytecode this viewer does not \
+                     read."
+                ),
+                Unsupported::OldPdb => write!(
+                    f,
+                    "This is a PDB in the old 2.00 format, a Windows image's debug info, which \
+                     this viewer does not read."
+                ),
+                Unsupported::Compressed { with } => write!(
+                    f,
+                    "This file is compressed with {with}, and this viewer does not decompress \
+                     it. Decompress it first."
+                ),
+                Unsupported::TextStub => write!(
+                    f,
+                    "This is a text-based stub (.tbd), which names what an Apple library exports \
+                     rather than holding code."
+                ),
+                Unsupported::GoObject => write!(
+                    f,
+                    "This is a Go object file, in the Go compiler's own format, which this viewer \
+                     does not read."
                 ),
             },
             LoadMessage::CouldNotRead { error } => {

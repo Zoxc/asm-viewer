@@ -325,6 +325,7 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         ),
         (
             LoadMessage::Malformed {
+                format: None,
                 error: "Invalid ELF header".to_owned(),
             },
             "This file would not parse: Invalid ELF header.",

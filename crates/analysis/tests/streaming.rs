@@ -325,9 +325,9 @@ fn a_thin_archive_says_its_members_are_elsewhere() {
     assert_eq!(archive.worst(), Some(analysis::Severity::Fatal));
 }
 
-/// A member no object reader can parse -- bytes of no known kind, or an archive inside the
-/// archive -- is counted on the last object shown. rustc's metadata and an import
-/// library's short entry are not code, and leaving them out says nothing.
+/// A member no object reader can parse is counted on the last object shown: an archive
+/// inside the archive as one, apart from bytes of no known kind. rustc's metadata and an
+/// import library's short entry are not code, and leaving them out says nothing.
 #[test]
 fn an_archive_counts_the_members_that_are_not_objects() {
     // `IMPORT_OBJECT_HEADER`'s signature, version and machine, and nothing past them.
@@ -346,7 +346,13 @@ fn an_archive_counts_the_members_that_are_not_objects() {
     assert!(objects[0].messages.is_empty());
     assert_eq!(
         objects[1].messages,
-        [analysis::LoadMessage::UnreadableMembers { count: 2 }]
+        [
+            analysis::LoadMessage::UnsupportedMembers {
+                format: analysis::Unsupported::NestedArchive,
+                count: 1,
+            },
+            analysis::LoadMessage::UnreadableMembers { count: 1 },
+        ]
     );
 }
 

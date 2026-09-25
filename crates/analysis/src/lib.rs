@@ -20,8 +20,8 @@ pub use line::{LineInfo, LineRow, SourceDigests, SourceHash};
 pub use listing::{CodeListing, Gap, GapKind, Listing, Placed, Stretch};
 pub use made_up::MadeUp;
 pub use model::{
-    CodeSection, FileDigest, Import, LoadMessage, Object, ObjectData, Section, Severity, Symbol,
-    SymbolData, Unsupported,
+    CodeSection, Compression, FileDigest, Import, LoadMessage, Object, ObjectData, Promised,
+    Section, Severity, Symbol, SymbolData, Unsupported,
 };
 pub use open::{open_data_streaming, open_files, open_files_streaming, Progress};
 pub use parse::parse_object;
