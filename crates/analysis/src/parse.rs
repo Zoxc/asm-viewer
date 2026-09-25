@@ -11,7 +11,7 @@ use crate::{
     SymbolData,
 };
 use object::read::macho::{MachHeader, MachOFile};
-use object::read::pe::ImageNtHeaders as _;
+use object::read::pe::{ImageNtHeaders, ImageOptionalHeader as _, PeFile};
 use object::{macho, pe};
 use object::{
     Architecture, BigEndian, BinaryFormat, Endian, Endianness, ExportTarget, FileFlags,
@@ -118,9 +118,10 @@ struct Imports {
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
 ///
-/// Exports that would not read, and a Mach-O entry point that could not be found
-/// ([`macho_entry`]), are said on `messages`. An undefined `.dynsym` function whose
-/// name will not read is counted in `imports`, as the symbol table's are.
+/// Exports that would not read, a Mach-O entry point that could not be found
+/// ([`macho_entry`]), and an entry point in no code section are said on `messages`. An
+/// undefined `.dynsym` function whose name will not read is counted in `imports`, as the
+/// symbol table's are.
 ///
 /// The indices start at `next`, *past* the file's own symbol table, which is the only honest
 /// thing they can be. Nothing can reach them by relocation, since a file that declares
@@ -271,10 +272,12 @@ fn declared_code(
 
     // No entry point is 0 in an ELF image and all ones by the file's width in XCOFF, where 0
     // is also `object`'s answer for a file with no auxiliary header. Neither is read as a
-    // descriptor. A PE with none gives its image base, which no code section covers.
+    // descriptor.
     let entry = match file {
         object::File::MachO32(file) => macho_entry(file, messages),
         object::File::MachO64(file) => macho_entry(file, messages),
+        object::File::Pe32(file) => pe_entry(file),
+        object::File::Pe64(file) => pe_entry(file),
         _ => Some(file.entry()),
     };
     let all_ones = if file.is_64() {
@@ -287,6 +290,9 @@ fn declared_code(
         .filter(|&entry| !none(entry))
         .and_then(|entry| addresses.entry(file, entry));
     if let Some(entry) = entry {
+        if code.get(SectionAddress::new(entry)).is_none() {
+            messages.push(LoadMessage::EntryPointOutsideCode { address: entry });
+        }
         take(
             Name::MadeUp(MadeUp::EntryPoint),
             SectionAddress::new(entry),
@@ -316,6 +322,15 @@ fn declared_code(
     }
 
     declared
+}
+
+/// A PE's entry point, or [`None`] where it has none: an `AddressOfEntryPoint` of 0, as in
+/// a resource-only DLL, which `entry()` answers as the image base.
+fn pe_entry<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(
+    file: &PeFile<'data, Pe, R>,
+) -> Option<u64> {
+    let rva = file.nt_headers().optional_header().address_of_entry_point();
+    (rva != 0).then(|| file.entry())
 }
 
 /// A Mach-O's entry point as an address, from the first `LC_MAIN` or `LC_UNIXTHREAD` whose

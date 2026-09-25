@@ -92,7 +92,8 @@ named `<section N>` because their own names would not read (below), code section
 their bytes would not read or decompress, code relocations left out because their address
 would not fit (below), imports left out because their names would not read
 (below), unwind entries and exports that would not read (below), a Mach-O entry point that
-could not be placed or whose load commands would not read (below), the three an archive's members
+could not be placed or whose load commands would not read (below), an entry point in no code
+section (below), the three an archive's members
 are left out for (above), and the six a whole file shows nothing for (above). Those six are
 `Severity::Fatal`, the file not loading at all, above `Severity::Error`, which is for something
 shown that is wrong. What the debug info could not read is not among them,
@@ -211,7 +212,10 @@ the address space, is no entry point, and says so (`LoadMessage::EntryPointWitho
 command stating an entry point that will not read is skipped; a load command whose size will not
 read ends the walk, since the next starts where that size says. When no entry point is found,
 either is one warning, a count and whether the walk was cut short
-(`LoadMessage::UnreadableEntryCommands`). **A function's stated address is read through to
+(`LoadMessage::UnreadableEntryCommands`). A PE with no entry point states an
+`AddressOfEntryPoint` of 0, which `entry()` answers as the image base, so it is read from the
+header and 0 is none. An entry point that is found but in no code section is left out and says
+so (`LoadMessage::EntryPointOutsideCode`). **A function's stated address is read through to
 its code** (`CodeAddresses`), on the formats where `object` hands over a number that is not the
 code's. Where bit 0 says which instruction set the code is in, it is cleared, and `ModeBit` says
 which addresses carry it. On 32-bit ARM ELF (Thumb) and MIPS ELF (MIPS16, microMIPS) it is an

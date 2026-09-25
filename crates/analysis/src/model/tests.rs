@@ -241,6 +241,15 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         assert_eq!(exports.to_string(), words);
     }
 
+    let outside = LoadMessage::EntryPointOutsideCode {
+        address: 0x1_4000_2000,
+    };
+    assert_eq!(outside.severity(), Severity::Warning);
+    assert_eq!(
+        outside.to_string(),
+        "The entry point was left out because its address 0x140002000 is in no code section."
+    );
+
     let unplaced = LoadMessage::EntryPointWithoutAddress { offset: 0x380 };
     assert_eq!(unplaced.severity(), Severity::Warning);
     assert_eq!(

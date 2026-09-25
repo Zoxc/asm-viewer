@@ -121,6 +121,9 @@ pub enum LoadMessage {
     /// (`LC_MAIN`, `LC_UNIXTHREAD`) would not read and were skipped, or, where `cut_short`,
     /// the load commands would not read to their end.
     UnreadableEntryCommands { count: usize, cut_short: bool },
+    /// A linked image's entry point was left out because it is at `address`, which no code
+    /// section holds.
+    EntryPointOutsideCode { address: u64 },
     /// An archive's members stopped at the `member`th (from 1), whose header would not
     /// read, or whose bytes run past the end of the file. Said on the last object shown
     /// before it, or on the archive when none was.
@@ -200,6 +203,7 @@ impl LoadMessage {
             // What is shown is right; the entry point is missing.
             LoadMessage::EntryPointWithoutAddress { .. } => Severity::Warning,
             LoadMessage::UnreadableEntryCommands { .. } => Severity::Warning,
+            LoadMessage::EntryPointOutsideCode { .. } => Severity::Warning,
             // What is shown is right; only some of it is missing.
             LoadMessage::ArchiveCutShort { .. } => Severity::Warning,
             // Nothing shown is wrong; the members are simply not shown.
@@ -292,6 +296,11 @@ impl fmt::Display for LoadMessage {
                     ),
                 }
             }
+            LoadMessage::EntryPointOutsideCode { address } => write!(
+                f,
+                "The entry point was left out because its address {address:#x} is in no code \
+                 section."
+            ),
             LoadMessage::ArchiveCutShort { member } => write!(
                 f,
                 "The archive's member {member} would not read, so it and every member after it \

@@ -125,7 +125,41 @@ fn an_image_declaring_no_entry_point_grows_no_entry_symbol() {
             !names.contains(&"<entry point>"),
             "entry point invented from an AddressOfEntryPoint of 0: {names:?}",
         );
+        // A PE with none is not one outside its code.
+        assert_eq!(object.messages, []);
     }
+}
+
+/// Defect: an entry point outside every code section was dropped without a word.
+#[test]
+fn an_entry_point_in_no_code_section_is_said() {
+    let outside = 0x10_0000;
+    for object in [
+        parse(&elf_shared_object(stripped(Some(outside)))),
+        parse(&pe_dll(TEXT, EXPORTS, Some(outside))),
+    ] {
+        assert!(!common::names(&object).contains(&"<entry point>"));
+        assert_eq!(
+            object.messages,
+            [LoadMessage::EntryPointOutsideCode {
+                address: TEXT_ADDRESS + outside
+            }]
+        );
+    }
+}
+
+/// An `LC_MAIN` a segment holds, but in its headers rather than its code.
+#[test]
+fn a_macho_entry_point_in_no_code_section_is_said() {
+    const TEXT: u64 = 0x1_0000_0000;
+    let object = parse(&macho_executable(TEXT, 0x10, false));
+    assert!(!common::names(&object).contains(&"<entry point>"));
+    assert_eq!(
+        object.messages,
+        [LoadMessage::EntryPointOutsideCode {
+            address: TEXT + 0x10
+        }]
+    );
 }
 
 #[test]
