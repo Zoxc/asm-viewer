@@ -684,7 +684,9 @@ functions are, not what they are called), and what the PDB knows is every functi
 `Pdb::declared` walks every module's symbol stream once for its `S_GPROC32`/`S_LPROC32` records
 (name, `section:offset` through the address map onto the base, length), and then the symbol records
 stream once for its `S_PUB32` records flagged as code or a function (decorated name, `section:offset`
-the same way, no length). It hands both back as one list, procedures first, and that order *is* the
+the same way, no length). A record that will not parse, or whose address will not map (a section
+the PDB has no header for, or past the end of the space), is skipped and counted. One in section 0,
+or one the OMAP maps nowhere, is placed nowhere on purpose, and is not counted. It hands both back as one list, procedures first, and that order *is* the
 precedence the parse gives them; `parse_object` takes the list as the last *named* source in
 `declared_code`, before the nameless unwind entries (Data model, above). A procedure's name is the
 compiler's display name, which no demangler claims, so it goes over as a `Name::Informative` and

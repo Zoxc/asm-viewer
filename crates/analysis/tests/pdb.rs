@@ -1079,6 +1079,78 @@ fn a_symbol_records_stream_that_will_not_read_is_counted() {
     }
 }
 
+/// Where the symbol record whose name is `name` starts in `stream`, walking the records from
+/// `from`, and where its name starts in it. Each record is its length, then that many bytes.
+fn record_named(msf: &Msf, stream: usize, from: usize, name: &str) -> usize {
+    let mut at = from;
+    loop {
+        let len = usize::from(msf.u16_at(stream, at));
+        let bytes: Vec<u8> = (at + 2..at + 2 + len)
+            .map(|i| msf.bytes[msf.offset(stream, i)])
+            .collect();
+        let mut needle = name.as_bytes().to_vec();
+        needle.push(0);
+        if bytes.windows(needle.len()).any(|window| window == needle) {
+            return at;
+        }
+        at += 2 + len;
+    }
+}
+
+/// A procedure or public that will not parse, or whose address will not map, is counted:
+/// its name is lost, before without a word. A procedure's record holds its section at 36 and
+/// its name from 39; a public's, at 12 and from 14. A name that runs to the record's end
+/// with no NUL will not parse, and section 0x7F is none the PDB has a header for. The
+/// procedure is `add` in the no-export pair, whose public still names it, now with no size;
+/// the public is `helper` in the third pair, which nothing else names.
+#[test]
+fn a_procedure_or_public_that_will_not_read_is_counted() {
+    for (case, name_at) in [("section", None), ("name", Some(39))] {
+        let dll = committed_fixture(NOEXPORT_DLL);
+        let pdb = committed_fixture("line_fixture_noexport.pdb");
+        let mut msf = Msf::new(&pdb);
+        let module = module_stream(&msf, 0);
+        let record = record_named(&msf, module, 4, "add");
+        match name_at {
+            None => msf.write(module, record + 36, &0x7Fu16.to_le_bytes()),
+            Some(at) => {
+                let end = record + 2 + usize::from(msf.u16_at(module, record));
+                msf.write(module, record + at, &vec![b'x'; end - record - at]);
+            }
+        }
+        let dir = scratch(&format!("procedure_{case}"));
+        std::fs::write(dir.join("line_fixture_noexport.pdb"), &msf.bytes).unwrap();
+        let object = parse_at(&dll, dir.join(NOEXPORT_DLL));
+
+        assert_eq!(object.debug_info_skipped(), 1, "procedure {case}");
+        assert_eq!(names(&object), ["add", "sum_to", "twice"], "{case}");
+        assert_eq!(symbol(&object, "add").size, None, "{case}: the public's");
+        assert_eq!(symbol(&object, "add").debug_extent(&object), None);
+        assert_eq!(object.debug_info_skipped(), 1, "procedure {case}");
+    }
+
+    for (case, name_at) in [("section", None), ("name", Some(14))] {
+        let dll = committed_fixture(PUBLIC_DLL);
+        let pdb = committed_fixture("line_fixture_public.pdb");
+        let mut msf = Msf::new(&pdb);
+        let records = usize::from(msf.u16_at(DBI, 20));
+        let record = record_named(&msf, records, 0, "?helper@@YAHXZ");
+        match name_at {
+            None => msf.write(records, record + 12, &0x7Fu16.to_le_bytes()),
+            Some(at) => {
+                let end = record + 2 + usize::from(msf.u16_at(records, record));
+                msf.write(records, record + at, &vec![b'x'; end - record - at]);
+            }
+        }
+        let dir = scratch(&format!("public_{case}"));
+        std::fs::write(dir.join("line_fixture_public.pdb"), &msf.bytes).unwrap();
+        let object = parse_at(&dll, dir.join(PUBLIC_DLL));
+
+        assert_eq!(object.debug_info_skipped(), 1, "public {case}");
+        assert_eq!(names(&object), ["add", "sum_to", "twice"], "public {case}");
+    }
+}
+
 /// The system allocator, refusing any one request past 1 GiB. Nothing a test here reads
 /// comes near that, so a refusal is a count `pdb2` believed ([`CALLEES`]); refused, it is an
 /// abort that fails the run at once, where granted it would have been the machine's memory.

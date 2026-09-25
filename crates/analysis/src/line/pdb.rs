@@ -113,6 +113,9 @@ pub(super) struct Pdb {
     walks: std::sync::atomic::AtomicUsize,
 }
 
+/// A `section:offset` the PDB states that will not map to an address ([`Pdb::address`]).
+struct Unmapped;
+
 /// One module's line info, decoded whole on first touch.
 struct ModuleLines {
     /// The module's rows in virtual addresses, already through [`RowCollector::finish`], so
@@ -159,7 +162,7 @@ const PUBLICS: [pdb2::SymbolKind; 2] = [
 impl Pdb {
     /// Open and match the `.pdb` this image names, or [`None`]: for an image with no CodeView
     /// record, a `.pdb` that is nowhere it is looked for, or one that is not the image's.
-    /// [`Unreadable`] for the image's own `.pdb` whose DBI ([`find`]), or address map will
+    /// [`Unreadable`] for the image's own `.pdb` whose DBI ([`find`]) or address map will
     /// not read: without them nothing it states can be found or placed.
     pub(super) fn load(file: &object::File<'_>, path: &Path) -> Option<Result<Pdb, Unreadable>> {
         let codeview = file.pdb_info().ok()??;
@@ -209,8 +212,8 @@ impl Pdb {
 
         // Every procedure with a length, in module order and then the order the module's
         // symbols are in. One pass over every module stream; a module whose stream will not
-        // read is counted and skipped, a record that will not parse is skipped, and the walk
-        // goes on. A procedure's name is the compiler's display name (`add`,
+        // read, or a record that will not parse, is counted and skipped, and the walk goes
+        // on. A procedure's name is the compiler's display name (`add`,
         // `core::ptr::drop_in_place<T>`), which no demangler claims.
         for (index, module) in self.modules() {
             let Some(info) = self.module_info(&mut pdb, index, &module) else {
@@ -227,10 +230,10 @@ impl Pdb {
 
         // Then every public flagged as code or a function, in the order the symbol records
         // stream holds them. The stream is read whole once — it is the one stream the
-        // publics are in — and dropped with the walk; a record that will not parse is
-        // skipped, and a malformed tail stops the walk where it goes wrong and keeps what
-        // was read. A stream that will not open, and a tail that will not read, are counted
-        // ([`GLOBALS`]); a PDB with no such stream has no publics to lose. Which of the two flags a linker sets is its own: `rust-lld` marks a
+        // publics are in — and dropped with the walk; a record that will not parse, or whose
+        // address will not map, is skipped, and a malformed tail stops the walk where it goes
+        // wrong and keeps what was read. Each is counted ([`GLOBALS`]), and so is a stream
+        // that will not open; a PDB with no such stream has no publics to lose. Which of the two flags a linker sets is its own: `rust-lld` marks a
         // function `function` alone, so either is taken, and the caller's code-section
         // lookup is what keeps a public out of the data sections. A public's name is the
         // linker's, decorated (`?add@@YAHHH@Z`, `_ZN4core3ptr…`) or plain for C, so it goes
@@ -258,13 +261,19 @@ impl Pdb {
                 continue;
             }
             let Ok(pdb2::SymbolData::Public(public)) = symbol.parse() else {
+                self.skipped.note(GLOBALS);
                 continue;
             };
             if !(public.code || public.function) {
                 continue;
             }
-            let Some(address) = self.address(public.offset) else {
-                continue;
+            let address = match self.address(public.offset) {
+                Ok(Some(address)) => address,
+                Ok(None) => continue,
+                Err(Unmapped) => {
+                    self.skipped.note(GLOBALS);
+                    continue;
+                }
             };
             declared.push(Declared {
                 name: Name::Symbol(public.name.to_string().into_owned()),
@@ -294,7 +303,7 @@ impl Pdb {
     /// module's symbols are in: what every read of a module stream takes of its symbols. A
     /// symbol stream that will not read has none, and is counted ([`Skipped`]); a record of
     /// another kind is not parsed ([`PROCEDURES`]); and a procedure that will not parse or
-    /// whose address will not map is skipped.
+    /// whose address will not map ([`Pdb::address`]) is skipped and counted.
     ///
     /// A record that will not read at all ends the walk, and the module is counted
     /// ([`Skipped`]). It is one whose stated length runs past the stream, which leaves nothing
@@ -326,23 +335,43 @@ impl Pdb {
                 continue;
             }
             let Ok(pdb2::SymbolData::Procedure(procedure)) = symbol.parse() else {
+                self.skipped.note(index as u64);
                 continue;
             };
             if procedure.len == 0 {
                 continue;
             }
-            if let Some(address) = self.address(procedure.offset) {
-                procedures.push((address, procedure));
+            match self.address(procedure.offset) {
+                Ok(Some(address)) => procedures.push((address, procedure)),
+                Ok(None) => {}
+                Err(Unmapped) => self.skipped.note(index as u64),
             }
         }
         procedures
     }
 
     /// A `section:offset` the PDB states, as an address in the image's own space: through
-    /// the address map to an RVA and onto the image base, or [`None`] where either fails.
-    fn address(&self, offset: PdbInternalSectionOffset) -> Option<SectionAddress> {
-        let rva = offset.to_rva(&self.address_map)?;
-        self.image_base.checked_add(u64::from(rva.0))
+    /// the address map to an RVA and onto the image base.
+    ///
+    /// `Ok(None)` where the PDB places it nowhere on purpose: in section 0, which is none, or
+    /// where an OMAP maps it nowhere, which is code the image left out. [`Unmapped`] where it
+    /// will not map: a section the PDB has no header for, or an address past the end of the
+    /// space.
+    fn address(
+        &self,
+        offset: PdbInternalSectionOffset,
+    ) -> Result<Option<SectionAddress>, Unmapped> {
+        if offset.section == 0 {
+            return Ok(None);
+        }
+        offset.to_internal_rva(&self.address_map).ok_or(Unmapped)?;
+        let Some(rva) = offset.to_rva(&self.address_map) else {
+            return Ok(None);
+        };
+        self.image_base
+            .checked_add(u64::from(rva.0))
+            .map(Some)
+            .ok_or(Unmapped)
     }
 
     /// The modules with a contribution overlapping `range`, each once, in index order.
