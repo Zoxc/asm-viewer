@@ -192,6 +192,13 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         "Code sections left out because their bytes could not be read: 2."
     );
 
+    let imports = LoadMessage::UnreadableImportNames { count: 1 };
+    assert_eq!(imports.severity(), Severity::Warning);
+    assert_eq!(
+        imports.to_string(),
+        "Imports left out because their names could not be read: 1."
+    );
+
     for (count, cut_short, words) in [
         (2, false, "Unwind entries that would not read: 2."),
         (0, true, "The unwind table would not read to its end."),

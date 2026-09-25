@@ -88,7 +88,8 @@ loader, which asks the same rule again, drops the second copy. The Objects list 
 (`agents/Sidebar.md`). The cases reported so far: the layout running out of address space,
 functions left out because the descriptor naming their code could not be read (below), sections
 named `<section N>` because their own names would not read (below), code sections left out because
-their bytes would not read or decompress, unwind entries and exports that would not read (below), the three an archive's members
+their bytes would not read or decompress, imports left out because their names would not read
+(below), unwind entries and exports that would not read (below), the three an archive's members
 are left out for (above), and the six a whole file shows nothing for (above). Those six are
 `Severity::Fatal`, the file not loading at all, above `Severity::Error`, which is for something
 shown that is wrong. What the debug info could not read is not among them,
@@ -107,7 +108,8 @@ no code here: as a symbol it would be a row with nothing to draw, a link a reloc
 and an address (usually 0) that hides a nameless function there. Those go to `Object::imports`, with
 the undefined functions of `.dynsym` the symbol table did not already name. So does a COFF weak
 external with no section, which `object` calls neither undefined nor in a section, but which the
-linker binds elsewhere or to its default all the same. Kept too, for a **linked image only**, is the
+linker binds elsewhere or to its default all the same. An import is nothing but its name, so one whose name will not read, in
+either table, is left out, and one message counts them (`LoadMessage::UnreadableImportNames`). Kept too, for a **linked image only**, is the
 code it declares elsewhere (`declared_code`):
 `dynamic_symbols`, `exports` and `entry`; for a PE whose `.pdb` is found beside it and matches, the
 **procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a nonzero length) and then its

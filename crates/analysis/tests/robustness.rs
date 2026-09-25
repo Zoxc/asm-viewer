@@ -740,6 +740,38 @@ fn a_walk_that_panics_part_way_keeps_what_it_read_and_says_so() {
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
+/// Defect: an import whose name would not read, in `.symtab` or `.dynsym`, was left out
+/// without a word. It still is, since an import is nothing but its name, and the object
+/// says so. The 64-bit MIPS image imports `symtab_import` in one table and `plt_import` in
+/// the other.
+#[test]
+fn an_import_whose_name_will_not_read_is_said() {
+    let image = common::mips_compressed_image(true);
+    for (data, kept) in [
+        (
+            elf_with_unreadable_name(&image, "symtab_import"),
+            "plt_import",
+        ),
+        (
+            elf_with_unreadable_dynamic_name(&image, "plt_import"),
+            "symtab_import",
+        ),
+    ] {
+        let object = parse(&data);
+        let imports: Vec<&str> = object
+            .imports
+            .iter()
+            .map(|import| import.name.as_str())
+            .collect();
+        assert_eq!(imports, [kept]);
+        assert_eq!(
+            object.messages,
+            [LoadMessage::UnreadableImportNames { count: 1 }],
+            "{kept}"
+        );
+    }
+}
+
 /// Defect: a code section whose bytes would not read was left out without a word, and its
 /// functions with it. It is still left out, and the object says so. Here `.text`'s bytes are
 /// stated past the end of the file.

@@ -95,6 +95,9 @@ pub enum LoadMessage {
     /// `count` code sections were left out because their bytes would not read or
     /// decompress. Their functions are not shown.
     UnreadableCodeSections { count: usize },
+    /// `count` functions the file calls and does not define were left out of its imports
+    /// because their names would not read.
+    UnreadableImportNames { count: usize },
     /// `count` entries of a linked image's unwind table (`.eh_frame`, `.pdata`) would not
     /// read and were skipped, and, where `cut_short`, the table would not read to its end.
     /// The functions they state may be missing or of estimated length.
@@ -168,6 +171,8 @@ impl LoadMessage {
             LoadMessage::UnreadableSectionNames { .. } => Severity::Warning,
             // What is shown is right; the code in those sections is missing.
             LoadMessage::UnreadableCodeSections { .. } => Severity::Warning,
+            // What is shown is right; some imports are missing.
+            LoadMessage::UnreadableImportNames { .. } => Severity::Warning,
             // What is shown is right; some functions are missing or of estimated length.
             LoadMessage::UnreadableUnwindEntries { .. } => Severity::Warning,
             // What is shown is right; some names are missing.
@@ -211,6 +216,10 @@ impl fmt::Display for LoadMessage {
             LoadMessage::UnreadableCodeSections { count } => write!(
                 f,
                 "Code sections left out because their bytes could not be read: {count}."
+            ),
+            LoadMessage::UnreadableImportNames { count } => write!(
+                f,
+                "Imports left out because their names could not be read: {count}."
             ),
             LoadMessage::UnreadableUnwindEntries { count, cut_short } => {
                 let rest = "The unwind table would not read to its end.";

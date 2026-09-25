@@ -67,10 +67,20 @@ struct SymbolTable {
     /// entry can still give it a real name, and a name at the same offset of another section
     /// of a relocatable object does not drop it.
     unnamed: Vec<Pending>,
-    /// Each undefined one whose name reads, in table order: an import, with no code here.
-    imports: Vec<Import>,
+    /// Each undefined one, in table order: an import, with no code here.
+    imports: Imports,
     /// The first index past the table, which declared code is numbered from.
     next: usize,
+}
+
+/// The functions a file calls and does not define, as its symbol table and its `.dynsym`
+/// name them.
+#[derive(Default)]
+struct Imports {
+    /// Each one whose name reads.
+    named: Vec<Import>,
+    /// How many were left out because their names will not read.
+    unnamed: usize,
 }
 
 /// The code a file declares outside its symbol table: its **entry point**, its **exports**,
@@ -105,7 +115,8 @@ struct SymbolTable {
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
 ///
-/// Exports that would not read are said on `messages`.
+/// Exports that would not read are said on `messages`. An undefined `.dynsym` function whose
+/// name will not read is counted in `imports`, as the symbol table's are.
 ///
 /// The indices start at `next`, *past* the file's own symbol table, which is the only honest
 /// thing they can be. Nothing can reach them by relocation, since a file that declares
@@ -116,7 +127,7 @@ fn declared_code(
     addresses: &CodeAddresses<'_, '_>,
     code: &FirstCovering<SectionAddress, SectionIndex>,
     known: &mut HashSet<PlacedAddress>,
-    imports: &mut Vec<Import>,
+    imports: &mut Imports,
     next: usize,
     named: Vec<Declared>,
     unwind: &[UnwindEntry],
@@ -147,7 +158,7 @@ fn declared_code(
     };
 
     // An import the symbol table already named is not listed twice.
-    let mut imported: HashSet<String> = imports.iter().map(|i| i.name.clone()).collect();
+    let mut imported: HashSet<String> = imports.named.iter().map(|i| i.name.clone()).collect();
     // The stated addresses of the dynamic functions whose code is somewhere else.
     let mut moved = HashSet::new();
     // The defined ones whose names will not read. Like the symbol table's, each is called by
@@ -162,11 +173,15 @@ fn declared_code(
             continue;
         }
         if symbol.is_undefined() {
-            if let Ok(name) = name {
-                let name = String::from_utf8_lossy(name).into_owned();
-                if imported.insert(name.clone()) {
-                    imports.push(import(name, addresses.import(symbol.address())));
+            match name {
+                Ok(name) => {
+                    let name = String::from_utf8_lossy(name).into_owned();
+                    if imported.insert(name.clone()) {
+                        let address = addresses.import(symbol.address());
+                        imports.named.push(import(name, address));
+                    }
                 }
+                Err(_) => imports.unnamed = imports.unnamed.saturating_add(1),
             }
             continue;
         }
@@ -804,6 +819,11 @@ pub(crate) fn parse_unshared(
         &unwind,
         &mut messages,
     );
+    if imports.unnamed > 0 {
+        messages.push(LoadMessage::UnreadableImportNames {
+            count: imports.unnamed,
+        });
+    }
     messages.extend(addresses.message());
     let ranges = place_unwind(&code, &unwind);
 
@@ -832,7 +852,7 @@ pub(crate) fn parse_unshared(
         format,
         architecture,
         symbols,
-        imports,
+        imports.named,
         sections.into_values().collect(),
         data,
         preloaded,
@@ -933,14 +953,15 @@ fn read_sections(
 /// A symbol whose name will not read is a place in the file all the same. It is set aside
 /// until the rest have claimed their addresses ([`SymbolTable::unnamed`]). An undefined one
 /// is an import and no place in the file: `object` calls an undefined ELF `STT_FUNC` and a
-/// COFF external of function type text too ([`SymbolTable::imports`]). So is a COFF weak
+/// COFF external of function type text too ([`SymbolTable::imports`]). An import is nothing
+/// but its name, so one whose name will not read is only counted. So is a COFF weak
 /// external ([`weak_external`]). A defined one is taken at its code ([`CodeAddresses`]),
 /// and left out where that is a descriptor that cannot be read.
 fn symbol_table(file: &object::File<'_>, addresses: &CodeAddresses<'_, '_>) -> SymbolTable {
     let mut table = SymbolTable {
         named: Vec::new(),
         unnamed: Vec::new(),
-        imports: Vec::new(),
+        imports: Imports::default(),
         next: 0,
     };
     for symbol in file.symbols() {
@@ -949,11 +970,14 @@ fn symbol_table(file: &object::File<'_>, addresses: &CodeAddresses<'_, '_>) -> S
             continue;
         }
         if symbol.is_undefined() || weak_external(file, &symbol) {
-            if let Ok(name) = symbol.name_bytes() {
-                let name = String::from_utf8_lossy(name).into_owned();
-                table
-                    .imports
-                    .push(import(name, addresses.import(symbol.address())));
+            let imports = &mut table.imports;
+            match symbol.name_bytes() {
+                Ok(name) => {
+                    let name = String::from_utf8_lossy(name).into_owned();
+                    let address = addresses.import(symbol.address());
+                    imports.named.push(import(name, address));
+                }
+                Err(_) => imports.unnamed = imports.unnamed.saturating_add(1),
             }
             continue;
         }
