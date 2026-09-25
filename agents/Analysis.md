@@ -610,7 +610,10 @@ header that does not parse, a root DIE whose ranges do not read), and no real to
 known to reach one. The backend is then built over no sections: it answers nothing and counts as
 one part skipped, so the reader is told rather than shown an object with no debug info. What a
 unit's subprograms are read for, its extents, stops at the first DIE that will not read and keeps
-what came before (`subprogram_extents`), and the unit is counted.
+what came before (`subprogram_extents`): a DIE is as long as its abbreviation makes it, so a bad
+one does not say where the next begins. A subprogram whose `DW_AT_low_pc` or `DW_AT_high_pc` will
+not read as an address is passed over, and the walk goes on. Either way the unit is counted, once:
+its extents are read once and kept.
 
 **The PDB backend** (`line/pdb.rs`) reads the other debug format a linked PE comes with: not
 sections in the image but a **second file**, so it is the one backend that touches the filesystem.

@@ -740,6 +740,103 @@ fn a_walk_that_panics_part_way_keeps_what_it_read_and_says_so() {
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
+/// Defect: a subprogram whose `DW_AT_low_pc` or `DW_AT_high_pc` would not read as an address
+/// was passed over without a word. Its extent is still lost, but its unit is counted, once
+/// however often it is asked about. The good subprogram beside them keeps its extent.
+#[test]
+fn a_subprogram_whose_bounds_do_not_read_is_counted() {
+    let object = parse(&elf_with_unreadable_subprogram_bounds());
+    let text = object
+        .sections
+        .iter()
+        .find(|section| section.name == ".text")
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(object.function_extent(text, at(0)), Some(0x10));
+        assert_eq!(object.function_extent(text, at(0x20)), None);
+        assert_eq!(object.function_extent(text, at(0x30)), None);
+    }
+    assert_eq!(object.debug_info_skipped(), 1);
+}
+
+/// An ELF with one unit over its 0x40 bytes of `.text` and three subprograms in it: one at 0
+/// stating 0x10 bytes, one whose `DW_AT_low_pc` is a plain number, and one at 0x30 whose
+/// `DW_AT_high_pc` is a string. Nothing is relocated: a lone `.text` is placed at 0.
+fn elf_with_unreadable_subprogram_bounds() -> Vec<u8> {
+    use gimli::write::{
+        Address, AttributeValue, DwarfUnit, EndianVec, LineProgram, LineString, Sections,
+    };
+    use object::{write, Architecture, BinaryFormat, Endianness};
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let text = obj.section_id(write::StandardSection::Text);
+    obj.append_section_data(text, &[0xC3; 0x40], 1);
+
+    let encoding = gimli::Encoding {
+        format: gimli::Format::Dwarf32,
+        version: 4,
+        address_size: 8,
+    };
+    let mut dwarf = DwarfUnit::new(encoding);
+    let mut program = LineProgram::new(
+        encoding,
+        gimli::LineEncoding::default(),
+        LineString::String(b"/src".to_vec()),
+        None,
+        LineString::String(b"a.c".to_vec()),
+        None,
+    );
+    program.begin_sequence(Some(Address::Constant(0)));
+    program.row().line = 1;
+    program.generate_row();
+    program.end_sequence(0x40);
+    dwarf.unit.line_program = program;
+
+    let root = dwarf.unit.root();
+    let subprograms = [
+        (
+            AttributeValue::Address(Address::Constant(0)),
+            AttributeValue::Udata(0x10),
+        ),
+        (AttributeValue::Udata(0x20), AttributeValue::Udata(0x10)),
+        (
+            AttributeValue::Address(Address::Constant(0x30)),
+            AttributeValue::String(b"x".to_vec()),
+        ),
+    ];
+    for (low, high) in subprograms {
+        let die = dwarf.unit.add(root, gimli::DW_TAG_subprogram);
+        let entry = dwarf.unit.get_mut(die);
+        entry.set(gimli::DW_AT_low_pc, low);
+        entry.set(gimli::DW_AT_high_pc, high);
+    }
+    let entry = dwarf.unit.get_mut(root);
+    entry.set(gimli::DW_AT_name, AttributeValue::String(b"a.c".to_vec()));
+    entry.set(
+        gimli::DW_AT_low_pc,
+        AttributeValue::Address(Address::Constant(0)),
+    );
+    entry.set(gimli::DW_AT_high_pc, AttributeValue::Udata(0x40));
+
+    let mut sections = Sections::new(EndianVec::new(gimli::LittleEndian));
+    dwarf.write(&mut sections).expect("writing the DWARF");
+    sections
+        .for_each(|id, writer| {
+            if writer.slice().is_empty() {
+                return Ok::<_, ()>(());
+            }
+            let section = obj.add_section(
+                Vec::new(),
+                id.name().as_bytes().to_vec(),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(section, writer.slice(), 1);
+            Ok(())
+        })
+        .expect("laying out the DWARF sections");
+    obj.write().expect("writing the fixture object")
+}
+
 /// An ELF with `units` for its DWARF, a `.text` of 0x400 bytes, and `symbols` in it as
 /// `(name, address, size)`.
 fn elf_with_hand_written_dwarf(units: &[HandUnit], symbols: &[(&str, u64, u64)]) -> Vec<u8> {

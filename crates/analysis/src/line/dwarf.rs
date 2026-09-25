@@ -38,8 +38,8 @@ pub(super) struct Dwarf {
     /// subprogram's `DW_AT_low_pc`.
     extents: Mutex<HashMap<u64, HashMap<PlacedAddress, u64>>>,
 
-    /// The units left out of the context, or whose subprograms were read only up to a DIE
-    /// that would not read, by their `.debug_info` offset.
+    /// The units whose subprograms were read only in part ([`subprogram_extents`]), by their
+    /// `.debug_info` offset, and the whole DWARF where the context would not build ([`WHOLE`]).
     skipped: Skipped,
 }
 
@@ -228,21 +228,24 @@ fn location_ranges<'context>(
 /// *length* when its form is a constant; both spellings are in the wild. Abstract origins are
 /// not followed: only the DIE carrying `low_pc` knows where the bytes are.
 ///
-/// Whether the walk read the whole unit: a DIE that will not read ends it, keeping what was
-/// read before. Nothing past it can be found. A DIE is as long as its abbreviation's
-/// attributes make it, so one whose abbreviation or forms will not read does not say where
-/// the next begins. An ancestor's `DW_AT_sibling` would, but only gcc writes it.
+/// Whether every subprogram in the unit read. One whose `DW_AT_low_pc` or `DW_AT_high_pc`
+/// will not read as an address, or is of a form no address is, is skipped and the walk goes
+/// on. A DIE that will not read ends the walk, keeping what was read before: nothing past it
+/// can be found. A DIE is as long as its abbreviation's attributes make it, so one whose
+/// abbreviation or forms will not read does not say where the next begins. An ancestor's
+/// `DW_AT_sibling` would, but only gcc writes it.
 fn subprogram_extents(
     sections: &gimli::Dwarf<Reader>,
     unit: &gimli::Unit<Reader>,
 ) -> (HashMap<PlacedAddress, u64>, bool) {
     let mut extents = HashMap::new();
+    let mut whole = true;
 
     let mut entries = unit.entries();
     loop {
         let entry = match entries.next_dfs() {
             Ok(Some(entry)) => entry,
-            Ok(None) => return (extents, true),
+            Ok(None) => return (extents, whole),
             Err(_) => return (extents, false),
         };
         if entry.tag() != gimli::DW_TAG_subprogram {
@@ -254,7 +257,10 @@ fn subprogram_extents(
         let low = match entry.attr_value(gimli::DW_AT_low_pc) {
             Some(value) => match sections.attr_address(unit, value) {
                 Ok(Some(low)) => PlacedAddress::new(low),
-                _ => continue,
+                _ => {
+                    whole = false;
+                    continue;
+                }
             },
             None => continue,
         };
@@ -266,7 +272,10 @@ fn subprogram_extents(
                     Some(size) => size,
                     None => continue,
                 },
-                _ => continue,
+                _ => {
+                    whole = false;
+                    continue;
+                }
             },
             None => continue,
         };
