@@ -27,19 +27,24 @@ use super::files::{
 };
 
 /// The first object out of each file the loaded objects came from, in the order the files
-/// were opened, each with how many objects came out of that file. Grouped by the run a
-/// file's objects make, as the Objects list is (`crate::tree`): the loader keeps one
-/// file's objects in one run (`crate::ui::loading`). [`binaries`], [`binary_counts`] and
-/// [`digests`] each read their answer off it.
+/// were opened, each with how many objects came out of that file: none for a file whose
+/// [placeholder](Object::placeholder) is still there. Grouped by the run a file's objects
+/// make, as the Objects list is (`crate::tree`): the loader keeps one file's objects in one
+/// run (`crate::ui::loading`). [`binaries`], [`binary_counts`] and [`digests`] each read
+/// their answer off it.
 fn by_file(objects: &[Arc<Object>]) -> Vec<(&Arc<Object>, usize)> {
     objects
         .chunk_by(|a, b| a.path == b.path)
-        .map(|run| (&run[0], run.len()))
+        .map(|run| match run[0].is_placeholder() {
+            true => (&run[0], 0),
+            false => (&run[0], run.len()),
+        })
         .collect()
 }
 
 /// Every binary the loaded objects came out of, deduplicated, in the order they were
-/// opened — which is [`super::Project::binaries`], derived rather than tracked.
+/// opened — which is [`super::Project::binaries`], derived rather than tracked. A file
+/// still being read is one of them from the moment it was asked for.
 pub fn binaries(objects: &[Arc<Object>]) -> Vec<PathBuf> {
     by_file(objects)
         .into_iter()
@@ -57,7 +62,8 @@ pub fn binary_counts(objects: &[Arc<Object>]) -> Vec<(PathBuf, usize)> {
 }
 
 /// The digest of every binary those objects came out of, keyed by the same path
-/// [`binaries`] keys them by: what [`Session::digests`] is written from.
+/// [`binaries`] keys them by: what [`Session::digests`] is written from. None for a
+/// placeholder, which has read no bytes.
 ///
 /// Read off the object rather than computed here: the hash was taken once, on the parse
 /// worker thread, and every object out of one file answers the same thing — so an
@@ -65,6 +71,7 @@ pub fn binary_counts(objects: &[Arc<Object>]) -> Vec<(PathBuf, usize)> {
 fn digests(objects: &[Arc<Object>]) -> BTreeMap<PathBuf, String> {
     by_file(objects)
         .into_iter()
+        .filter(|(object, _)| !object.is_placeholder())
         .map(|(object, _)| (object.path.clone(), object.data.digest().to_string()))
         .collect()
 }
@@ -229,7 +236,8 @@ impl<'a> Loaded<'a> {
     fn of(session: &Session, objects: &'a [Arc<Object>]) -> Loaded<'a> {
         let mut index = HashMap::with_capacity(objects.len());
         let mut first: HashMap<&Path, &Arc<Object>> = HashMap::new();
-        for object in objects {
+        // A placeholder names nothing a place can be in.
+        for object in objects.iter().filter(|object| !object.is_placeholder()) {
             // First in the list wins both, which is where a scan of it stopped.
             index
                 .entry((object.path.as_path(), object.name.as_str()))
@@ -271,7 +279,9 @@ impl<'a> Loaded<'a> {
             Lookup::Index(index) => index.get(&(path, name)).map(|object| (*object).clone()),
             Lookup::Scan(objects) => objects
                 .iter()
-                .find(|object| object.path == path && object.name == name)
+                .find(|object| {
+                    object.path == path && object.name == name && !object.is_placeholder()
+                })
                 .cloned(),
         }
     }

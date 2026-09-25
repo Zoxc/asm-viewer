@@ -407,14 +407,14 @@ fn finished(
         close_binary(states, path);
     }
 
-    // One load for all of them, rather than one spawn and one load each. Registered with
-    // the close rather than in the task: the save observer, woken by the close, runs
-    // first, and seeing the files gone with nothing loading it writes a project without
-    // them. Read back into their places in the list and not at its end, since the project
-    // file keeps the binaries in that order.
-    let id = begin_load(states.loading, &reopening);
+    // One load for all of them, rather than one spawn and one load each. Begun with the
+    // close rather than in the task: the save observer, woken by the close, runs first,
+    // and seeing the files gone it writes a project without them. Put back into their
+    // places in the list and not at its end, since the project file keeps the binaries in
+    // that order.
+    let (id, reopening) = begin_load(states.objects, states.loading, reopening, &open);
     spawn(async move {
-        read_binaries(states.objects, states.loading, id, reopening, open).await;
+        read_binaries(states.objects, states.loading, id, reopening).await;
     });
 }
 

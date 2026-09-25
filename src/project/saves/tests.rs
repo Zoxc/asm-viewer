@@ -11,7 +11,7 @@ use crate::store::PROJECTS_DIR;
 /// write that fails goes through this.
 fn landed(saves: &mut Saves, recorded: Option<Recorded>) -> Option<(Project, Option<Session>)> {
     let recorded = recorded?;
-    saves.wrote_project(&recorded.project, recorded.binaries_changed);
+    saves.wrote_project(&recorded.project);
     if let Some(session) = recorded.session.clone() {
         saves.wrote_session(session);
     }
@@ -28,7 +28,7 @@ fn flushed(saves: &mut Saves) -> Option<Session> {
 /// The same for the project file that is owed.
 fn owed(saves: &mut Saves) -> Option<Project> {
     let owed = saves.take_owed_project()?;
-    saves.wrote_project(&owed.project, owed.binaries_changed);
+    saves.wrote_project(&owed.project);
     Some(owed.project)
 }
 
@@ -54,8 +54,8 @@ fn written(
     recorded(saves, paths(binaries), session_with(selection))
 }
 
-/// `record` from inside a load: the app holds `binaries` so far and the rest are still
-/// being read.
+/// `record` from inside a load: the app holds `binaries`, some of them still being read,
+/// and has not restored the session's tabs.
 fn mid_load(
     saves: &mut Saves,
     binaries: &[&str],
@@ -222,12 +222,11 @@ fn a_record_keeps_the_directory_the_project_was_given() {
     assert_eq!(project.binaries, paths(&["/tmp/vmlinux", "/tmp/lib.a"]));
 }
 
-/// A reopen seeds what the user *said* and not the contents: the directory is restored
-/// synchronously, while the binaries arrive from a worker thread — so a baseline holding
-/// them would read the still-empty boot state as a change and write an empty project over a
-/// good one.
+/// A reopen seeds the project file whole, binaries and all: the app holds each of them
+/// from the moment the restore asks for it, as a placeholder. So nothing is written when
+/// the load begins or ends, and the session the restore resolves waits for a flush.
 #[test]
-fn reopening_seeds_the_details_but_not_the_baseline() {
+fn reopening_seeds_the_project_file_whole() {
     let mut saves = Saves::default();
     let loaded = Project {
         id: ProjectId::parse("00000000deadbeef"),
@@ -235,33 +234,6 @@ fn reopening_seeds_the_details_but_not_the_baseline() {
             directory: Some(PathBuf::from("/src/kernel")),
             ..Details::default()
         },
-        binaries: paths(&["/tmp/vmlinux"]),
-        bookmarks: Vec::new(),
-    };
-    saves.opened(
-        &Store::at("/state"),
-        kept_at("kernel-1"),
-        &loaded,
-        &Session::default(),
-    );
-
-    // The boot state equals the baseline, so nothing is written.
-    assert_eq!(recorded(&mut saves, Vec::new(), Session::default()), None);
-    // And the restore that follows is an ordinary change, written at once.
-    let (project, _) =
-        recorded(&mut saves, paths(&["/tmp/vmlinux"]), Session::default()).expect("a write");
-    assert_eq!(project, loaded);
-}
-
-/// The objects arrive one at a time, so a list still being read is not the app's list.
-/// Writing it would put a project naming only what has landed on disk, and with it the
-/// empty session the app holds until the restore has resolved its tabs.
-#[test]
-fn a_binary_landing_mid_load_is_not_written() {
-    let mut saves = Saves::default();
-    let loaded = Project {
-        id: ProjectId::parse("00000000deadbeef"),
-        details: Details::default(),
         binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
         bookmarks: Vec::new(),
     };
@@ -272,16 +244,7 @@ fn a_binary_landing_mid_load_is_not_written() {
         &Session::default(),
     );
 
-    // The first of the two lands, and the app's session is still the empty one. Nothing
-    // is written, and nothing is left pending for a flush to write either.
-    assert_eq!(
-        mid_load(&mut saves, &["/tmp/vmlinux"], Session::default()),
-        None
-    );
-    assert_eq!(flushed(&mut saves), None);
-
-    // The second lands while the load is still in flight, so the baseline stays behind
-    // it: the record after the load has to see a change even where nothing more arrived.
+    // The save observer's first run, with the load begun and nothing parsed.
     assert_eq!(
         mid_load(
             &mut saves,
@@ -290,35 +253,33 @@ fn a_binary_landing_mid_load_is_not_written() {
         ),
         None
     );
+    assert_eq!(flushed(&mut saves), None);
 
-    // The load ends, the restore resolves the session against everything it opened, and
-    // that record is the one that writes: both files, and the whole list.
-    let (project, session) = recorded(
-        &mut saves,
-        loaded.binaries.clone(),
-        session_with(Some("a.o")),
-    )
-    .expect("a write");
-    assert_eq!(project, loaded);
+    // The load ends and the restore puts the tabs back: the session alone has changed.
+    let whole = session_with(Some("a.o"));
     assert_eq!(
-        session,
+        recorded(&mut saves, loaded.binaries.clone(), whole.clone()),
+        None
+    );
+    assert_eq!(
+        flushed(&mut saves),
         Some(Session {
             id: loaded.id,
-            ..session_with(Some("a.o"))
+            ..whole
         })
     );
 }
 
-/// A binary the file names that the load produced nothing for -- deleted, being relinked,
-/// never built on this machine -- is not one the reader removed. The next write about the
-/// binaries keeps it where it was in the list, and it goes only once the app has held it.
+/// A binary opened while a load is in flight is in the project file at once, so closing
+/// the app before its parse lands does not lose it. The session stays out of it: it has no
+/// tabs until the load is over.
 #[test]
-fn a_binary_that_did_not_load_stays_in_the_file() {
+fn a_binary_opened_mid_load_is_written_at_once_and_alone() {
     let mut saves = Saves::default();
     let loaded = Project {
-        id: None,
+        id: ProjectId::parse("00000000deadbeef"),
         details: Details::default(),
-        binaries: paths(&["/tmp/tool", "/tmp/app", "/tmp/lib.a"]),
+        binaries: paths(&["/tmp/vmlinux"]),
         bookmarks: Vec::new(),
     };
     saves.opened(
@@ -328,36 +289,45 @@ fn a_binary_that_did_not_load_stays_in_the_file() {
         &Session::default(),
     );
 
-    // The load ends with `tool` missing. What is written names all three.
-    let (project, _) = written(&mut saves, &["/tmp/app", "/tmp/lib.a"], None).expect("a write");
-    assert_eq!(project.binaries, loaded.binaries);
-
-    // Opening another adds it and still keeps `tool`; closing one the app held drops it.
-    let (project, _) =
-        written(&mut saves, &["/tmp/app", "/tmp/lib.a", "/tmp/x.o"], None).expect("a write");
-    assert_eq!(
-        project.binaries,
-        paths(&["/tmp/tool", "/tmp/app", "/tmp/lib.a", "/tmp/x.o"])
-    );
-    let (project, _) = written(&mut saves, &["/tmp/lib.a", "/tmp/x.o"], None).expect("a write");
-    assert_eq!(
-        project.binaries,
-        paths(&["/tmp/tool", "/tmp/lib.a", "/tmp/x.o"])
-    );
-    // And the same state again is no change.
-    assert_eq!(written(&mut saves, &["/tmp/lib.a", "/tmp/x.o"], None), None);
-
-    // Once `tool` has been held, closing it is the reader's and it goes.
-    written(&mut saves, &["/tmp/lib.a", "/tmp/x.o", "/tmp/tool"], None);
-    let (project, _) = written(&mut saves, &["/tmp/lib.a", "/tmp/x.o"], None).expect("a write");
-    assert_eq!(project.binaries, paths(&["/tmp/lib.a", "/tmp/x.o"]));
+    let (project, session) = mid_load(
+        &mut saves,
+        &["/tmp/vmlinux", "/tmp/lib.a"],
+        Session::default(),
+    )
+    .expect("a write");
+    assert_eq!(project.binaries, paths(&["/tmp/vmlinux", "/tmp/lib.a"]));
+    assert_eq!(session, None, "the tabless session went with it");
+    assert_eq!(flushed(&mut saves), None, "and was left pending");
 }
 
-/// The session is held back mid-load for the binaries' reason and one more: a session is
-/// only ever marked pending, and whatever is pending is what the next flush writes. The
-/// app holds no tabs until the restore has resolved them, so a close, a switch or the
-/// timer landing inside the load would put that tabless session on disk over the good
-/// file.
+/// A binary closed before its load landed is the reader's to have removed: the file lets
+/// go of it like any other.
+#[test]
+fn a_binary_closed_while_it_loads_goes() {
+    let mut saves = Saves::default();
+    let loaded = Project {
+        id: None,
+        details: Details::default(),
+        binaries: paths(&["/tmp/tool", "/tmp/app"]),
+        bookmarks: Vec::new(),
+    };
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("kernel-1"),
+        &loaded,
+        &Session::default(),
+    );
+
+    let (project, _) = mid_load(&mut saves, &["/tmp/app"], Session::default()).expect("a write");
+    assert_eq!(project.binaries, paths(&["/tmp/app"]));
+    // And the load ending is no second change.
+    assert_eq!(written(&mut saves, &["/tmp/app"], None), None);
+}
+
+/// The session is held back mid-load: a session is only ever marked pending, and whatever
+/// is pending is what the next flush writes. The app holds no tabs until the restore has
+/// resolved them, so a close, a switch or the timer landing inside the load would put that
+/// tabless session on disk over the good file.
 #[test]
 fn a_session_recorded_mid_load_is_not_left_pending() {
     let mut saves = Saves::default();
@@ -393,59 +363,17 @@ fn a_session_recorded_mid_load_is_not_left_pending() {
         active: Some(saved_object("a.o")),
         ..half
     };
-    let (project, session) =
-        recorded(&mut saves, loaded.binaries.clone(), whole.clone()).expect("a write");
-    assert_eq!(project, loaded);
     assert_eq!(
-        session,
+        recorded(&mut saves, loaded.binaries.clone(), whole.clone()),
+        None
+    );
+    assert_eq!(
+        flushed(&mut saves),
         Some(Session {
             id: loaded.id,
             ..whole
         })
     );
-}
-
-/// A write that does go out mid-load -- a directory typed in, a bookmark -- must not take
-/// the half-read list for the baseline either, or the record after the load would see no
-/// change and the file would never learn the rest of it.
-#[test]
-fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
-    let mut saves = Saves::default();
-    written(&mut saves, &["/tmp/lib.a"], None);
-
-    // A second binary is opened, and the reader points the project somewhere while it is
-    // still being read.
-    let named = Details {
-        directory: Some(PathBuf::from("/src/kernel")),
-        ..saves.written.details.clone()
-    };
-    let decided = saves.record(
-        &named,
-        &paths(&["/tmp/lib.a", "/tmp/some.dll"]),
-        true,
-        &[],
-        Session::default(),
-    );
-    assert!(decided.is_none(), "owed to the flush");
-    let project = owed(&mut saves).expect("a write");
-    assert_eq!(
-        project.details.directory,
-        Some(PathBuf::from("/src/kernel"))
-    );
-    assert_eq!(
-        project.binaries,
-        paths(&["/tmp/lib.a"]),
-        "the listed binaries, not the half-read list"
-    );
-
-    // The load ends, and this is the record that has to put the second binary on disk.
-    let (project, _) = recorded(
-        &mut saves,
-        paths(&["/tmp/lib.a", "/tmp/some.dll"]),
-        Session::default(),
-    )
-    .expect("a write");
-    assert_eq!(project.binaries, paths(&["/tmp/lib.a", "/tmp/some.dll"]));
 }
 
 /// A change to what the user said is owed to the next flush rather than written at once,
@@ -576,9 +504,8 @@ fn clearing_a_detail_is_a_change_too() {
     assert_eq!(project.details.directory, None);
 }
 
-/// A detail changed while the binaries are still being parsed writes back the list the file
-/// already holds: the app holds none in that window, and writing its own empty list would
-/// forget them through a change that had nothing to do with them.
+/// A detail changed while the binaries are still being parsed is owed with the list the
+/// app holds, which is the file's: every binary being read is held by its placeholder.
 #[test]
 fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
     let mut saves = Saves::default();
@@ -597,34 +524,15 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
 
     let named = Details {
         directory: Some(PathBuf::from("/src/kernel")),
-        language_server: None,
-        language_files: None,
-        cargo: None,
+        ..Details::default()
     };
-    saves.record(&named, &[], true, &[], Session::default());
+    saves.record(&named, &loaded.binaries, true, &[], Session::default());
     let project = owed(&mut saves).expect("a write");
     assert_eq!(
         project.details.directory,
         Some(PathBuf::from("/src/kernel"))
     );
     assert_eq!(project.binaries, loaded.binaries);
-
-    // Once the parse lands the write *is* about the binaries, which is the one kind that
-    // may replace the list: closing one the parse opened drops it.
-    let decided = saves.record(
-        &saves.written.details.clone(),
-        &loaded.binaries,
-        false,
-        &[],
-        Session::default(),
-    );
-    landed(&mut saves, decided).expect("a write");
-    let written =
-        recorded(&mut saves, paths(&["/tmp/vmlinux"]), Session::default()).expect("a write");
-    assert_eq!(written.0.binaries, paths(&["/tmp/vmlinux"]));
-    // Closing the last one is still a real change and still empties the file.
-    let written = recorded(&mut saves, Vec::new(), Session::default()).expect("a write");
-    assert_eq!(written.0.binaries, Vec::<PathBuf>::new());
 }
 
 /// A write that did not land leaves the change for the next record to see: a baseline is
@@ -794,11 +702,11 @@ fn a_change_to_any_one_detail_is_owed_and_the_same_one_again_is_not() {
     }
 }
 
-/// Entering another project empties every baseline, the app being about to be emptied: a
-/// baseline still describing the old binaries would write that emptying into the new
-/// project.
+/// Entering another project moves every baseline to it, the app being about to be emptied
+/// and filled with it: a baseline still describing the old binaries would write that
+/// emptying into the new project.
 #[test]
-fn entering_a_project_empties_every_baseline() {
+fn entering_a_project_moves_every_baseline_to_it() {
     let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
 
@@ -860,9 +768,8 @@ fn unsaved_projects_do_not_collide() {
     );
 }
 
-/// A bookmarks change is written at once and to `project.toml` alone, like a rename: it
-/// lets go of no binary, so it cannot leave the two files disagreeing, and it writes back
-/// the binaries the file already lists rather than the app's own.
+/// A bookmarks change is written at once and to `project.toml` alone: it lets go of no
+/// binary, so it cannot leave the two files disagreeing.
 #[test]
 fn a_bookmarks_change_writes_the_project_file_alone() {
     let mut saves = Saves::default();
@@ -883,8 +790,8 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
     // Seeded: the same bookmarks are no change, while the parse has yet to land.
     let unchanged = saves.record(
         &saves.written.details.clone(),
-        &[],
-        false,
+        &reopened.binaries,
+        true,
         &reopened.bookmarks.clone(),
         Session::default(),
     );
@@ -897,7 +804,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
     });
     let decided = saves.record(
         &saves.written.details.clone(),
-        &[],
+        &reopened.binaries,
         false,
         &added.clone(),
         Session::default(),
@@ -905,15 +812,12 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
     let (project, session) = landed(&mut saves, decided).expect("a write");
     assert!(session.is_none(), "the session went with it");
     assert_eq!(project.bookmarks, added);
-    assert_eq!(
-        project.binaries, reopened.binaries,
-        "the listed binaries, not the app's"
-    );
+    assert_eq!(project.binaries, reopened.binaries);
 
     // Removing them all is a change too, written as an absent key.
     let decided = saves.record(
         &saves.written.details.clone(),
-        &[],
+        &reopened.binaries,
         false,
         &[],
         Session::default(),

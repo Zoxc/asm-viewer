@@ -5,9 +5,10 @@
 //! runs rather than a map keyed by path, so the rows keep the order the files were opened
 //! in. One file opened twice therefore folds into one row over both copies. The run is the
 //! writer's to keep: an object is put after the last one of its own file, so two loads
-//! arriving at once cannot split a file in two ([`slot`]). A file that contributed exactly one object
-//! is its own row and grows no parent. [`Loads`] is the other half: the files being read
-//! right now, which have a row before they have an object.
+//! arriving at once cannot split a file in two ([`place`]). A file that contributed exactly
+//! one object is its own row and grows no parent. A file asked for is in the list at once,
+//! as a [placeholder](Object::placeholder) its first object replaces. [`Loads`] is the
+//! other half: the files being read right now.
 
 use std::{
     collections::HashSet,
@@ -76,8 +77,8 @@ impl Loads {
         self.entries.iter().any(|(entry, _)| *entry == id)
     }
 
-    /// Whether nothing is being read at all, which is what the save policy asks: a list
-    /// of binaries still filling in is not the list the app holds.
+    /// Whether nothing is being read at all, which is what the save policy asks: the
+    /// session has no tabs until a restore's load is over.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -104,39 +105,42 @@ impl Loads {
     pub fn left(&self, id: LoadId) -> bool {
         id.0 < self.left
     }
-
-    /// The paths still being read, in the order they were asked for and without repeats:
-    /// one file is one row however many loads are producing it.
-    pub fn paths(&self) -> Vec<&Path> {
-        let mut paths: Vec<&Path> = Vec::new();
-        for (_, path) in &self.entries {
-            if !paths.contains(&path.as_path()) {
-                paths.push(path);
-            }
-        }
-        paths
-    }
 }
 
-/// Whether the app holds `path` already: an object read from it is in the list, or a load
-/// of it is still on its way. The two halves are one question -- a file is in the app from
-/// the moment it is asked for, not from the moment its first object lands -- and opening a
-/// path a second time would put a second copy of each of its objects in the list.
+/// Whether the app holds `path` already: an object read from it is in the list, or the
+/// placeholder of a load still on its way. Opening a path a second time would put a second
+/// copy of each of its objects in the list.
 ///
 /// What a Files row's menu turns on (Close file or Open file) and what an artefact row's
 /// press asks before it starts a load.
-pub fn holds(objects: &[Arc<Object>], loads: &Loads, path: &Path) -> bool {
-    objects_have(objects, path) || loads.is_loading(path)
+pub fn holds(objects: &[Arc<Object>], path: &Path) -> bool {
+    objects.iter().any(|object| object.path == path)
+}
+
+/// Put `object` into `objects`: in place of its file's placeholder where there is one, and
+/// at [`slot`] otherwise.
+pub fn place(objects: &mut Vec<Arc<Object>>, object: Arc<Object>, order: &[PathBuf]) {
+    let placeholder = objects
+        .iter()
+        .position(|held| held.path == object.path && held.is_placeholder());
+    match placeholder {
+        Some(at) => objects[at] = object,
+        None => {
+            let at = slot(objects, &object.path, order);
+            objects.insert(at, object);
+        }
+    }
 }
 
 /// Where an object read from `path` goes in `objects`.
 ///
 /// After the last object of its own file, so a file stays one run however loads
-/// interleave. A file's first object goes before the first object of a file `order` lists
-/// after it, or of one it does not list at all, since that was opened later; with no such
-/// object, or a `path` that `order` does not list, it goes at the end. `order` is the
-/// binaries as they were listed when a load closed them to read them again, so a rebuilt
-/// file goes back to its own place in the list; any other load hands in an empty one.
+/// interleave. A file's first object -- its placeholder -- goes before the first object of
+/// a file `order` lists after it, or of one it does not list at all, since that was opened
+/// later; with no such object, or a `path` that `order` does not list, it goes at the end.
+/// `order` is the binaries as they were listed when a load closed them to read them again,
+/// so a rebuilt file goes back to its own place in the list; any other load hands in an
+/// empty one.
 pub fn slot(objects: &[Arc<Object>], path: &Path, order: &[PathBuf]) -> usize {
     if let Some(last) = objects.iter().rposition(|held| held.path == path) {
         return last + 1;
@@ -149,11 +153,6 @@ pub fn slot(objects: &[Arc<Object>], path: &Path, order: &[PathBuf]) -> usize {
         .iter()
         .position(|held| rank(&held.path).is_none_or(|other| other > own))
         .unwrap_or(objects.len())
-}
-
-/// Whether any object in the list came out of `path`.
-fn objects_have(objects: &[Arc<Object>], path: &Path) -> bool {
-    objects.iter().any(|object| object.path == path)
 }
 
 /// Whether a file row's members are on screen, and whether the reader decided that.
@@ -190,13 +189,17 @@ pub enum TreeRow {
         /// ([`Object::worst`]), so a folded file still shows that one of them is wrong.
         worst: Option<Severity>,
     },
-    /// A file being read that has contributed nothing yet: a row so the reader can see it
-    /// was opened, with nothing under it to fold and no format until it has been parsed.
+    /// A file whose [placeholder](Object::placeholder) no object has replaced yet: a row so
+    /// the reader can see it was opened, with nothing under it to fold and no format until
+    /// it has been parsed.
     Pending {
         /// The file's name, without its directory.
         name: String,
         /// The whole path, which is what the row's tooltip says.
         path: PathBuf,
+        /// Whether it is still being read. Not where its load ended without an answer:
+        /// its worker would not start, or died.
+        loading: bool,
     },
     /// One object: an archive member indented under its file, or a file that contributed
     /// exactly one object and so is a row of its own.
@@ -208,8 +211,8 @@ pub type ObjectTree = Shared<TreeRow>;
 
 impl ObjectTree {
     /// Group `objects` by the file they came from, drop what the filter does not match,
-    /// and flatten what is left into rows: the files that have produced objects, in the
-    /// order their objects are in, and then the files still working on their first.
+    /// and flatten what is left into rows, one file's run of objects at a time, in the
+    /// order they are in.
     ///
     /// Matching is on the name each row shows, so the directory is not read.
     pub fn new(
@@ -218,13 +221,11 @@ impl ObjectTree {
         matcher: &Matcher,
         expanded: &HashSet<PathBuf>,
     ) -> Self {
-        let mut rows = opened(objects, loads, matcher, expanded);
-        rows.extend(pending(objects, loads, matcher));
-        rows.into()
+        opened(objects, loads, matcher, expanded).into()
     }
 }
 
-/// The rows for the files that have produced objects, one file's run of them at a time.
+/// The rows of every file in `objects`.
 fn opened(
     objects: &[Arc<Object>],
     loads: &Loads,
@@ -240,8 +241,9 @@ fn opened(
 }
 
 /// The rows one file's `group` of objects makes: none, if the filter kept none of them;
-/// the object alone, if that is all the file will ever contribute; a file row otherwise,
-/// with what the filter kept under it unless the row is folded.
+/// a pending row for a placeholder; the object alone, if that is all the file will ever
+/// contribute; a file row otherwise, with what the filter kept under it unless the row is
+/// folded.
 ///
 /// A file row is never hidden while a row under it is visible, so a file is shown when its
 /// own name matches *or* any member's does, and the two differ:
@@ -265,6 +267,19 @@ fn file(
 ) -> Vec<TreeRow> {
     let first = &group[0];
     let loading = loads.is_loading(&first.path);
+
+    // A placeholder has no members, so only the file's own name is matched.
+    if first.is_placeholder() {
+        let name = source::name_of(&first.path);
+        if !matcher.matches(&name) {
+            return Vec::new();
+        }
+        return vec![TreeRow::Pending {
+            name,
+            path: first.path.clone(),
+            loading,
+        }];
+    }
 
     if let ([object], false) = (group, loading) {
         if !matcher.matches(&object.name) {
@@ -311,28 +326,6 @@ fn file(
     }
 
     rows
-}
-
-/// The rows for the files being read that have produced nothing yet
-/// ([`TreeRow::Pending`]), in the order they were asked for.
-///
-/// They cannot come out of [`opened`], which is a walk over objects, and they go after it
-/// rather than among it: there is no object to place them next to, and a file's row moves
-/// into that walk once its first one lands. Only the file's own name is matched, there
-/// being no members yet.
-fn pending(objects: &[Arc<Object>], loads: &Loads, matcher: &Matcher) -> Vec<TreeRow> {
-    loads
-        .paths()
-        .into_iter()
-        .filter(|path| !objects_have(objects, path))
-        .filter_map(|path| {
-            let name = source::name_of(path);
-            matcher.matches(&name).then(|| TreeRow::Pending {
-                name,
-                path: path.to_path_buf(),
-            })
-        })
-        .collect()
 }
 
 /// The short tag a row wears to say what kind of file it is. Text and not an icon: nothing

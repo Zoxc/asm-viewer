@@ -1058,13 +1058,15 @@ the reader's own scroll and written over the place they asked for.
 **Opening a binary is the one path in, and it streams.** `open_binaries` (`src/ui/loading.rs`) is
 `close_binary`'s opposite number and the only thing that ever adds to `Objects`. The toolbar's
 Open, a session restore and a build's reopening all go through it or its two halves (`begin_load`,
-`read_binaries`), so they cannot differ about what opening a file means. It leaves out a path the
-app already holds, loaded or loading (`tree::holds`): a second load of one file puts a second copy
-of each of its objects in the list, and the Add dialog, unlike the Files menu, asked nothing first.
-The two halves are not guarded, a restore and a reopen reading paths nothing holds. A scratchpad's program is
-not one of them: it is the pad's own and never in `Objects` (`agents/Scratchpad.md`). It is a `stream` (`agents/Worker.md`), but the answers come back one at a time: `Loads::begin` registers the paths **before a byte is read**, so the
-sidebar has a row for the whole of the wait rather than from whenever the first answer lands, and
-`take_load` writes each batch of objects in as it arrives. The channel is **unbounded and drained in
+`read_binaries`), so they cannot differ about what opening a file means. `begin_load` leaves out a
+path the app already holds, loaded or loading (`tree::holds`): a second load of one file puts a
+second copy of each of its objects in the list, and the Add dialog, unlike the Files menu, asked
+nothing first. A scratchpad's program is not one of them: it is the pad's own and never in
+`Objects` (`agents/Scratchpad.md`). It is a `stream` (`agents/Worker.md`), but the answers come
+back one at a time: `begin_load` puts a placeholder for each path into `Objects` and registers the
+load **before a byte is read**, so the sidebar has a row and the project file has the path for the
+whole of the wait rather than from whenever the first answer lands, and `take_load` writes each
+batch of objects in as it arrives, the first of a file in its placeholder's place. The channel is **unbounded and drained in
 batches**: unbounded because backpressure is exactly wrong here (the worker is the thing that should
 run flat out) and batched because a write per member is a re-render per member, which for an archive
 whose members parse in a millisecond is a hundred renders nobody sees. **An object nobody asked for
@@ -1077,7 +1079,8 @@ about work that has produced nothing to be identified by. `take_load` **returnin
 the worker: it drops the receiver, the next send fails, and the walk breaks. The other way round,
 **the channel closing ends every path the load still holds** (`Loads::end`): a reader thread that
 would not start, or died, says `Finished` for none of them, and a path left in `Loads` is drawn as
-loading, refused a reopen, and holds off every save for the rest of the run. What streaming buys is
+loading and holds off every session save for the rest of the run. A placeholder nothing replaced
+stays in the list, no longer loading: the file is still the project's. What streaming buys is
 not uniform. The 196-member rlib's first member is offered at 102 ms against the 685 ms the whole
 file takes (debug build), while the 331 MB binary is one object and gains no object earlier at all;
 there the win is the row, on screen from the click instead of an empty list for six seconds.

@@ -233,7 +233,7 @@ fn unsupported(kind: FileKind) -> Option<Unsupported> {
 
 /// What an object out of `path` is called when it is the whole file: its file name, or the
 /// whole path where it has none.
-fn name_of(path: &Path) -> String {
+pub(crate) fn name_of(path: &Path) -> String {
     match path.file_name() {
         Some(name) => name.to_string_lossy().into_owned(),
         None => path.display().to_string(),

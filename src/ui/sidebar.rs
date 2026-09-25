@@ -50,8 +50,8 @@ struct Folds {
 /// triangle, no count, and the loading tag. It was a component of its own once -- the same
 /// fifty-five lines with three values fixed -- which is two right-click handlers to keep in
 /// step and two spellings of the tag. `TreeRow::Pending` stays a variant of its own all the
-/// same: that argument is about the model, a file with nothing behind it having no group
-/// key and nothing to fold (`agents/Sidebar.md`).
+/// same: that argument is about the model, a placeholder having nothing to fold and
+/// nothing to select (`agents/Sidebar.md`).
 #[derive(Clone, PartialEq)]
 struct ArchiveRow {
     name: String,
@@ -96,11 +96,12 @@ impl Component for ArchiveRow {
             Some(Expansion::Expanded) => Some(true),
             Some(Expansion::Forced) | None => None,
         };
-        // Which format a file is is not known until it has been parsed.
-        let tag = if self.loading {
-            "\u{2026}"
-        } else {
-            ARCHIVE_TAG
+        // Which format a file is is not known until it has been parsed, nor ever for one
+        // whose load ended without an answer.
+        let tag = match (self.loading, folds) {
+            (true, _) => "\u{2026}",
+            (false, None) => "?",
+            (false, Some(_)) => ARCHIVE_TAG,
         };
         // How many objects came out of this file, which under a filter is how many of them
         // matched. A file that has produced nothing yet shows no count rather than a zero.
@@ -750,11 +751,15 @@ impl Component for ObjectsPanel {
                         .key(path)
                         .into(),
                         // The same row with nothing to fold, keyed by the same path.
-                        TreeRow::Pending { name, path } => ArchiveRow {
+                        TreeRow::Pending {
+                            name,
+                            path,
+                            loading,
+                        } => ArchiveRow {
                             name: name.clone(),
                             path: path.clone(),
                             folds: None,
-                            loading: true,
+                            loading: *loading,
                             worst: None,
                             at: row,
                             marks: marking.marks(name),

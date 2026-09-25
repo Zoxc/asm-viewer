@@ -177,9 +177,15 @@ that row again. Counting takes one short lock per object and reads no debug info
 **A file being read is a row before it has an object**, which is `notes/specs/Sidebar.md`'s file
 still being read. The state is on the **file**, not on an object, because an object that has not
 been parsed does not exist: the unit part-way through is the one the reader opened, the one
-`close_binary` closes, and the one that already has a row. `Loads` (in `tree.rs`, the state behind
-the `Loading` context) is the files being read, one entry per (load, path). The tree draws a
-`TreeRow::Pending` for each that has produced nothing yet and marks the ones that have `loading`.
+`close_binary` closes, and the one that already has a row. So a file asked for goes into `Objects`
+at once as a **placeholder** (`Object::placeholder`: no format, nothing in it), in the place its
+objects will take, and its first object replaces it (`tree::place`). The list is then every file
+the app holds from the moment each is asked for, which is what the project file is written from
+(`agents/Persistence.md`). `Loads` (in `tree.rs`, the state behind the `Loading` context) is the
+files still being read, one entry per (load, path). The tree draws a `TreeRow::Pending` for a
+placeholder and marks the files still being read `loading`. A placeholder whose load ended with no
+answer -- its reader thread would not start, or died -- stays, drawn with `?` instead of `…`: the
+file is still the project's, and closing it is the reader's.
 Three rules come with it. A file still being read is **always** a file row even at one object, since
 "one object is its own row" needs to know the one is all there will be, and a row that promoted
 itself to a parent as the second member landed would move the list under a reader already reading
@@ -531,8 +537,8 @@ document's tab carries (`agents/UI.md`), on the row's own path: appended to the 
 than built into either of them, so that the Objects rows, which share `close_menu`, keep the one
 item they had. **A directory's menu is that item alone**: a folder is as showable as a file, and
 there is no object inside one to open. **The choice between Open and Close is `file_menu`**
-(`src/ui/menus.rs`) and not the row's handler, over `tree::holds`: the objects read from a path and
-the loads still running are one question, a file being in the app from the moment it is asked for
+(`src/ui/menus.rs`) and not the row's handler, over `tree::holds`: whether an object read from the
+path, or its placeholder, is in the list, a file being in the app from the moment it is asked for
 rather than from the moment its first object lands. The Project view's artefact rows ask it too,
 through the same `ProjectStates::holds_path`, before they start a load.
 
@@ -640,12 +646,12 @@ artifact, up to date or not, so "what this one wrote" leaves out the ones it cal
 bytes are the same. They stay in the list the next build replaces. A build that failed keeps the
 previous list and replaces only what cargo wrote before it stopped: in a workspace the members that
 compiled are still written, so `Run::Rejected` carries its artifacts too. A typo in a one-crate
-package writes nothing, so nothing is closed. The load is registered with the closes and
-not in the task that reads it, or the save observer, woken by the closes, would run first and write
-a project file without those binaries. The previous build's list is saved with the session, which
-is what makes the rule survive a restart (`agents/Persistence.md`). The load is also handed the
-binaries as they were listed before the closes, and a file's first object goes back before the
-first file listed after it (`tree::slot`): appended, every rebuild would reorder the project file.
+package writes nothing, so nothing is closed. The load is begun with the closes and not in the
+task that reads it, or the save observer, woken by the closes, would run first and write a project
+file without those binaries. The previous build's list is saved with the session, which is what
+makes the rule survive a restart (`agents/Persistence.md`). The load is also handed the binaries as
+they were listed before the closes, and each file's placeholder goes back before the first file
+listed after it (`tree::slot`): appended, every rebuild would reorder the project file.
 A finished build also forgets everything read of
 the sources under the directory it ran in, which nothing else in the app ever re-reads
 (`forget_source_under`, `agents/Panes.md`). The worker hands that directory back with the answer,
@@ -729,9 +735,8 @@ of a build already is.
 `project::switch` (flush, re-point, remember), then `clear_project`, then `enter_project`.
 `clear_project` is a `close_binary` per path and then a `close_tab` for whatever is left, never a
 write to the list, so a project is left in a state the reader could have reached by hand. Its one
-extra line is `Loads::clear`, which cannot go through the per-path walk: a file that has been asked
-for and has produced nothing yet is not in the objects list for that walk to reach, and its objects
-would otherwise arrive into the project that comes next. `enter_project` is the body the startup
+extra line is `Loads::clear`: the closes stop every load path by path already, but only a clear
+marks a load as the left project's (`Loads::left`), which is what a restore waiting on it asks. `enter_project` is the body the startup
 restore was, extracted so the ways in cannot drift: it sets which project is open and its bookmarks
 -- synchronously, before the save observer can see them -- and then calls `restore_project`. The
 source-driven tabs go in that second walk, where

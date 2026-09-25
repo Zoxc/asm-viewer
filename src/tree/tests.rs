@@ -40,7 +40,10 @@ fn described(tree: &ObjectTree) -> Vec<String> {
                 let reading = if *loading { " reading" } else { "" };
                 format!("file {name} ({members}) {expansion:?}{reading}")
             }
-            TreeRow::Pending { name, .. } => format!("pending {name}"),
+            TreeRow::Pending { name, loading, .. } => {
+                let reading = if *loading { " reading" } else { "" };
+                format!("pending {name}{reading}")
+            }
             TreeRow::Object { object, member } => {
                 let indent = if *member { "  " } else { "" };
                 format!("{indent}object {}", object.name)
@@ -65,6 +68,11 @@ fn loading_tree(
         &filter.matcher(),
         &expanded.iter().map(PathBuf::from).collect(),
     )
+}
+
+/// What a load puts in the list for `path` before anything has been parsed.
+fn placeholder(path: &str) -> Arc<Object> {
+    Arc::new(Object::placeholder(PathBuf::from(path)))
 }
 
 fn reading(paths: &[&str]) -> Loads {
@@ -210,14 +218,18 @@ fn an_invalid_pattern_empties_the_tree() {
 /// so — as a row of its own, with no members and nothing to fold.
 #[test]
 fn a_file_being_read_is_a_row_before_it_has_an_object() {
-    let tree = loading_tree(
-        &[],
+    let read = loading_tree(
+        &[placeholder("/tmp/libfoo.rlib")],
         &reading(&["/tmp/libfoo.rlib"]),
         &Filter::default(),
         &[],
     );
-    assert_eq!(described(&tree), ["pending libfoo.rlib"]);
-    assert!(matches!(&tree[0], TreeRow::Pending { .. }));
+    assert_eq!(described(&read), ["pending libfoo.rlib reading"]);
+    assert!(matches!(&read[0], TreeRow::Pending { .. }));
+
+    // A load that ended without replacing it leaves the row, no longer being read.
+    let ended = tree(&[placeholder("/tmp/libfoo.rlib")], &Filter::default(), &[]);
+    assert_eq!(described(&ended), ["pending libfoo.rlib"]);
 }
 
 /// While a file is being read, one object is not yet an answer: the row stays a file row so
@@ -250,22 +262,29 @@ fn one_object_of_a_file_still_being_read_stays_under_its_file() {
 #[test]
 fn a_file_being_read_is_filtered_on_its_name() {
     let loads = reading(&["/tmp/libfoo.rlib"]);
+    let objects = [placeholder("/tmp/libfoo.rlib")];
     assert_eq!(
-        described(&loading_tree(&[], &loads, &plain("foo"), &[])),
-        ["pending libfoo.rlib"]
+        described(&loading_tree(&objects, &loads, &plain("foo"), &[])),
+        ["pending libfoo.rlib reading"]
     );
-    assert!(described(&loading_tree(&[], &loads, &plain("bar"), &[])).is_empty());
+    assert!(described(&loading_tree(&objects, &loads, &plain("bar"), &[])).is_empty());
 }
 
-/// Two files asked for at once are two rows, in the order they were asked for, and the one
-/// that has started producing objects is drawn where its objects are.
+/// Two files asked for at once are two rows, in the order they were asked for, whichever
+/// has started producing objects.
 #[test]
 fn every_file_being_read_gets_a_row_of_its_own() {
-    let objects = vec![object("/tmp/hello", "hello")];
-    let loads = reading(&["/tmp/hello", "/tmp/libfoo.rlib"]);
+    let objects = vec![
+        placeholder("/tmp/libfoo.rlib"),
+        object("/tmp/hello", "hello"),
+    ];
+    let loads = reading(&["/tmp/libfoo.rlib", "/tmp/hello"]);
     assert_eq!(
         described(&loading_tree(&objects, &loads, &Filter::default(), &[])),
-        ["file hello (1) Collapsed reading", "pending libfoo.rlib",]
+        [
+            "pending libfoo.rlib reading",
+            "file hello (1) Collapsed reading"
+        ]
     );
 }
 
@@ -315,21 +334,10 @@ fn finishing_one_path_leaves_the_rest_of_its_load() {
 
     loads.finished(id, Path::new("/tmp/b"));
     assert!(!loads.active(id));
-    assert!(loads.paths().is_empty());
+    assert!(loads.is_empty());
 }
 
-/// One file is one row however many loads are producing it, in the order it was asked for.
-#[test]
-fn the_paths_being_read_do_not_repeat() {
-    let mut loads = Loads::default();
-    loads.begin(&[PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]);
-    loads.begin(&[PathBuf::from("/tmp/a")]);
-
-    assert_eq!(loads.paths(), [Path::new("/tmp/a"), Path::new("/tmp/b")]);
-}
-
-/// Leaving a project abandons every load at once, including the ones whose files have
-/// contributed nothing and so are not in the objects list to be closed one by one.
+/// Leaving a project abandons every load at once.
 #[test]
 fn clearing_abandons_every_load() {
     let mut loads = Loads::default();
@@ -337,7 +345,7 @@ fn clearing_abandons_every_load() {
     loads.clear();
 
     assert!(!loads.active(id));
-    assert!(loads.paths().is_empty());
+    assert!(loads.is_empty());
 }
 
 /// A load is the project's that was left only when a clear stopped it: closing its files
@@ -358,25 +366,31 @@ fn only_a_clear_leaves_a_load_behind() {
     assert!(!loads.left(next));
 }
 
-/// A path is in the app from the moment it is asked for and not from the moment its first
-/// object lands, so the question spans both halves: the objects, and the loads still
-/// running. What a Files row's menu turns on.
+/// A path is in the app from the moment it is asked for, by its placeholder, and stays
+/// once its objects have replaced it. What a Files row's menu turns on.
 #[test]
 fn a_path_is_held_while_it_loads_and_after_it_has_landed() {
     let a = Path::new("/tmp/a");
+    assert!(!holds(&[], a));
+    assert!(holds(&[placeholder("/tmp/a")], a));
     let objects = vec![object("/tmp/a", "one")];
-    let mut loads = Loads::default();
-
-    assert!(!holds(&[], &loads, a));
-    // Being read is enough: the row is there before the first object is.
-    let id = loads.begin(&[a.to_path_buf()]);
-    assert!(holds(&[], &loads, a));
-    // And an object of it is enough once nothing is reading it.
-    loads.finished(id, a);
-    assert!(!holds(&[], &loads, a));
-    assert!(holds(&objects, &loads, a));
+    assert!(holds(&objects, a));
     // Another file is another question.
-    assert!(!holds(&objects, &loads, Path::new("/tmp/b")));
+    assert!(!holds(&objects, Path::new("/tmp/b")));
+}
+
+/// A file's first object takes its placeholder's place in the list, and the rest of its
+/// objects follow it, before the files asked for after it.
+#[test]
+fn an_object_lands_in_its_placeholders_place() {
+    let mut objects = vec![placeholder("/tmp/a.a"), placeholder("/tmp/b.o")];
+    place(&mut objects, object("/tmp/b.o", "b.o"), &[]);
+    place(&mut objects, object("/tmp/a.a", "one.o"), &[]);
+    place(&mut objects, object("/tmp/a.a", "two.o"), &[]);
+
+    let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+    assert_eq!(names, ["one.o", "two.o", "b.o"]);
+    assert!(objects.iter().all(|object| !object.is_placeholder()));
 }
 
 /// A file read again goes back to its place among the files `order` lists, before any it

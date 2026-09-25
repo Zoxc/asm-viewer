@@ -3531,7 +3531,7 @@ fn a_restore_survives_the_row_that_asked_for_it() {
     // and not in this one's.
     for _ in 0..200 {
         settle(&mut test);
-        if !states.objects.peek().is_empty() {
+        if parsed(&states.objects.peek()) > 0 {
             break;
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -3667,7 +3667,7 @@ fn binaries_added_to_a_project_left_are_dropped() {
     );
     assert!(polled.is_ready(), "the answer went on to load");
     assert!(
-        states.loading.peek().paths().is_empty(),
+        states.loading.peek().is_empty(),
         "the files were loaded into the project opened after they were asked for"
     );
 }
@@ -3686,7 +3686,7 @@ fn a_binary_added_again_is_not_read_twice() {
     settle(&mut test);
 
     let path = PathBuf::from("/no/such/binary.o");
-    begin_load(states.loading, std::slice::from_ref(&path));
+    begin_load(states.objects, states.loading, vec![path.clone()], &[]);
     let answer = std::pin::pin!(added_binaries(states, states.stay(), vec![path.clone()]));
     let polled = std::future::Future::poll(
         answer,
@@ -3737,12 +3737,13 @@ fn a_new_project_that_could_not_be_made_changes_nothing() {
     );
     assert!(polled.is_ready(), "the answer went on to load");
     assert!(
-        states.loading.peek().paths().is_empty(),
+        states.loading.peek().is_empty(),
         "the files were loaded into the project already open"
     );
 }
 
-/// Whether a load was registered each time the effect in [`boot_harness`] ran.
+/// Whether a load was registered, and the binary put in the list, each time the effect in
+/// [`boot_harness`] ran.
 #[derive(Clone)]
 struct Registered(Rc<RefCell<Vec<bool>>>);
 
@@ -3750,9 +3751,10 @@ struct Registered(Rc<RefCell<Vec<bool>>>);
 fn boot_harness() -> impl IntoElement {
     let states = use_project_states();
     let registered = use_consume::<Registered>().0;
-    let loading = states.loading;
+    let (loading, objects) = (states.loading, states.objects);
     use_side_effect(move || {
-        registered.borrow_mut().push(!loading.peek().is_empty());
+        let begun = !loading.peek().is_empty() && !objects.peek().is_empty();
+        registered.borrow_mut().push(begun);
     });
     use_hook(move || {
         let project = Project {
@@ -3764,10 +3766,10 @@ fn boot_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// **A restore's load is registered before the save observer first runs.** That run is a
-/// task queued ahead of the restore's, and one that saw no load recorded the tabless boot
-/// session as pending, for a close or a switch during the load to write over the saved
-/// one.
+/// **A restore's load is begun before the save observer first runs.** That run is a task
+/// queued ahead of the restore's. One that saw no load recorded the tabless boot session
+/// as pending, for a close or a switch during the load to write over the saved one; and
+/// one that saw none of the binaries would write a project naming none of them.
 #[test]
 fn a_restore_registers_its_load_before_the_first_record() {
     let registered = Registered(Rc::new(RefCell::new(Vec::new())));
@@ -4905,15 +4907,21 @@ fn load_harness() -> impl IntoElement {
         for (events, paths) in loads {
             // Bound out of its own statement, so the guard is gone before anything else
             // touches the state.
-            let id = {
-                let mut loading = loading;
-                loading.write().begin(&paths)
-            };
-            spawn(async move { take_load(objects, loading, id, events, Vec::new()).await });
+            let (id, _) = begin_load(objects, loading, paths, &[]);
+            spawn(async move { take_load(objects, loading, id, events).await });
         }
     });
 
     rect().expanded().child(ObjectsPanel)
+}
+
+/// How many of `objects` have been parsed: the rest are placeholders for files still being
+/// read.
+fn parsed(objects: &[Arc<Object>]) -> usize {
+    objects
+        .iter()
+        .filter(|object| !object.is_placeholder())
+        .count()
 }
 
 /// `n` objects that all came out of one path, which is what an archive's members look like
@@ -4948,6 +4956,18 @@ fn mount_loads(
     ProjectStates,
     Vec<async_channel::Sender<Progress>>,
 ) {
+    mount_loads_over(load_harness, paths)
+}
+
+/// The same over a harness of the test's own, which draws [`load_harness`].
+fn mount_loads_over<E: IntoElement + 'static>(
+    harness: fn() -> E,
+    paths: &[&Path],
+) -> (
+    TestingRunner,
+    ProjectStates,
+    Vec<async_channel::Sender<Progress>>,
+) {
     let mut senders = Vec::new();
     let mut loads = Vec::new();
     for path in paths {
@@ -4957,7 +4977,7 @@ fn mount_loads(
     }
     let loads = Arc::new(Mutex::new(loads));
     let (test, states) = TestingRunner::new(
-        load_harness,
+        harness,
         (300., 300.).into(),
         move |runner| {
             runner.provide_root_context(|| Feed(loads.clone()));
@@ -4997,40 +5017,50 @@ fn reading(states: &ProjectStates) -> Vec<(String, usize, bool)> {
                 loading,
                 ..
             } => Some((name.clone(), *members, *loading)),
-            TreeRow::Pending { name, .. } => Some((name.clone(), 0, true)),
+            TreeRow::Pending { name, loading, .. } => Some((name.clone(), 0, *loading)),
             TreeRow::Object { .. } => None,
         })
         .collect()
 }
 
-/// The objects of one file reach the sidebar one at a time, and the row for that file is
-/// there before the first of them is.
+/// A file is on the objects list from the moment it is asked for, as a placeholder, and
+/// its objects reach the sidebar one at a time, the first in the placeholder's place.
 #[test]
 fn objects_reach_the_sidebar_as_they_are_parsed() {
     let (path, objects) = fixture_objects(3);
     let (mut test, states, sender) = mount_load(&path);
     test.sync_and_update();
 
-    // Before a single byte has been parsed, which nothing could be in while the parse
-    // handed back one `Vec` at the end.
+    // Before a single byte has been parsed: a row, and the placeholder behind it, which
+    // is a binary of the project already.
     assert_eq!(reading(&states), [("line_fixture.o".to_owned(), 0, true)]);
-    assert!(states.objects.peek().is_empty());
+    {
+        let held = states.objects.peek();
+        assert!(
+            matches!(&held[..], [placeholder] if placeholder.is_placeholder()),
+            "the file is not in the list until its parse lands"
+        );
+    }
+    assert_eq!(
+        project::binaries(&states.objects.peek()),
+        std::slice::from_ref(&path)
+    );
 
     for (arrived, object) in objects.iter().enumerate() {
         sender
             .send_blocking(Progress::Parsed(object.clone()))
             .expect("the app is still listening");
-        pump(&mut test, |_| states.objects.peek().len() == arrived + 1);
+        pump(&mut test, |_| parsed(&states.objects.peek()) == arrived + 1);
         assert_eq!(
             reading(&states),
             [("line_fixture.o".to_owned(), arrived + 1, true)],
             "the file stopped saying it was being read before it was finished"
         );
-        // The save side: the path joins the binaries with its first object, so a session
-        // written half way through a parse names the file.
-        assert_eq!(
-            project::binaries(&states.objects.peek()),
-            std::slice::from_ref(&path)
+        // Replaced, not joined: the list is the objects that landed, in order.
+        let held = states.objects.peek();
+        assert!(
+            held.len() == arrived + 1 && held.iter().zip(&objects).all(|(a, b)| Arc::ptr_eq(a, b)),
+            "the placeholder was not replaced by the first object"
         );
     }
 
@@ -5056,7 +5086,7 @@ fn a_load_whose_worker_goes_is_finished() {
     sender
         .send_blocking(Progress::Parsed(objects[0].clone()))
         .expect("the app is still listening");
-    pump(&mut test, |_| states.objects.peek().len() == 1);
+    pump(&mut test, |_| parsed(&states.objects.peek()) == 1);
     drop(sender);
     pump(&mut test, |_| states.loading.peek().is_empty());
 
@@ -5064,6 +5094,76 @@ fn a_load_whose_worker_goes_is_finished() {
     assert!(
         reading(&states).is_empty(),
         "the file is still drawn as being read"
+    );
+}
+
+/// A load that ends without an answer for a file -- its worker would not start, or died --
+/// leaves the file's placeholder: the file is still the project's, and no longer drawn as
+/// being read. Its path used to leave the list with the load, and the project file with
+/// the next write.
+#[test]
+fn a_file_whose_load_ends_without_an_answer_stays_held() {
+    let (path, _) = fixture_objects(1);
+    let (mut test, states, sender) = mount_load(&path);
+    test.sync_and_update();
+
+    drop(sender);
+    pump(&mut test, |_| states.loading.peek().is_empty());
+
+    assert_eq!(reading(&states), [("line_fixture.o".to_owned(), 0, false)]);
+    assert_eq!(
+        project::binaries(&states.objects.peek()),
+        std::slice::from_ref(&path)
+    );
+}
+
+/// The save observer over [`load_harness`]'s loads.
+fn saving_load_harness() -> impl IntoElement {
+    use_save_on_change(use_project_states());
+    load_harness()
+}
+
+/// **The project file names a binary whose load has not landed.** It is held from the
+/// moment it is asked for, so a write about anything else -- another binary, a bookmark
+/// -- keeps it. It used to reach the file only once every load had ended, and a write
+/// before then wrote the list the file already held.
+#[test]
+fn the_project_file_keeps_a_binary_whose_load_has_not_landed() {
+    let _saves = project::using_saves();
+    let directory = project::directory();
+    let store = Store::at(&*directory);
+    let file = project::start_new(&store).expect("a project is started");
+
+    let (slow, _) = fixture_objects_of("line_fixture.o", 1);
+    let (quick, quicks) = fixture_objects_of("line_fixture_split.o", 1);
+    let (mut test, states, senders) = mount_loads_over(saving_load_harness, &[&slow, &quick]);
+    test.sync_and_update();
+
+    // The second lands and is done; the first says nothing.
+    senders[1]
+        .send_blocking(Progress::Parsed(quicks[0].clone()))
+        .expect("the app is still listening");
+    senders[1]
+        .send_blocking(Progress::Finished(quick.clone()))
+        .expect("the app is still listening");
+    pump(&mut test, |_| !states.loading.peek().is_loading(&quick));
+
+    // Something else is written: a bookmark.
+    let document = Document::Source(Arc::from(Path::new("/src/a.rs")));
+    let mut bookmarks = states.bookmarks;
+    bookmarks.set(Bookmarks::from_entries(vec![bookmark_of(&document)]));
+    settle(&mut test);
+
+    let (project, _) = project::open_at(&store, &file).expect("the project reads back");
+    assert_eq!(project.bookmarks.len(), 1, "the bookmark was not written");
+    assert_eq!(
+        project.binaries,
+        [slow.clone(), quick.clone()],
+        "the file lost the binary still being read"
+    );
+    assert!(
+        states.loading.peek().is_loading(&slow),
+        "the first load landed, so the test proved nothing"
     );
 }
 
@@ -5150,7 +5250,7 @@ fn two_loads_at_once_keep_a_file_to_one_row() {
         senders[*load]
             .send_blocking(Progress::Parsed((*object).clone()))
             .expect("the app is still listening");
-        pump(&mut test, |_| states.objects.peek().len() == landed + 1);
+        pump(&mut test, |_| parsed(&states.objects.peek()) == landed + 1);
     }
 
     assert_eq!(
@@ -5348,7 +5448,7 @@ fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
     sender
         .send_blocking(Progress::Parsed(objects[0].clone()))
         .expect("the app is still listening");
-    pump(&mut test, |_| states.objects.peek().len() == 1);
+    pump(&mut test, |_| parsed(&states.objects.peek()) == 1);
 
     close_binary(states, &path);
     test.sync_and_update();
@@ -5372,9 +5472,8 @@ fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
     assert!(sender.send_blocking(Progress::Finished(path)).is_err());
 }
 
-/// Leaving a project while one of its files is being read. The load is cancelled by
-/// `clear_project` itself and not through `close_binary`, a file that has produced
-/// nothing yet not being in the objects list for the per-path walk to reach.
+/// Leaving a project while one of its files is being read: the load is cancelled, and
+/// what it was still reading is dropped.
 #[test]
 fn leaving_a_project_while_a_file_is_read_drops_what_was_still_coming() {
     let (path, objects) = fixture_objects(2);
@@ -5383,7 +5482,7 @@ fn leaving_a_project_while_a_file_is_read_drops_what_was_still_coming() {
 
     clear_project(states);
     test.sync_and_update();
-    assert!(states.loading.peek().paths().is_empty());
+    assert!(states.loading.peek().is_empty());
     assert!(reading(&states).is_empty());
 
     sender
@@ -17331,6 +17430,8 @@ fn saving_harness() -> impl IntoElement {
 /// -- a tab raised, here -- is still recorded at once.
 #[test]
 fn a_drag_builds_the_session_once_and_not_per_move() {
+    // Its records go into whatever project the static is in.
+    let _saves = project::using_saves();
     let (mut test, states) = TestingRunner::new(
         saving_harness,
         (100., 100.).into(),
@@ -27603,7 +27704,7 @@ fn an_object_row_opens_from_its_menu() {
     assert!(label_area(&test, "Close file").is_none());
     press(&mut test, "Open file");
     let objects = states.objects;
-    pump(&mut test, |_| !objects.peek().is_empty());
+    pump(&mut test, |_| parsed(&objects.peek()) > 0);
     assert!(objects.peek().iter().all(|object| object.path == path));
 
     let row = centre_of(&test, "fixture.o");
@@ -34349,7 +34450,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
 
     let row = centre_of(&test, &artifact.to_string_lossy());
     press_at(&mut test, row);
-    pump(&mut test, |_| !states.objects.peek().is_empty());
+    pump(&mut test, |_| parsed(&states.objects.peek()) > 0);
     assert!(states
         .objects
         .peek()
@@ -34540,7 +34641,7 @@ fn an_artifact_load_survives_the_view_being_left() {
     // The file is parsed on a thread of its own, so it answers in its own time.
     for _ in 0..200 {
         settle(&mut test);
-        if !states.objects.peek().is_empty() {
+        if parsed(&states.objects.peek()) > 0 {
             break;
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -35045,7 +35146,7 @@ fn a_build_registers_its_reopen_before_a_record_can_run() {
 
     start_build(build, &jobs, PathBuf::from("/work/app"), Profile::Release);
     pump(&mut test, |_| {
-        !build.peek().building && states.loading.peek().is_empty() && !objects.peek().is_empty()
+        !build.peek().building && states.loading.peek().is_empty() && parsed(&objects.peek()) > 0
     });
 
     let seen = SEEN.with(|seen| seen.take());

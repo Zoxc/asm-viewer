@@ -47,14 +47,14 @@ pub(in crate::project) fn paths(binaries: &[&str]) -> Vec<PathBuf> {
 }
 
 /// A path of this test's own, made by nothing yet, and gone when the test ends.
-pub(in crate::project) fn directory() -> Directory {
+pub(crate) fn directory() -> Directory {
     Directory(Temporary::fresh("project-test"))
 }
 
 /// A test's directory, which also takes the `SAVES` static out of it before it goes. A
 /// test that opens a project there leaves the static pointing in, and a later flush from
 /// another test would write the directory back.
-pub(in crate::project) struct Directory(Temporary);
+pub(crate) struct Directory(Temporary);
 
 impl Drop for Directory {
     /// Runs before the field is dropped, so the static lets go before the directory is
@@ -81,7 +81,7 @@ impl AsRef<Path> for Directory {
 /// Held by every test that goes through the `SAVES` static, for as long as it uses it, so
 /// two of them cannot take it from each other under the parallel runner. Take it before
 /// [`directory`], so the directory lets go of the static before the lock is released.
-pub(in crate::project) fn using_saves() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn using_saves() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     // A test that failed holding it says so itself; the next one still runs.
     LOCK.lock().unwrap_or_else(|error| error.into_inner())

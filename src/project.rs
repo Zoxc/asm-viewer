@@ -51,6 +51,10 @@ pub use recents::*;
 pub use restore::*;
 pub use saves::*;
 
+/// For a headless test that goes through the `SAVES` static.
+#[cfg(test)]
+pub(crate) use files::tests::{directory, using_saves};
+
 use files::session_beside;
 use recents::{forget, load_recents, remember};
 use saves::{saves, unsaved_number, unsaved_project, write_or_warn, writing_into};
@@ -83,7 +87,7 @@ pub fn label(store: &Store, path: &Path) -> String {
 
 /// Reopen the project the app was last in: the first entry of `recents.toml`. Hands back
 /// the path it picked and both halves for the caller to restore, and points the save policy
-/// at it — but seeds it with nothing else (see [`saves::Saves::binaries`]).
+/// at it (`Saves::opened`).
 ///
 /// `None` when there is nothing to reopen, which is a first run and not a failure — and a
 /// project whose file has **gone** is one of those: the recent list never prunes itself, so
@@ -304,8 +308,8 @@ pub fn delete() -> bool {
 
 /// Take note of the project the app is now in, writing it out immediately if it is a
 /// change that must not be lost and marking it pending otherwise. Cheap enough to call on
-/// every state change. `loading` says the binaries are still arriving, which is what
-/// keeps a half-read list off the disk.
+/// every state change. `loading` says a load is still in flight, which is what keeps a
+/// session without its tabs off the disk.
 pub fn record(
     details: &Details,
     binaries: &[PathBuf],
@@ -343,7 +347,7 @@ pub fn record(
         }
         return;
     }
-    saves.wrote_project(&project, recorded.binaries_changed);
+    saves.wrote_project(&project);
     if let Some(session) = recorded.session {
         match write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {
             true => saves.wrote_session(session),
@@ -395,7 +399,7 @@ fn write_owed_project(saves: &mut Saves) -> bool {
     };
     match write_or_warn(&file, |path| owed.project.save_to(&store, path)) {
         true => {
-            saves.wrote_project(&owed.project, binaries_changed);
+            saves.wrote_project(&owed.project);
             true
         }
         false => {

@@ -520,7 +520,7 @@ it.** `record` and `take_owing` only hand back what to write; the caller moves t
 afterwards, through `wrote_project` and `wrote_session` and only where `write_or_warn` answered that
 the file was written. A failure leaves the change for the next `record` to see again, and hands
 what was being written back to be owed to the next `flush`: the session to `owes_session`, the
-project file to `owes_project`, with the `binaries_changed` its write needs. A session carried by a
+project file to `owes_project`, with its `binaries_changed`. A session carried by a
 binaries change whose project write failed is owed with it rather than written, and `flush` holds
 the session back while that project file is still owed, so the session never names a tab into a
 binary the project file does not list. `take_owing` empties pending rather than copying it for
@@ -528,66 +528,62 @@ that reason: what it hands out is either written or handed back.
 Advancing first meant that a disk full for one tick left the app believing a
 file held a session that never reached it: nothing marked the session pending again, so the close
 hook's flush found nothing to do and the reader kept the one from before, for one warning in a log a
-windowed app never shows. Which baselines a project-file write moves is the
-`binaries_changed` beside it -- `Saves::written` becomes the project just written whatever
-happened, and the app's own list of binaries moves only when the change was to them, since any
-other write puts back the list the file already held.
+windowed app never shows. A project-file write moves `Saves::written`, the binaries in it
+included, to the project just written.
 
-**Every baseline is the state the app boots into**, which is why the binaries and the session start
-empty and `Saves::written` does not. The binaries and the session are restored *asynchronously*:
-the app boots holding nothing and fills in when the parse lands. So seeding them from the loaded
-project would make the first comparison see the still-empty boot state as a change and write an
-empty project over a good one. `Saves::written` -- `project.toml` as the file holds it, which is
-one baseline for the directory, the server, the profile and the bookmarks together -- *is* seeded
-whole by `reopen`, because the directory and the bookmarks are restored *synchronously*, into
-`Proj` and `Bookmarked`, before a single effect has run. An effect's first run is a later pass than
-the render whose `use_hook` set them (`agents/Headless.md`), so registering the save observer
-before the restore is not what keeps them apart and does not have to be. Until the project view
-held them (`Proj`), `Saves` **carried** the details across the calls instead of comparing them
-against a baseline; a change to one now arrives through `record` like everything else and that
-special case is gone. The binaries in `Saves::written` are the one part of it nothing is compared
-against: they are what the project file currently *says*, and a write that is not about the
-binaries writes them back rather than the app's own list. Otherwise a change during the startup
-parse, or after a restore that opened none of them, would forget a file through a change that had
-nothing to do with it.
-The same holds for a binary the load produced nothing for while others did load: the reader did not
-remove it. `Saves::unheld` is the file's binaries the app has not held since the project was opened,
-and a write about the binaries puts them back where they were in the list. One leaves the set only
-by being held, so closing it after that is a removal like any other. A binary that is deleted, being
-relinked or never built on this machine is held all the same: the load hands over an object for
-every path it reaches, one saying why it shows nothing where the file could not be read or is no
-object (`agents/Analysis.md`). So the Objects list shows it, marked, the reader can close it, and a
-build that writes it again replaces it as it does any artifact of the build before
-(`agents/Sidebar.md`). What is left unheld is a binary a load stopped before.
+**Every baseline is the state the app boots into**, which is why the session starts empty and
+`Saves::written` does not. The session is restored *asynchronously*: its tabs are resolved once
+the parse lands, so seeding it from the loaded project would make the first comparison see the
+tabless boot state as a change. `Saves::written` -- `project.toml` as the file holds it, which is
+one baseline for the directory, the server, the profile, the bookmarks and the binaries together --
+*is* seeded whole by `reopen`, because all of those are restored *synchronously*: the directory and
+the bookmarks into `Proj` and `Bookmarked`, and each binary as a placeholder in `Objects`, which
+`restore_project` puts there before it spawns the task that reads them (`agents/Sidebar.md`). An
+effect's first run is a later pass than the render whose `use_hook` set them
+(`agents/Headless.md`), so registering the save observer before the restore is not what keeps them
+apart and does not have to be. The binaries' part of that is load-bearing: a record that saw the
+list before the placeholders went in would write a project naming none of them
+(`a_restore_registers_its_load_before_the_first_record`). Until the project view held them
+(`Proj`), `Saves` **carried** the details across the calls instead of comparing them against a
+baseline; a change to one now arrives through `record` like everything else and that special case
+is gone.
+The binaries used to arrive with their objects, and the baseline started empty: the app held the
+files that had landed, so a write during a load had to put the file's list back, and a binary a
+load stopped before had to be remembered and put back too. Now the list is every file asked for,
+landed or not, and a binary the reader closes -- loaded, still loading, or one whose load ended
+with no answer -- goes like any other. A binary that is deleted, being relinked or never built on
+this machine is held all the same: the load hands over an object for every path it reaches, one
+saying why it shows nothing where the file could not be read or is no object
+(`agents/Analysis.md`). So the Objects list shows it, marked, the reader can close it, and a build
+that writes it again replaces it as it does any artifact of the build before (`agents/Sidebar.md`).
 
 **`Saves::stored` is the session file itself**, beside the empty baseline rather than instead
 of it. The baseline answers "has this changed", which needs the boot state; `put_in` asks
 "what does the file hold", which needs the session the project was opened on. The two are the
-same the moment anything has been written, so `wrote_session` moves both; before that they
-differ, for as long as a load holds every session back.
+same the moment a session has been written, so `wrote_session` moves both; before that they
+differ, and a load in flight holds every session back.
 
-**A list still being read is not the app's list**, which is the `loading` flag. The objects arrive
-one at a time, so while a load is in flight `record` neither compares the binaries nor writes them:
-the first to land would otherwise put a project naming only itself on disk. The session the app
-holds until `restore_project` has resolved its tabs is held back the same way, and for a further
-reason: a session is only ever marked pending, so marking that tabless one is already enough to
-lose the tabs -- the next flush writes whatever is pending, and the close hook, `switch`, `close`
-and the 30-second timer all flush. A session left pending *before* the load began describes a real
-state and is left alone. The boot state is never one: `restore_project` registers its load before
-it spawns the task that reads it, since the save observer's first run is a task queued ahead of
-that one, and a record there would mark the tabless boot session pending. A build's reopen does
-the same for the same reason (`agents/Sidebar.md`). Both baselines stay behind the streamed list,
-so the record that follows the load is the one that sees the change and writes both files -- the
-save observer reads `Loads` as well, which is what re-runs it when the load ends. The cost is that a binary opened or closed
-while another is being read waits for that same record instead of reaching the disk at once.
-A binaries write that failed before the load does not wait: every record in the window tries it
-again. Left to that record, a details-only record in between replaced it with a write naming none
-of them, and the next flush let the session out ahead of the project file.
+**A session is not the app's while a load is in flight**, which is the `loading` flag. The session
+the app holds until `restore_project` has resolved its tabs has none, and a session is only ever
+marked pending, so marking that tabless one is already enough to lose the tabs -- the next flush
+writes whatever is pending, and the close hook, `switch`, `close` and the 30-second timer all
+flush. So while a load is in flight `record` neither compares the session nor marks it pending, and
+a binaries change goes alone, without the session it would carry. The binaries are not held back:
+the list is whole from the moment each file is asked for, so a binary opened or closed mid-load
+reaches the disk at once, and one still being parsed when the app is closed is not lost. A session
+left pending *before* the load began describes a real state and is left alone. The boot state is
+never one: `restore_project` begins its load before it spawns the task that reads it, since the
+save observer's first run is a task queued ahead of that one, and a record there would mark the
+tabless boot session pending. A build's reopen does the same for the same reason
+(`agents/Sidebar.md`). The session baseline stays behind, so the record that follows the load is
+the one that sees the session and marks it pending -- the save observer reads `Loads` as well,
+which is what re-runs it when the load ends. A binaries write that failed is tried again by every
+record, in a load or not, the baseline not having moved.
 
 **Which project is open is `Saves`' too**, and changing it at runtime is `switch(id)` or
 `start_new()`. Both `flush` the project being left while the policy still points at it, `remember`
 the one being entered at the front of `recents.toml`, and re-point every baseline through
-`Saves::opened`, to empty, because the app is about to be emptied. Emptying it is the caller's half
+`Saves::opened`, to the project entered, because the app is about to be emptied and filled with it. Emptying it is the caller's half
 and stays in `ui/session.rs`, the states being the UI's. `recent_projects(&store)` is the
 list the views draw, read once per project into the root's `Recents`: `recents.toml`'s order and
 then the unsaved projects it does not name, each row described by reading *that project's own* file,

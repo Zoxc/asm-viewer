@@ -541,15 +541,14 @@ pub(crate) struct ProjectStates {
 }
 
 impl ProjectStates {
-    /// Whether the app holds `path` already, out of the two states that between them say
-    /// so: the objects read from it, and the loads still running. The rule itself is
-    /// `tree::holds`; this is the peek in front of it, so that a handler asking the
-    /// question does not spell the pair out again.
+    /// Whether the app holds `path` already: an object read from it, or the placeholder
+    /// of a load still running. The rule itself is `tree::holds`; this is the peek in
+    /// front of it.
     ///
     /// Peeked and not read: this is asked in an event handler, where a subscription would
     /// belong to whatever scope happened to be rendering.
     pub(crate) fn holds_path(&self, path: &Path) -> bool {
-        crate::tree::holds(&self.objects.peek(), &self.loading.peek(), path)
+        crate::tree::holds(&self.objects.peek(), path)
     }
 
     /// The project open now, for asking [`ProjectStates::left`] about later.

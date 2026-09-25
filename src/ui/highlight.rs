@@ -581,13 +581,15 @@ impl Sourced {
 /// Have [`Sourced::loaded`] said whenever a binary lands that was not open before: one
 /// opened, or one closed and read in again, which is what a rebuild is.
 ///
-/// By path and not by object, so an archive read in many batches says it once.
+/// By path and not by object, so an archive read in many batches says it once. A
+/// placeholder is not a binary landing: its first object is.
 pub(crate) fn use_rereading(mut sourced: State<Sourced>, objects: State<Vec<Arc<Object>>>) {
     let open = use_hook(|| Rc::new(RefCell::new(HashSet::<PathBuf>::new())));
     use_side_effect(move || {
         let now: HashSet<PathBuf> = objects
             .read()
             .iter()
+            .filter(|object| !object.is_placeholder())
             .map(|object| object.path.clone())
             .collect();
         let landed = now.iter().any(|path| !open.borrow().contains(path));

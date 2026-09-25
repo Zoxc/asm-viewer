@@ -779,4 +779,4 @@ fn is_zero(into: &u16) -> bool {
 }
 
 #[cfg(test)]
-pub(super) mod tests;
+pub(crate) mod tests;

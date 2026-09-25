@@ -70,39 +70,23 @@ pub(super) struct Saves {
     /// Which project this is. Stamped onto both halves of every write, since a session
     /// carrying another id is one the next load throws away.
     id: Option<ProjectId>,
-    /// `project.toml` as last written: the baseline every change is measured against, and
-    /// where a write that is not about the binaries takes them from. Its id is the one the
-    /// file holds, which is `None` until a write gives it [`Saves::id`].
+    /// `project.toml` as last written: the baseline every change is measured against, the
+    /// binaries included. Its id is the one the file holds, which is `None` until a write
+    /// gives it [`Saves::id`].
     ///
-    /// Seeded whole by [`Saves::opened`], where the two below are pointedly empty,
-    /// because every baseline is the state the app boots into and only this one is
-    /// restored synchronously.
+    /// Seeded whole by [`Saves::opened`], where the session is pointedly empty, because
+    /// every baseline is the state the app boots into, and this one is restored
+    /// synchronously: the details into `Proj`, the bookmarks, and the binaries as a
+    /// placeholder each, their objects landing later in the placeholders' places.
     written: Project,
-    /// The binaries the app was last seen holding, out of a moment when nothing was
-    /// loading. Empty to start with, deliberately not the ones loaded at startup: they
-    /// arrive asynchronously, so a baseline holding them would read the still-empty boot
-    /// state as a change and write an empty project over a good one.
-    ///
-    /// The same list as `written.binaries` in every state but one: while a load is in
-    /// flight, the app holds what has landed so far while the file names the whole list.
-    /// A write that is not about the binaries writes the file's list back rather than
-    /// this one, so a rename in that window cannot forget them. The file's list also keeps
-    /// the `unheld` ones, which this never has.
-    binaries: Vec<PathBuf>,
-    /// The binaries the file named when the project was opened that the app has not held
-    /// since: the ones the load produced nothing for. A path the load reaches always yields
-    /// an object, one saying why it shows nothing where it is missing, unreadable or not an
-    /// object at all, so these are the ones a load stopped before. Not the reader's to have
-    /// removed, so a write about the binaries puts them back where they were in the list.
-    /// One leaves this set only by being held, after which closing it is a removal like any
-    /// other.
-    unheld: Vec<PathBuf>,
-    /// The session as last written, empty for `binaries`' reason.
+    /// The session as last written. Empty to start with, deliberately not the one the
+    /// project was opened on: its tabs are restored only once the load is over, so a
+    /// baseline holding them would read the tabless boot state as a change.
     session: Session,
     /// What `session.toml` holds. The baseline above only becomes that once something has
     /// been written: until then it is the stub [`Saves::opened`] seeded, while the file
-    /// holds the session the project was opened on. A load in flight holds every session
-    /// back, so the two differ for as long as the load.
+    /// holds the session the project was opened on. The two differ until the first
+    /// session write, which a load in flight holds back.
     ///
     /// Seeded whole by `opened`, and moved with the baseline by [`Saves::wrote_session`].
     /// [`super::put_in`] asks what the files hold, so it reads this one.
@@ -135,9 +119,9 @@ impl Saves {
     }
 
     /// Note that `project` is the file the app is now in, and set every baseline to the
-    /// state the app will be in the instant afterwards. The two empty baselines are
-    /// *assigned* rather than assumed because a project switched away from leaves its own
-    /// binaries and pending session behind.
+    /// state the app will be in the instant afterwards. The empty session is *assigned*
+    /// rather than assumed because a project switched away from leaves its own pending
+    /// session behind.
     ///
     /// A `project` with no id -- written by hand, or claimed by [`super::start_new`] and not
     /// written yet -- is given one here, and the file is owed it, like a detail typed in.
@@ -155,8 +139,6 @@ impl Saves {
         self.open = Some(path);
         self.id = project.id.or_else(ProjectId::new);
         self.written = project.clone();
-        self.binaries = Vec::new();
-        self.unheld = project.binaries.clone();
         // The id and the agreement, and nothing else. Both are restored *synchronously*
         // -- the one from the file being opened, the other into `Proj` beside it -- so a
         // baseline without them would read the state the app boots into as a change.
@@ -237,27 +219,24 @@ impl Saves {
     /// changed or the change can wait for a flush.
     ///
     /// A **binaries** change goes to disk at once and carries whatever session was
-    /// pending with it, which is what keeps `session.toml` from ever naming a tab into a
-    /// binary `project.toml` no longer lists. A change to the **bookmarks** is immediate
-    /// too but writes `project.toml` alone, since it lets go of no binary. A change to the
+    /// pending with it, which is what keeps `session.toml` from naming a tab into a binary
+    /// `project.toml` no longer lists. A change to the **bookmarks** is immediate too but
+    /// writes `project.toml` alone, since it lets go of no binary. A change to the
     /// **details** alone is owed to the next flush rather than written: it lets go of no
     /// binary either, and arrives once per keystroke in a box. Everything else — a
     /// selection, a tab, a history entry — only marks the session pending. Nothing here
     /// has to say which is which: which file a field lives in is what decides it.
     ///
-    /// While a load is in flight neither `binaries` nor `session` is the app's own: the
-    /// list is the part of it that has landed, and the session has no tabs until a
-    /// restore has resolved them. So neither is compared, written or marked pending: a
-    /// project naming only what has arrived, or a tabless session, would otherwise go to
-    /// disk over the good ones. The session needs the guard as much as the list, since
-    /// pending is what the next flush writes and a close, a switch or the timer can land
-    /// inside the load. A session left pending *before* the load began describes a real
-    /// state and stays; a restore registers its load before any record runs, so the boot
-    /// state is never one. Both baselines are left where they were for the record that
-    /// follows the load, which is the one that sees the change. A binaries change the
-    /// reader makes in that window waits for the same record. A binaries write that
-    /// failed is tried again in that window, and not replaced by one for the details alone:
-    /// the pending session may name tabs in those binaries.
+    /// `binaries` is the whole list from the moment each was asked for, a file being read
+    /// held by its placeholder, so it is compared and written whether or not a load is in
+    /// flight. The **session** is not the app's own while one is: it has no tabs until a
+    /// restore has resolved them. So it is neither compared, carried nor marked pending
+    /// then, or a tabless session would go to disk over the good one -- pending is what the
+    /// next flush writes, and a close, a switch or the timer can land inside the load. A
+    /// binaries change in that window goes alone; the record after the load sees the
+    /// session. A session left pending *before* the load began describes a real state and
+    /// stays. A restore begins its load before any record runs, so the boot state is never
+    /// seen: not its session, and not its empty list of binaries.
     ///
     /// **No baseline moves here**, since a baseline is what the *file* holds and the file
     /// has not been written yet. The caller moves them with [`Saves::wrote_project`] and
@@ -280,17 +259,17 @@ impl Saves {
             id: self.id,
             ..session
         };
-        // Not a baseline: what the app has held, mid-load or not.
-        self.unheld.retain(|path| !binaries.contains(path));
-        let binaries_changed = !loading && self.binaries != binaries;
+        let binaries_changed = self.written.binaries != binaries;
         let bookmarks_changed = self.written.bookmarks != bookmarks;
         let session_changed = !loading && *self.latest() != session;
 
-        // A binaries change carries the session to disk with it; anything else leaves it
-        // pending. Decided here, once, so the two ways out below say nothing about it.
-        let carried = match binaries_changed {
-            true => Some(session),
-            false => {
+        // A binaries change carries the session to disk with it, outside a load; anything
+        // else leaves it pending. Decided here, once, so the two ways out below say nothing
+        // about it.
+        let carried = match (binaries_changed, loading) {
+            (true, false) => Some(session),
+            (true, true) => None,
+            (false, _) => {
                 if session_changed {
                     self.pending = Some(session);
                 }
@@ -298,18 +277,7 @@ impl Saves {
             }
         };
 
-        // The binaries this write is about: a change to them, or, while a load holds back
-        // the record that would see that change again, an owed write of them that failed.
-        let new_binaries = match binaries_changed {
-            true => Some(self.with_unheld(binaries)),
-            false => self
-                .owed_project
-                .as_ref()
-                .filter(|owed| loading && owed.binaries_changed)
-                .map(|owed| owed.project.binaries.clone()),
-        };
-
-        if new_binaries.is_none() && !bookmarks_changed {
+        if !binaries_changed && !bookmarks_changed {
             // The details alone, or nothing: owed, or no longer owed where they have been
             // changed back to what the file holds.
             self.owed_project = self.owed_for(details);
@@ -319,13 +287,11 @@ impl Saves {
         self.owed_project = None;
 
         Some(Recorded {
-            binaries_changed: new_binaries.is_some(),
+            binaries_changed,
             project: Project {
                 id: self.id,
                 details: details.clone(),
-                // A write that is not about the binaries keeps the ones already in the
-                // file; see [`Saves::binaries`].
-                binaries: new_binaries.unwrap_or_else(|| self.written.binaries.clone()),
+                binaries: binaries.to_vec(),
                 bookmarks: bookmarks.to_vec(),
             },
             session: carried,
@@ -344,22 +310,6 @@ impl Saves {
             },
             binaries_changed: false,
         })
-    }
-
-    /// `binaries` with each `unheld` path put back after the one before it in the file,
-    /// or first where none of those is held.
-    fn with_unheld(&self, binaries: &[PathBuf]) -> Vec<PathBuf> {
-        let mut list = binaries.to_vec();
-        let mut at = 0;
-        for path in &self.written.binaries {
-            if self.unheld.contains(path) {
-                list.insert(at, path.clone());
-                at += 1;
-            } else if let Some(held) = list.iter().position(|other| other == path) {
-                at = held + 1;
-            }
-        }
-        list
     }
 
     /// Take whatever was recorded but not written, or `None` when the two already agree.
@@ -382,20 +332,9 @@ impl Saves {
         self.owed_project = Some(owed);
     }
 
-    /// Note that `project` reached `project.toml`: it is now what the file holds. The
-    /// app's own list of binaries moves only when the change was to the binaries; any
-    /// other write put back the list the file already held. It moves to the list written
-    /// less the `unheld` ones, which is the list the app held.
-    pub(super) fn wrote_project(&mut self, project: &Project, binaries_changed: bool) {
+    /// Note that `project` reached `project.toml`: it is now what the file holds.
+    pub(super) fn wrote_project(&mut self, project: &Project) {
         self.written = project.clone();
-        if binaries_changed {
-            self.binaries = project
-                .binaries
-                .iter()
-                .filter(|path| !self.unheld.contains(path))
-                .cloned()
-                .collect();
-        }
     }
 
     /// Note that `session` reached `session.toml`: it is what the file holds, and nothing
@@ -444,10 +383,11 @@ impl Saves {
 pub(super) struct Recorded {
     /// The `project.toml` to write now.
     pub(super) project: Project,
-    /// The `session.toml` to write beside it, which only a binaries change carries.
+    /// The `session.toml` to write beside it, which only a binaries change outside a load
+    /// carries.
     pub(super) session: Option<Session>,
-    /// Whether that change was to the binaries: the one baseline `project.toml`'s write
-    /// moves only sometimes.
+    /// Whether that change was to the binaries, which a flush does not let the session
+    /// out ahead of while the write is owed.
     pub(super) binaries_changed: bool,
 }
 

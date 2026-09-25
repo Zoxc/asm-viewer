@@ -25,7 +25,8 @@ pub struct Object {
     /// ([`messages`](Self::messages)): a file that could not be read, one that is no object
     /// this reader can parse, or an archive with none of its members shown. It has no
     /// sections and no symbols. Which of these is an archive is
-    /// [`is_archive`](Self::is_archive).
+    /// [`is_archive`](Self::is_archive). Also `None` for a
+    /// [`placeholder`](Self::placeholder), a file not read yet.
     pub format: Option<BinaryFormat>,
 
     /// The machine the code in here is for, as the file's own header declares it. This is
@@ -72,6 +73,8 @@ pub struct Object {
 
     /// See [`Object::is_archive`].
     archive: bool,
+    /// See [`Object::placeholder`].
+    placeholder: bool,
 }
 
 /// Something that went wrong while an object was read, one variant per problem with the
@@ -380,6 +383,7 @@ impl Object {
             debug_info: DebugInfoCache::new(preloaded),
             placed: PlacedSymbols(placed),
             archive: false,
+            placeholder: false,
         }
     }
 
@@ -408,7 +412,23 @@ impl Object {
             debug_info: DebugInfoCache::new(None),
             placed: PlacedSymbols(Vec::new()),
             archive,
+            placeholder: false,
         }
+    }
+
+    /// A file whose parse has not landed yet, holding its place in a list until its objects
+    /// replace it: no format, no sections, no symbols and nothing to say.
+    pub fn placeholder(path: PathBuf) -> Object {
+        let name = crate::open::name_of(&path);
+        Object {
+            placeholder: true,
+            ..Object::unread(path, name, ObjectData::from(&[][..]), false, Vec::new())
+        }
+    }
+
+    /// Whether this is a [`placeholder`](Self::placeholder).
+    pub fn is_placeholder(&self) -> bool {
+        self.placeholder
     }
 
     /// Whether this stands for a whole archive, none of whose members is shown: an object

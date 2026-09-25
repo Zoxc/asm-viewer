@@ -366,10 +366,10 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         return;
     }
 
-    // Registered here and not in the task: the save observer is a task queued ahead of it,
-    // and a record that ran before the load began would mark the tabless boot session
-    // pending, for a flush during the load to write over the saved one.
-    let id = begin_load(loading, &project.binaries);
+    // Begun here and not in the task: the save observer is a task queued ahead of it, and
+    // a record that ran before the load began would see none of the project's binaries,
+    // and write that, and the tabless boot session, over the saved ones.
+    let (id, paths) = begin_load(objects, loading, project.binaries, &[]);
 
     // `spawn_forever`, not `spawn`: a task belongs to the scope that spawned it, and on a
     // switch that scope is the recent project's row, which the press unmounts -- the row
@@ -380,7 +380,7 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         // load: an object or a symbol tab is resolved against the objects by name, and
         // resolving one against a half-filled list would drop the tabs whose object had
         // not landed yet.
-        read_binaries(objects, loading, id, project.binaries, Vec::new()).await;
+        read_binaries(objects, loading, id, paths).await;
         // The project was left while its binaries were read, and its session is not the
         // one open now. Asked of the load and not of which file is open: leaving and
         // coming back to the same project starts a restore of its own.
@@ -531,8 +531,8 @@ pub(crate) fn clear_project(states: ProjectStates) {
         ..
     } = states;
 
-    // Every load at once, and before the closes: a file that has produced nothing yet is
-    // not in the objects list for the walk below to reach.
+    // Every load at once, which the closes below would stop one by one anyway: a clear
+    // is what tells a restore waiting on its load that the project was left.
     loading.write().clear();
 
     // Both reads are bound before anything writes -- the read-guard rule, and also that
