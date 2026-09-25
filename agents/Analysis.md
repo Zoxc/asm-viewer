@@ -87,8 +87,8 @@ went wrong beside its answer rather than reporting it itself, as `section_biases
 loader, which asks the same rule again, drops the second copy. The Objects list marks the row
 (`agents/Sidebar.md`). The cases reported so far: the layout running out of address space,
 functions left out because the descriptor naming their code could not be read (below), sections
-named `<section N>` because their own names would not read (below), unwind entries and exports that would
-not read (below), the three an archive's members
+named `<section N>` because their own names would not read (below), code sections left out because
+their bytes would not read or decompress, unwind entries and exports that would not read (below), the three an archive's members
 are left out for (above), and the six a whole file shows nothing for (above). Those six are
 `Severity::Fatal`, the file not loading at all, above `Severity::Error`, which is for something
 shown that is wrong. What the debug info could not read is not among them,

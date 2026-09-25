@@ -185,6 +185,13 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         "Sections named by their index because their names could not be read: 1."
     );
 
+    let code = LoadMessage::UnreadableCodeSections { count: 2 };
+    assert_eq!(code.severity(), Severity::Warning);
+    assert_eq!(
+        code.to_string(),
+        "Code sections left out because their bytes could not be read: 2."
+    );
+
     for (count, cut_short, words) in [
         (2, false, "Unwind entries that would not read: 2."),
         (0, true, "The unwind table would not read to its end."),

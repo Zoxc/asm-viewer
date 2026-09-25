@@ -846,7 +846,8 @@ pub(crate) fn parse_unshared(
 /// Every section the file states, by index. Each code section's place is decided here, once,
 /// for the line info and the code listing both ([`section_biases`]), and what went wrong
 /// deciding it is pushed onto `messages`. A section whose name will not read is kept under a
-/// made-up one, and one message counts them.
+/// made-up one, and one message counts them. A code section whose bytes will not read is left
+/// out, and another counts those.
 fn read_sections(
     file: &object::File<'_>,
     messages: &mut Vec<LoadMessage>,
@@ -855,6 +856,7 @@ fn read_sections(
     messages.extend(message);
     let format = file.format();
     let mut unnamed = 0usize;
+    let mut unread = 0usize;
     let sections = file
         .sections()
         .filter_map(|section| {
@@ -867,15 +869,18 @@ fn read_sections(
             // Only a code section's bytes are read here. Whatever reads another -- the line
             // info, the unwind tables -- reads it out of the file again, so a copy here would
             // be a second one held for the object's life. A code section whose bytes will not
-            // decompress is dropped outright: there is nothing to disassemble in it and
-            // nothing else to keep it for.
+            // decompress is dropped outright, and counted: there is nothing to disassemble in
+            // it and nothing else to keep it for.
             if section.kind() != SectionKind::Text {
                 return Some((
                     index,
                     Section::other(index, name, SectionAddress::new(section.address())),
                 ));
             }
-            let data = section_data(&section)?;
+            let Some(data) = section_data(&section) else {
+                unread = unread.saturating_add(1);
+                return None;
+            };
 
             // Only a relocatable object's relocations are collected: there each one marks a
             // field the linker has yet to fill. A linked ELF built with `--emit-relocs` keeps
@@ -916,6 +921,9 @@ fn read_sections(
         .collect();
     if unnamed > 0 {
         messages.push(LoadMessage::UnreadableSectionNames { count: unnamed });
+    }
+    if unread > 0 {
+        messages.push(LoadMessage::UnreadableCodeSections { count: unread });
     }
     sections
 }

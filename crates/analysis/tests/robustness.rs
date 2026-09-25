@@ -3,7 +3,7 @@
 
 mod common;
 
-use analysis::{parse_object, CodeListing, LoadMessage, Object};
+use analysis::{parse_object, CodeListing, LoadMessage, Object, Severity};
 use common::{
     at, caller_and_target, committed_fixture, declared_code_images, dwarf_fixture,
     elf_shared_object, elf_unreadable_section_name, elf_with_unreadable_dynamic_name,
@@ -738,6 +738,32 @@ fn a_walk_that_panics_part_way_keeps_what_it_read_and_says_so() {
     let object = parse(&elf_with_hand_written_dwarf(&[good(), bad], &symbols));
     assert_eq!(object.source_files(), vec!["good.c".into()]);
     assert_eq!(object.debug_info_skipped(), 1);
+}
+
+/// Defect: a code section whose bytes would not read was left out without a word, and its
+/// functions with it. It is still left out, and the object says so. Here `.text`'s bytes are
+/// stated past the end of the file.
+#[test]
+fn a_code_section_that_will_not_read_is_said() {
+    let mut data = elf_x86_64(
+        &[TextSymbol {
+            name: "only",
+            bytes: &[0xC3],
+        }],
+        &[],
+    );
+    common::elf_unreadable_section(&mut data, ".text");
+    let object = parse(&data);
+
+    assert!(object
+        .sections
+        .iter()
+        .all(|section| section.code().is_none()));
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableCodeSections { count: 1 }]
+    );
+    assert_eq!(object.worst(), Some(Severity::Warning));
 }
 
 /// Defect: a subprogram whose `DW_AT_low_pc` or `DW_AT_high_pc` would not read as an address

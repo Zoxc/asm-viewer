@@ -92,6 +92,9 @@ pub enum LoadMessage {
     /// `count` sections are called `<section N>` by their index, because their names could
     /// not be read. They are kept, code and all.
     UnreadableSectionNames { count: usize },
+    /// `count` code sections were left out because their bytes would not read or
+    /// decompress. Their functions are not shown.
+    UnreadableCodeSections { count: usize },
     /// `count` entries of a linked image's unwind table (`.eh_frame`, `.pdata`) would not
     /// read and were skipped, and, where `cut_short`, the table would not read to its end.
     /// The functions they state may be missing or of estimated length.
@@ -163,6 +166,8 @@ impl LoadMessage {
             LoadMessage::UnreadableDescriptors { .. } => Severity::Warning,
             // Only the name is wrong, and it says so.
             LoadMessage::UnreadableSectionNames { .. } => Severity::Warning,
+            // What is shown is right; the code in those sections is missing.
+            LoadMessage::UnreadableCodeSections { .. } => Severity::Warning,
             // What is shown is right; some functions are missing or of estimated length.
             LoadMessage::UnreadableUnwindEntries { .. } => Severity::Warning,
             // What is shown is right; some names are missing.
@@ -202,6 +207,10 @@ impl fmt::Display for LoadMessage {
             LoadMessage::UnreadableSectionNames { count } => write!(
                 f,
                 "Sections named by their index because their names could not be read: {count}."
+            ),
+            LoadMessage::UnreadableCodeSections { count } => write!(
+                f,
+                "Code sections left out because their bytes could not be read: {count}."
             ),
             LoadMessage::UnreadableUnwindEntries { count, cut_short } => {
                 let rest = "The unwind table would not read to its end.";
