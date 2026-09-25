@@ -700,7 +700,9 @@ exactly the first-question cost the lazy path had before, and holding every modu
 from the walk would only duplicate what the symbols now carry as their declared size while the
 stream still had to be read for its lines. The symbol records stream (`pdb2`'s `global_symbols`, the
 one stream the publics are in, 229 318 records in `rustc_driver`'s) is read whole through
-`BoundedFile` and dropped with the walk, since nothing later asks it anything. The whole of it
+`BoundedFile` and dropped with the walk, since nothing later asks it anything. One that will not
+open, or whose records stop reading part way, is counted as one part skipped; a PDB with no such
+stream has no publics to lose. The whole of it
 (pick, open, match, both walks) is under the seam's `without_panicking`, so a `pdb2` panic anywhere
 in it is "no PDB at parse" and the lazy path is left to try. A record is parsed only if it is a
 procedure or a public, told by its kind before `pdb2` reads anything else of it (below). **What is not read**:

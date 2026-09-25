@@ -1052,6 +1052,33 @@ fn a_pdb_whose_dbi_will_not_read_is_counted() {
     assert_eq!(names(&object), unwind_names());
 }
 
+/// A symbol records stream that will not open, or whose records stop reading part way, is
+/// counted: the publics it loses, before without a word. The third pair's only name from a
+/// public is `helper`'s, so it goes, and the procedures still name the other three. The DBI
+/// names the stream at 20; in the second case its first record states a length of 1, too
+/// short to hold a kind.
+#[test]
+fn a_symbol_records_stream_that_will_not_read_is_counted() {
+    let dll = committed_fixture(PUBLIC_DLL);
+    let pdb = committed_fixture("line_fixture_public.pdb");
+    for case in ["missing", "cut"] {
+        let mut msf = Msf::new(&pdb);
+        match case {
+            "missing" => msf.write(DBI, 20, &0x7FFEu16.to_le_bytes()),
+            _ => {
+                let records = usize::from(msf.u16_at(DBI, 20));
+                msf.write(records, 0, &1u16.to_le_bytes());
+            }
+        }
+        let dir = scratch(&format!("records_{case}"));
+        std::fs::write(dir.join("line_fixture_public.pdb"), &msf.bytes).unwrap();
+        let object = parse_at(&dll, dir.join(PUBLIC_DLL));
+
+        assert_eq!(object.debug_info_skipped(), 1, "{case}");
+        assert_eq!(names(&object), ["add", "sum_to", "twice"], "{case}");
+    }
+}
+
 /// The system allocator, refusing any one request past 1 GiB. Nothing a test here reads
 /// comes near that, so a refusal is a count `pdb2` believed ([`CALLEES`]); refused, it is an
 /// abort that fails the run at once, where granted it would have been the machine's memory.

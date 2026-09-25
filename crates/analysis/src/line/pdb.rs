@@ -103,7 +103,8 @@ pub(super) struct Pdb {
     every: OnceLock<usize>,
 
     /// The modules whose symbols or rows were read only up to something that would not read,
-    /// by index, and the first module a module list that stops short lost ([`Pdb::modules`]).
+    /// by index, the first module a module list that stops short lost ([`Pdb::modules`]),
+    /// and the publics ([`GLOBALS`]).
     skipped: Skipped,
 
     /// How many walks of the DBI module list this PDB has started, so a test can pin that a
@@ -142,6 +143,11 @@ const PROCEDURES: [pdb2::SymbolKind; 8] = [
     0x1155, // S_LPROC32_DPC
     0x1156, // S_LPROC32_DPC_ID
 ];
+
+/// The key [`Skipped`] counts the symbol records stream under, where the publics are lost in
+/// whole or in part. No module has it: a module's index is less than the count of records in
+/// the DBI's module list, each of which is more than one byte.
+const GLOBALS: u64 = u64::MAX;
 
 /// The symbol record kinds that are publics, `S_PUB32` and its `_ST` spelling: the other
 /// kind the walks parse ([`PROCEDURES`]).
@@ -223,17 +229,31 @@ impl Pdb {
         // stream holds them. The stream is read whole once — it is the one stream the
         // publics are in — and dropped with the walk; a record that will not parse is
         // skipped, and a malformed tail stops the walk where it goes wrong and keeps what
-        // was read. Which of the two flags a linker sets is its own: `rust-lld` marks a
+        // was read. A stream that will not open, and a tail that will not read, are counted
+        // ([`GLOBALS`]); a PDB with no such stream has no publics to lose. Which of the two flags a linker sets is its own: `rust-lld` marks a
         // function `function` alone, so either is taken, and the caller's code-section
         // lookup is what keeps a public out of the data sections. A public's name is the
         // linker's, decorated (`?add@@YAHHH@Z`, `_ZN4core3ptr…`) or plain for C, so it goes
         // through the demanglers; and it has no length. Only a public is parsed
         // ([`PUBLICS`]).
-        let Ok(table) = pdb.global_symbols() else {
-            return declared;
+        let table = match pdb.global_symbols() {
+            Ok(table) => table,
+            Err(pdb2::Error::GlobalSymbolsNotFound) => return declared,
+            Err(_) => {
+                self.skipped.note(GLOBALS);
+                return declared;
+            }
         };
         let mut symbols = table.iter();
-        while let Ok(Some(symbol)) = symbols.next() {
+        loop {
+            let symbol = match symbols.next() {
+                Ok(Some(symbol)) => symbol,
+                Ok(None) => break,
+                Err(_) => {
+                    self.skipped.note(GLOBALS);
+                    break;
+                }
+            };
             if !PUBLICS.contains(&symbol.raw_kind()) {
                 continue;
             }
