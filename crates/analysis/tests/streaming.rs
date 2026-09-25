@@ -432,6 +432,85 @@ fn an_archive_passes_over_metadata_under_any_name() {
     assert_eq!(object.messages, []);
 }
 
+/// rustc's metadata wrapped in an object of `format`, as rustc writes `lib.rmeta` and
+/// `lib.rmeta-link` on the targets it can: a relocatable with one section of that name, which
+/// the linker drops, and no code. With `code`, a function beside it.
+fn wrapped_metadata(format: object::BinaryFormat, section: &[u8], code: bool) -> Vec<u8> {
+    use object::write;
+    use object::{
+        Architecture, BinaryFormat, Endianness, SectionFlags, SectionKind, SymbolFlags, SymbolKind,
+        SymbolScope,
+    };
+    let mut obj = write::Object::new(format, Architecture::X86_64, Endianness::Little);
+    let segment = obj.segment_name(write::StandardSegment::Debug).to_vec();
+    let id = obj.add_section(segment, section.to_vec(), SectionKind::Debug);
+    obj.append_section_data(id, b"rust\0\0\0\x0a", 1);
+    if format == BinaryFormat::Elf {
+        obj.section_mut(id).flags = SectionFlags::Elf {
+            sh_type: object::elf::SHT_PROGBITS,
+            sh_flags: object::elf::SHF_EXCLUDE,
+        };
+    }
+    if code {
+        let text = obj.section_id(write::StandardSection::Text);
+        let value = obj.append_section_data(text, &[0xC3], 1);
+        obj.add_symbol(write::Symbol {
+            name: b"function".to_vec(),
+            value,
+            size: 1,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(text),
+            flags: SymbolFlags::None,
+        });
+    }
+    obj.write().expect("writing the wrapped metadata")
+}
+
+/// Wrapped metadata parses as an object, one with no code, and is left out of an archive
+/// without a word under any name, as bare metadata is. An object with code beside a `.rmeta`
+/// section is not metadata, and is read.
+#[test]
+fn an_archive_passes_over_wrapped_metadata() {
+    use object::BinaryFormat::{Coff, Elf, MachO};
+    for format in [Elf, Coff, MachO] {
+        let objects = objects_of(archive(&[
+            ("first.o", &caller_and_target()),
+            ("lib.rmeta", &wrapped_metadata(format, b".rmeta", false)),
+            (
+                "lib.rmeta-link",
+                &wrapped_metadata(format, b".rmeta-link", false),
+            ),
+            ("renamed.o", &wrapped_metadata(format, b".rmeta", false)),
+            ("beside.o", &wrapped_metadata(format, b".rmeta", true)),
+        ]));
+        let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+        assert_eq!(names, ["first.o", "beside.o"], "{format:?}");
+        assert_eq!(objects[1].symbols.len(), 1, "{format:?}");
+        assert_eq!(objects[1].messages, [], "{format:?}");
+    }
+}
+
+/// Wrapped metadata opened on its own is named as bare metadata is, rather than shown as an
+/// object with nothing in it.
+#[test]
+fn wrapped_metadata_on_its_own_is_named() {
+    use analysis::{LoadMessage, Unsupported};
+    let (messages, archive) = stand_in(objects_of(wrapped_metadata(
+        object::BinaryFormat::Elf,
+        b".rmeta",
+        false,
+    )));
+    assert_eq!(
+        messages,
+        [LoadMessage::Unsupported {
+            format: Unsupported::RustMetadata
+        }]
+    );
+    assert!(!archive);
+}
+
 /// A cgo package's archive may also hold `preferlinkext` and `dynimportfail`, the empty files
 /// the go command writes to tell Go's linker to link externally. Neither is code, so both are
 /// left out without a word.

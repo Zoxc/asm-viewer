@@ -22,7 +22,9 @@ one, since both start `CAFEBABE`, told apart as LLVM's `identify_magic` does, by
 four bytes are under 43; a dyld shared cache, a lone Windows import entry,
 kinds told by a magic `object` does not know here: LLVM bitcode, a WebAssembly module
 (`object`'s `wasm` feature is off), rustc's metadata opened on its own (`rust\0\0\0`, an
-`.rmeta`; in an rlib it is left out without a word, below), a PDB (its MSF 7.00 magic; it is
+`.rmeta`; wrapped in an object, as an rlib holds it, it is told by its sections, below, and
+named rather than shown as an object with nothing in it; in an rlib it is left out without a
+word, below), a PDB (its MSF 7.00 magic; it is
 read beside its image, never as a binary), and one in the old 2.00 format, which is not read
 beside its image either, since `object` follows only the RSDS CodeView record and such an
 image names it by an NB10 one, a GNU ld script, as a
@@ -76,10 +78,12 @@ a Go package's code in Go's own object format (`go object `), which is code, so 
 rather than passed over (`LoadMessage::UnsupportedMembers`), and the rest
 (`LoadMessage::UnreadableMembers`); each a count. Four
 kinds of member are expected not to be code and are left out without a word: rustc's metadata in an
-rlib, which is an object on the targets rustc can wrap it for and bare bytes elsewhere, told by
-its name (`lib.rmeta`, and `lib.rmeta-link`, the list of the rlib's objects, which has no magic)
-and, bare, by its magic too (`rust\0\0\0`), so older rustc's `rust.metadata.bin` or a rename is
-passed over as well; the Go compiler's export data in a Go package's archive (`__.PKGDEF`, told
+rlib, which is an object on the targets rustc can wrap it for and bare bytes elsewhere. Bare, it
+is told by its name (`lib.rmeta`, and `lib.rmeta-link`, the list of the rlib's objects, which has
+no magic) and by its magic too (`rust\0\0\0`), so older rustc's `rust.metadata.bin` or a rename
+is passed over as well. Wrapped, it parses, so it is told by its sections instead: one named
+`.rmeta` or `.rmeta-link` and no code, whatever the member is called; an object with code beside
+such a section is read. Then the Go compiler's export data in a Go package's archive (`__.PKGDEF`, told
 by its name, since it starts `go object ` as the code does), the empty `preferlinkext` and
 `dynimportfail` the go command packs into a cgo package's archive to tell Go's linker to link
 externally (by name, as `cmd/link` finds them), and an import library's short entries, each only

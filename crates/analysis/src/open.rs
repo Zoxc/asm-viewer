@@ -132,19 +132,28 @@ fn open_one_file(
                 true => Err(error),
                 false => parse_unshared(file.clone(), name.clone(), path.to_path_buf()),
             };
-            let object = object.unwrap_or_else(|error| {
-                let message = match kind {
-                    Ok(kind) => match unsupported(kind, file.bytes()) {
-                        Some(format) => LoadMessage::Unsupported { format },
-                        None => LoadMessage::Malformed {
-                            format: promised(kind),
-                            error: error.to_string(),
+            let object = match object {
+                // Named as bare metadata is, since it is the same file and holds no code.
+                Ok(object) if wrapped_metadata(&object) => {
+                    let message = LoadMessage::Unsupported {
+                        format: Unsupported::RustMetadata,
+                    };
+                    Object::unread(path.to_path_buf(), name, file, false, vec![message])
+                }
+                object => object.unwrap_or_else(|error| {
+                    let message = match kind {
+                        Ok(kind) => match unsupported(kind, file.bytes()) {
+                            Some(format) => LoadMessage::Unsupported { format },
+                            None => LoadMessage::Malformed {
+                                format: promised(kind),
+                                error: error.to_string(),
+                            },
                         },
-                    },
-                    Err(_) => told_by_magic(file.bytes()).unwrap_or(LoadMessage::NotAnObject),
-                };
-                Object::unread(path.to_path_buf(), name, file, archive, vec![message])
-            });
+                        Err(_) => told_by_magic(file.bytes()).unwrap_or(LoadMessage::NotAnObject),
+                    };
+                    Object::unread(path.to_path_buf(), name, file, archive, vec![message])
+                }),
+            };
             emit(Progress::Parsed(Arc::new(object)))?;
             return emit(Progress::Finished(path.to_path_buf()));
         }
@@ -189,6 +198,7 @@ fn open_one_file(
         let kind = unsupported_member(data.bytes());
         let name = String::from_utf8_lossy(member.name()).into_owned();
         match parse_unshared(data, name, path.to_path_buf()) {
+            Ok(object) if wrapped_metadata(&object) => {}
             Ok(object) => {
                 if let Some(previous) = held.replace(object) {
                     emit(Progress::Parsed(Arc::new(previous)))?;
@@ -558,6 +568,16 @@ fn not_code(name: &[u8], bytes: &[u8]) -> bool {
         || name == b"dynimportfail"
         || bytes.starts_with(RUST_METADATA_MAGIC)
         || matches!(FileKind::parse(bytes), Ok(FileKind::CoffImport))
+}
+
+/// Whether `object` is rustc's metadata wrapped in an object file, as rustc writes
+/// `lib.rmeta` and `lib.rmeta-link` into an rlib on the targets it can: a section named
+/// `.rmeta` or `.rmeta-link` and no code. It is told by its sections and not by its name, so
+/// it is found under any name, and an object with code beside such a section is still read.
+fn wrapped_metadata(object: &Object) -> bool {
+    let sections = || object.sections.iter();
+    sections().any(|section| section.name == ".rmeta" || section.name == ".rmeta-link")
+        && sections().all(|section| section.code().is_none())
 }
 
 /// [`open_files_streaming`] with the objects collected, for a caller with nowhere to put them

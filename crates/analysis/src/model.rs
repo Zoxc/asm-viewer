@@ -210,8 +210,9 @@ pub enum Unsupported {
     CoffMachine { machine: u16 },
     /// A GNU ld script, which a distribution installs in place of a shared library's `.so`.
     LinkerScript,
-    /// rustc's metadata for a crate, bare, as `--emit=metadata` writes it to an `.rmeta`.
-    /// Only ever a file on its own: an archive member of it is passed over without a word.
+    /// rustc's metadata for a crate: bare, as `--emit=metadata` writes it to an `.rmeta`, or
+    /// wrapped in an object with no code, as rustc puts it in an rlib. Only ever a file on its
+    /// own: an archive member of it is passed over without a word.
     RustMetadata,
     /// A PDB: a Windows image's debug info, read beside the image rather than on its own.
     Pdb,
