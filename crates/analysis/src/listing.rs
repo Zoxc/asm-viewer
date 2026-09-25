@@ -19,7 +19,7 @@
 //! Nothing here is cached: the listing is a pure function of the object, and whoever asks
 //! holds the answer.
 
-use crate::model::{covering, PlacedSymbol};
+use crate::model::{covering, drawn_sections, PlacedSymbol};
 use crate::{Assembly, Bias, Object, PlacedAddress, Section, SectionAddress, SymbolData};
 use object::Endianness;
 use std::{ops::Range, sync::Arc};
@@ -212,7 +212,8 @@ impl Listing {
 /// Sections are in placed order. A section whose bytes have no place is left out: one holding
 /// no code, one with no bytes (gcc leaves an empty `.text` beside its `.text.<name>`s), and
 /// one that does not fit in the address space. So is one whose placed range overlaps the
-/// section before it, which a file's headers can claim but nothing can draw.
+/// section before it, which a file's headers can claim but nothing can draw. Which are kept
+/// is `drawn_sections`, which `Object::symbol_at_placed` follows too.
 pub struct CodeListing {
     sections: Vec<Placed>,
     /// `starts[s]` is the flat index of section `s`'s first stretch; one more entry holds
@@ -263,28 +264,13 @@ impl CodeListing {
     /// The skeleton of every code section, decoding nothing: each section's [`Listing`]
     /// over its own run of [`Object::placed`].
     pub fn new(object: &Object) -> Self {
-        let mut placed: Vec<Placed> = object
-            .sections
-            .iter()
-            .filter_map(|section| {
-                let range = section.placed_range()?;
-                Some(Placed {
-                    listing: Listing::new(object, section.clone(), range.clone()),
-                    range,
-                })
+        let sections: Vec<Placed> = drawn_sections(&object.sections)
+            .into_iter()
+            .map(|(section, range)| Placed {
+                listing: Listing::new(object, section, range.clone()),
+                range,
             })
             .collect();
-        placed.sort_by_key(|placed| (placed.range.start, placed.listing.section().index.0));
-
-        let mut sections: Vec<Placed> = Vec::with_capacity(placed.len());
-        for next in placed {
-            if sections
-                .last()
-                .is_none_or(|last| last.range.end <= next.range.start)
-            {
-                sections.push(next);
-            }
-        }
         // Every section's stretches numbered end to end, in placed order: the sections
         // are fixed from here on, so the numbering is too.
         let mut starts = Vec::with_capacity(sections.len() + 1);

@@ -10,6 +10,7 @@
 //! and no signature here says `dyn`, so a backend's formatting and span-mapping can inline
 //! into the per-instruction decode loop.
 
+use crate::model::first_by_name;
 use crate::{Extent, Object, Section, SectionAddress, SymbolData};
 use object::{Architecture, RelocationTarget};
 use std::{
@@ -136,16 +137,24 @@ impl<'a> Code<'a> {
     /// object rather than the biases matters: a layout that ran out of room leaves some
     /// sections unmoved and on top of each other. A linked image's addresses are real, so
     /// there a call into another code section (`.init.text` into `.text`) is named.
+    ///
+    /// **A target inside this section's own bytes is named by this section's symbols only**,
+    /// in either kind of file: those are the bytes the call reaches, even where a header
+    /// places another section over them.
     pub fn symbol_at_local(&self, address: SectionAddress) -> Option<Arc<SymbolData>> {
         let section = self.section?;
-        let symbol = self.object.symbol_at_placed(section.place(address))?;
-        if self.object.relocatable {
-            let home = symbol.section.as_ref()?;
-            if !std::ptr::eq(Arc::as_ptr(home), section) {
-                return None;
-            }
-        }
-        Some(symbol.clone())
+        let placed = section.place(address);
+        let own = self.object.relocatable
+            || section
+                .placed_range()
+                .is_some_and(|range| range.contains(&placed));
+        let symbol = if own {
+            let entries = self.object.placed_at(placed).iter();
+            first_by_name(entries.filter(|entry| entry.is_in(section)))
+        } else {
+            self.object.symbol_at_placed(placed)
+        };
+        symbol.cloned()
     }
 }
 

@@ -1083,11 +1083,10 @@ fn a_listing_reads_its_bytes_in_the_objects_byte_order() {
     }
 }
 
-/// A linked image whose headers put `.text.b` inside `.text`. The listing keeps `.text`
-/// and drops `.text.b`. `.text`'s stretches are its own symbols only: `b` is not a label
-/// in it, and `a1`, which states no size, runs on to `a2`.
-#[test]
-fn a_section_lists_only_its_own_symbols_under_another_placed_on_it() {
+/// A linked image whose headers put `.text.b` inside `.text`: `.text` is `text`, with `a1`
+/// at 0x1000 and `a2` at 0x1008, and `.text.b` is `b` at 0x1004, calling itself. The
+/// listing keeps `.text` and drops `.text.b`.
+fn overlapped(text: &[u8]) -> Arc<Object> {
     use common::{elf_image, ElfImage, ImageSection, ImageSymbol};
 
     let symbol = |name, value, section| ImageSymbol {
@@ -1097,7 +1096,7 @@ fn a_section_lists_only_its_own_symbols_under_another_placed_on_it() {
         kind: object::elf::STT_FUNC,
         section: Some(section),
     };
-    let object = parse(&elf_image(ElfImage {
+    parse(&elf_image(ElfImage {
         is_64: true,
         big_endian: false,
         machine: object::elf::EM_X86_64,
@@ -1108,13 +1107,14 @@ fn a_section_lists_only_its_own_symbols_under_another_placed_on_it() {
                 name: ".text",
                 address: 0x1000,
                 code: true,
-                bytes: &[0x90; 0x10],
+                bytes: text,
             },
             ImageSection {
                 name: ".text.b",
                 address: 0x1004,
                 code: true,
-                bytes: &[0xC3; 4],
+                // `call 0x1004` from 0x1004, then `ret`.
+                bytes: &[0xE8, 0xFB, 0xFF, 0xFF, 0xFF, 0xC3],
             },
         ],
         symbols: &[
@@ -1123,7 +1123,14 @@ fn a_section_lists_only_its_own_symbols_under_another_placed_on_it() {
             symbol("a2", 0x1008, 0),
         ],
         dynamic: &[],
-    }));
+    }))
+}
+
+/// `.text`'s stretches are its own symbols only: `b` is not a label in it, and `a1`, which
+/// states no size, runs on to `a2`.
+#[test]
+fn a_section_lists_only_its_own_symbols_under_another_placed_on_it() {
+    let object = overlapped(&[0x90; 0x10]);
 
     let code = CodeListing::new(&object);
     assert_eq!(placed_names(&code), [".text"]);
@@ -1132,4 +1139,31 @@ fn a_section_lists_only_its_own_symbols_under_another_placed_on_it() {
     assert_eq!(ranges(listing), [(0x1000, 0x1008), (0x1008, 0x1010)]);
     let a1 = code.decode(&object, 0).expect("a1's stretch");
     assert_eq!(a1.gap, None, "a1's extent runs to a2, not to b");
+}
+
+/// The listing shows `a1`'s bytes at 0x1004, so nothing names that address `b`: not a call
+/// from `a1`, and not a place in the object's code. `b`'s own code still calls `b` by name.
+#[test]
+fn an_address_under_another_section_is_not_named_by_its_symbol() {
+    // `call 0x1004`, from 0x1000: the displacement is -1 from the next instruction.
+    let mut text = vec![0xE8, 0xFF, 0xFF, 0xFF, 0xFF];
+    text.resize(0x10, 0x90);
+    let object = overlapped(&text);
+
+    let callee = |name| {
+        let assembly = common::symbol(&object, name).assembly(&object).expect(name);
+        let call = &assembly.instructions[0];
+        call.symbol().map(|symbol| symbol.name.clone())
+    };
+    assert_eq!(callee("a1"), None);
+    assert_eq!(callee("b").as_deref(), Some("b"));
+
+    let name_at = |at| {
+        object
+            .symbol_at_placed(placed_at(at))
+            .map(|symbol| &*symbol.name)
+    };
+    assert_eq!(name_at(0x1000), Some("a1"));
+    assert_eq!(name_at(0x1004), None);
+    assert_eq!(name_at(0x1008), Some("a2"));
 }

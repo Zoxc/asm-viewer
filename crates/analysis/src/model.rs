@@ -310,17 +310,47 @@ pub(crate) struct PlacedSymbol {
     pub(crate) placed: PlacedAddress,
     pub(crate) index: SymbolIndex,
     pub(crate) symbol: Arc<SymbolData>,
+    /// Whether one of the [`drawn_sections`] other than the symbol's own covers `placed`:
+    /// the listing of all the code shows that section's bytes here, not this symbol's.
+    pub(crate) hidden: bool,
 }
 
 impl PlacedSymbol {
     /// Whether the symbol is in `section`. Two code sections can overlap where they are
     /// placed, so an entry inside a section's placed range is not always its own.
-    pub(crate) fn is_in(&self, section: &Arc<Section>) -> bool {
+    pub(crate) fn is_in(&self, section: &Section) -> bool {
         self.symbol
             .section
             .as_ref()
-            .is_some_and(|own| Arc::ptr_eq(own, section))
+            .is_some_and(|own| std::ptr::eq(Arc::as_ptr(own), section))
     }
+}
+
+/// The code sections a listing of all the code draws, each with its placed range, in placed
+/// order: every section whose bytes have a place, less any whose range overlaps the one
+/// drawn before it. Of two starting at one address, the lower index comes first.
+///
+/// [`CodeListing`](crate::CodeListing) draws these, and [`Object::symbol_at_placed`] skips
+/// the symbols they hide, so a name never disagrees with the code shown at its address.
+pub(crate) fn drawn_sections(
+    sections: &[Arc<Section>],
+) -> Vec<(Arc<Section>, Range<PlacedAddress>)> {
+    let mut placed: Vec<_> = sections
+        .iter()
+        .filter_map(|section| Some((section.clone(), section.placed_range()?)))
+        .collect();
+    placed.sort_by_key(|(section, range)| (range.start, section.index.0));
+
+    let mut drawn: Vec<(Arc<Section>, Range<PlacedAddress>)> = Vec::with_capacity(placed.len());
+    for next in placed {
+        if drawn
+            .last()
+            .is_none_or(|(_, last)| last.end <= next.1.start)
+        {
+            drawn.push(next);
+        }
+    }
+    drawn
 }
 
 impl Object {
@@ -373,14 +403,19 @@ impl Object {
             .into_iter()
             .map(|(_, symbol)| symbol.clone())
             .collect();
+        let drawn = drawn_sections(&sections);
         let mut placed: Vec<_> = symbols
             .iter()
             .filter_map(|(&index, symbol)| {
-                Some(PlacedSymbol {
+                let mut entry = PlacedSymbol {
                     placed: symbol.code_place()?,
                     index,
                     symbol: symbol.clone(),
-                })
+                    hidden: false,
+                };
+                entry.hidden = covering(&drawn, |(_, range)| range.clone(), entry.placed)
+                    .is_some_and(|at| !entry.is_in(&drawn[at].0));
+                Some(entry)
             })
             .collect();
         // The map's order is the hash seed's; the file's is the symbol index.
@@ -504,6 +539,10 @@ impl Object {
     /// for one address answer the first by name — the order `symbols_sorted` holds — so the
     /// answer is the same however the map behind them was iterated.
     ///
+    /// Where two code sections overlap, a symbol of the one the listing of all the code
+    /// leaves out ([`drawn_sections`]) is skipped where the other covers it: the name has
+    /// to be of the code that listing shows there.
+    ///
     /// **Named for the space it answers in**, as `Code::symbol_at_local` is for its own:
     /// the address alone is only a key with the bias in it, and in a relocatable object
     /// every code section starts at 0. A caller holding an address in a section's own terms
@@ -512,14 +551,26 @@ impl Object {
     /// too: the bias makes two sections two places, but a number past one section's end is
     /// still just a number.
     pub fn symbol_at_placed(&self, placed: PlacedAddress) -> Option<&Arc<SymbolData>> {
+        first_by_name(self.placed_at(placed).iter().filter(|entry| !entry.hidden))
+    }
+
+    /// The entries of [`placed`](Self::placed) at exactly `placed`.
+    pub(crate) fn placed_at(&self, placed: PlacedAddress) -> &[PlacedSymbol] {
         let all = self.placed_symbols();
         let start = all.partition_point(|entry| entry.placed < placed);
         let end = all.partition_point(|entry| entry.placed <= placed);
-        all[start..end.max(start)]
-            .iter()
-            .map(|entry| &entry.symbol)
-            .min_by(|a, b| a.name.cmp(&b.name))
+        &all[start..end.max(start)]
     }
+}
+
+/// The symbol of `entries` first by name: the one of two names for an address that
+/// [`Object::symbol_at_placed`] answers.
+pub(crate) fn first_by_name<'a>(
+    entries: impl Iterator<Item = &'a PlacedSymbol>,
+) -> Option<&'a Arc<SymbolData>> {
+    entries
+        .map(|entry| &entry.symbol)
+        .min_by(|a, b| a.name.cmp(&b.name))
 }
 
 /// A digest of a whole file's bytes: what tells "the same binary" from "one rebuilt

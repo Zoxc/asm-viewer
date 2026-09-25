@@ -975,7 +975,12 @@ code sections can still overlap -- a linked image's headers can claim it, and a 
 sections the layout could not place apart stay on top of each other -- so each reader keeps to its
 own section's entries: a listing labels only its own symbols, and an estimate stops only at its own
 section's next one. A foreign label used to cut a stretch short and decode the other section's bytes
-inside this one's. `CodeListing` draws only the first of two sections that overlap. `Object::new` builds the index from `symbols`, so it
+inside this one's. `CodeListing` draws only the first of two sections that overlap
+(`drawn_sections`), and the index marks each entry that a drawn section other than its own
+covers (`hidden`). `symbol_at_placed` skips those, so a place in the code is never named by a
+symbol whose bytes the listing does not show there. A call keeps to its own section's symbols
+wherever it lands inside that section's bytes, so a dropped section's own code still names its
+own calls. `Object::new` builds the index from `symbols`, so it
 cannot disagree with them, and nothing rewrites it afterwards — which is what lets the source index
 name a symbol by its position in it. It is built there, on the loading thread, and not lazily on
 first use, because a render reaches it: the Back/Forward tooltip names a restored `Place::Code` stop
