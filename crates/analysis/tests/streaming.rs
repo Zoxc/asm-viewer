@@ -430,6 +430,30 @@ fn a_file_that_yields_nothing_says_why() {
     );
 }
 
+/// A file of a kind `object` recognizes and this reader does not read says which kind, and
+/// that it did not load, rather than that it would not parse. Each is its bare magic:
+/// `object` reads 16 bytes to tell the kind.
+#[test]
+fn a_kind_this_reader_does_not_read_says_so() {
+    use analysis::{LoadMessage, Severity, Unsupported};
+    let padded = |magic: &[u8]| {
+        let mut bytes = magic.to_vec();
+        bytes.resize(16, 0);
+        bytes
+    };
+    for (magic, format) in [
+        (&b"\xca\xfe\xba\xbe"[..], Unsupported::FatMachO),
+        (&b"\xca\xfe\xba\xbf"[..], Unsupported::FatMachO),
+        (&b"dyld_v1 "[..], Unsupported::DyldCache),
+        (&b"\0\0\xff\xff\0\0"[..], Unsupported::CoffImport),
+    ] {
+        let (messages, archive) = stand_in(objects_of(padded(magic)));
+        assert_eq!(messages, [LoadMessage::Unsupported { format }]);
+        assert_eq!(messages[0].severity(), Severity::Fatal);
+        assert!(!archive);
+    }
+}
+
 /// A path that could not be read is shown to say why, with the reason the open or the read
 /// gave: a file that is not there, and one that is not a regular file.
 #[test]

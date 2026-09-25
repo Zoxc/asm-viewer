@@ -270,23 +270,23 @@ fn told(object: &Object) -> String {
 }
 
 /// The mark at the end of an Objects row whose object, or an object under it, had something
-/// go wrong while it was read: a triangle, red for an error. [`None`] where nothing did.
+/// go wrong while it was read: a triangle, red for an error, and a red cross for a file that
+/// did not load at all. [`None`] where nothing did.
 ///
 /// `words` is what went wrong, which the row's tooltip says too. It is set as the mark's
 /// accessibility label, a glyph being a raster that says nothing the element tree can read:
 /// that is what a screen reader reads and what the headless tests find the mark by.
 fn load_mark(worst: Option<Severity>, words: &str) -> Option<Element> {
-    let colour = match worst? {
-        Severity::Error => palette().error_fg,
-        Severity::Warning => palette().icon_fg,
+    let triangle = ("triangle-alert", lucide::triangle_alert());
+    let (icon, colour) = match worst? {
+        Severity::Fatal => (("circle-x", lucide::circle_x()), palette().error_fg),
+        Severity::Error => (triangle, palette().error_fg),
+        Severity::Warning => (triangle, palette().icon_fg),
     };
     Some(
         rect()
             .a11y_alt(words)
-            .child(glyph_in(
-                ("triangle-alert", lucide::triangle_alert()),
-                colour,
-            ))
+            .child(glyph_in(icon, colour))
             .into_element(),
     )
 }

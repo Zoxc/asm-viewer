@@ -1,6 +1,6 @@
 use super::{
     covering, Bias, FirstCovering, LoadMessage, Object, ObjectData, Section, SectionAddress,
-    Severity, SymbolData,
+    Severity, SymbolData, Unsupported,
 };
 use object::{Architecture, BinaryFormat, SectionIndex, SymbolIndex};
 use std::{
@@ -230,6 +230,26 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
             "This file would not parse: Invalid ELF header.",
         ),
         (
+            LoadMessage::Unsupported {
+                format: Unsupported::FatMachO,
+            },
+            "This is a universal (fat) Mach-O binary, which this viewer does not read. \
+             `lipo -thin` extracts one architecture from it.",
+        ),
+        (
+            LoadMessage::Unsupported {
+                format: Unsupported::DyldCache,
+            },
+            "This is a dyld shared cache, which this viewer does not read.",
+        ),
+        (
+            LoadMessage::Unsupported {
+                format: Unsupported::CoffImport,
+            },
+            "This is a Windows import entry, which only names a function a DLL exports and \
+             holds no code.",
+        ),
+        (
             LoadMessage::CouldNotRead {
                 error: "not a regular file".to_owned(),
             },
@@ -237,7 +257,7 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         ),
     ];
     for (message, words) in whole {
-        assert_eq!(message.severity(), Severity::Warning);
+        assert_eq!(message.severity(), Severity::Fatal);
         assert_eq!(message.to_string(), words);
     }
 }

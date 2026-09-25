@@ -107,6 +107,8 @@ pub enum LoadMessage {
     /// The file starts as an object file or an archive of a kind `object` knows, and `error`
     /// is what `object` said when it would not parse.
     Malformed { error: String },
+    /// The file is of a kind `object` knows but this reader does not read, as `format` says.
+    Unsupported { format: Unsupported },
     /// The file could not be read at all, for the reason `error` gives: it is missing, it
     /// is not a regular file, it may not be read, or it changed while it was read.
     CouldNotRead { error: String },
@@ -117,6 +119,18 @@ pub enum LoadMessage {
     DebugInfoSkipped { count: usize },
 }
 
+/// A kind of file `object` recognizes that this reader does not read
+/// ([`LoadMessage::Unsupported`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unsupported {
+    /// A universal Mach-O: one binary per architecture in one file.
+    FatMachO,
+    /// Apple's dyld shared cache, every system library linked into one file.
+    DyldCache,
+    /// A Windows import library's short import entry, on its own rather than in an archive.
+    CoffImport,
+}
+
 /// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Severity {
@@ -124,6 +138,8 @@ pub enum Severity {
     Warning,
     /// Something that makes part of what is shown wrong.
     Error,
+    /// The file did not load at all: nothing of it is shown but its name.
+    Fatal,
 }
 
 impl LoadMessage {
@@ -139,12 +155,12 @@ impl LoadMessage {
             // Nothing shown is wrong; the members are simply not shown.
             LoadMessage::ThinArchive { .. } => Severity::Warning,
             LoadMessage::UnreadableMembers { .. } => Severity::Warning,
-            // The four below stand for a whole file that shows nothing, and nothing shown
-            // is wrong.
-            LoadMessage::EmptyArchive => Severity::Warning,
-            LoadMessage::NotAnObject => Severity::Warning,
-            LoadMessage::Malformed { .. } => Severity::Warning,
-            LoadMessage::CouldNotRead { .. } => Severity::Warning,
+            // The five below stand for a whole file that shows nothing.
+            LoadMessage::EmptyArchive => Severity::Fatal,
+            LoadMessage::NotAnObject => Severity::Fatal,
+            LoadMessage::Malformed { .. } => Severity::Fatal,
+            LoadMessage::Unsupported { .. } => Severity::Fatal,
+            LoadMessage::CouldNotRead { .. } => Severity::Fatal,
             // Some code has no source lines; the lines shown are right.
             LoadMessage::DebugInfoSkipped { .. } => Severity::Warning,
         }
@@ -189,6 +205,22 @@ impl fmt::Display for LoadMessage {
                 write!(f, "This file is not an object file or an archive.")
             }
             LoadMessage::Malformed { error } => write!(f, "This file would not parse: {error}."),
+            LoadMessage::Unsupported { format } => match format {
+                Unsupported::FatMachO => write!(
+                    f,
+                    "This is a universal (fat) Mach-O binary, which this viewer does not read. \
+                     `lipo -thin` extracts one architecture from it."
+                ),
+                Unsupported::DyldCache => write!(
+                    f,
+                    "This is a dyld shared cache, which this viewer does not read."
+                ),
+                Unsupported::CoffImport => write!(
+                    f,
+                    "This is a Windows import entry, which only names a function a DLL exports \
+                     and holds no code."
+                ),
+            },
             LoadMessage::CouldNotRead { error } => {
                 write!(f, "This file could not be read: {error}.")
             }

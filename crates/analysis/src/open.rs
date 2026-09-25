@@ -2,7 +2,7 @@
 //! object in it handed over as it is parsed.
 
 use crate::parse::parse_unshared;
-use crate::{open_regular, Links, LoadMessage, Object, ObjectData, Regular};
+use crate::{open_regular, Links, LoadMessage, Object, ObjectData, Regular, Unsupported};
 use object::read::archive::ArchiveFile;
 use object::FileKind;
 use std::{
@@ -27,7 +27,8 @@ pub enum Progress {
 ///
 /// A file that yields no object is handed over all the same, as an object with no format
 /// saying why: it could not be read ([`LoadMessage::CouldNotRead`]), it is not an object
-/// ([`LoadMessage::NotAnObject`]), or it would not parse ([`LoadMessage::Malformed`]). An
+/// ([`LoadMessage::NotAnObject`]), it is a kind this reader does not read
+/// ([`LoadMessage::Unsupported`]), or it would not parse ([`LoadMessage::Malformed`]). An
 /// archive's members come one member late, so the last can say what was left out: members
 /// that stopped early ([`LoadMessage::ArchiveCutShort`]), members that are not objects
 /// ([`LoadMessage::UnreadableMembers`]), or a thin archive's, which are not read
@@ -127,8 +128,11 @@ fn open_one_file(
             };
             let object = object.unwrap_or_else(|error| {
                 let message = match kind {
-                    Ok(_) => LoadMessage::Malformed {
-                        error: error.to_string(),
+                    Ok(kind) => match unsupported(kind) {
+                        Some(format) => LoadMessage::Unsupported { format },
+                        None => LoadMessage::Malformed {
+                            error: error.to_string(),
+                        },
                     },
                     Err(_) => LoadMessage::NotAnObject,
                 };
@@ -209,6 +213,17 @@ fn open_one_file(
         }
     }
     emit(Progress::Finished(path.to_path_buf()))
+}
+
+/// Which kind of file `kind` is, if it is one `object` recognizes and will not parse: every
+/// kind `object::File::parse` does not take but an archive, which is read apart.
+fn unsupported(kind: FileKind) -> Option<Unsupported> {
+    match kind {
+        FileKind::MachOFat32 | FileKind::MachOFat64 => Some(Unsupported::FatMachO),
+        FileKind::DyldCache => Some(Unsupported::DyldCache),
+        FileKind::CoffImport => Some(Unsupported::CoffImport),
+        _ => None,
+    }
 }
 
 /// What an object out of `path` is called when it is the whole file: its file name, or the

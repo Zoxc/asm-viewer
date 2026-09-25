@@ -157,7 +157,7 @@ headless tests find a triangle by (`disclosures`, `src/ui/tests.rs`).
 
 **An object that had something go wrong while it was read is marked at the end of its row**
 (`load_mark`, `src/ui/sidebar.rs`): Lucide's `triangle-alert`, in `error_fg` for an error and
-`icon_fg` for a warning alone. What went wrong is said in the row's own tooltip, after the name or
+`icon_fg` for a warning alone, and `circle-x` in `error_fg` for a file that did not load at all. What went wrong is said in the row's own tooltip, after the name or
 path it already gave, in the words each `LoadMessage`'s `Display` gives it. Not in a tooltip on the mark: freya's `TooltipContainer` shows on its own
 hover, so one inside the row's would put two tooltips up at once, and freya's tooltip is one line
 (`max_lines(1)`), so the messages are joined into it. A file row carries the mark too whenever an

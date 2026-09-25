@@ -16,7 +16,10 @@ object with a message, and the binaries a project saves are the paths its object
 file is listed, marked, closed and saved like any other. A file stands in for itself when it could
 not be read (`LoadMessage::CouldNotRead`, with the reason the open or the read gave: missing, not a
 regular file, not allowed, changed while it was read), when its first bytes are no kind `object` knows
-(`LoadMessage::NotAnObject`), when they are one but the file would not parse
+(`LoadMessage::NotAnObject`), when they are a kind it knows and this reader does not read
+(`LoadMessage::Unsupported`: a universal Mach-O, a dyld shared cache, a lone Windows import entry,
+each said in words of its own rather than as a parse failure), when they are one but the file
+would not parse
 (`LoadMessage::Malformed`, with what `object` said, which is also what an archive whose symbol or
 name table will not read gets), and when it is an archive with no member shown. One read of nothing
 has no bytes, so it holds an empty `ObjectData`, whose digest a later restore finds changed. The
@@ -72,7 +75,7 @@ each path and every member is cut from it. That is the thing streaming must not 
 
 **What went wrong reading an object is kept on it** (`Object::messages`): a `LoadMessage` is an
 enum with a variant per problem, carrying what it names (a section and its address, a count). Its
-`Severity`, an error or a warning, comes from the variant, and so does what the reader is told:
+`Severity`, fatal, an error or a warning, comes from the variant, and so does what the reader is told:
 `Display` says it in a sentence or two, in the crate beside the variants, so a new variant cannot
 be added without its words and every caller, the UI and a test, reads the same ones. Tests match
 the variant and its data; one test in `model/tests.rs` pins the words. A message is for an object
@@ -83,9 +86,9 @@ loader, which asks the same rule again, drops the second copy. The Objects list 
 (`agents/Sidebar.md`). The cases reported so far: the layout running out of address space,
 functions left out because the descriptor naming their code could not be read (below), sections
 named `<section N>` because their own names would not read (below), the three an archive's members
-are left out for (above), and the four a whole file shows nothing for (above). Every message a
-stand-in carries is a warning: `Severity::Error` is for something shown that is wrong, and a
-stand-in shows nothing but its name. What the debug info could not read is not among them,
+are left out for (above), and the five a whole file shows nothing for (above). Those five are
+`Severity::Fatal`, the file not loading at all, above `Severity::Error`, which is for something
+shown that is wrong. What the debug info could not read is not among them,
 because most of it is found after the parse, as the questions reach it, and `messages` is settled
 by then. Each backend counts the parts it went past or read only in part instead, a DWARF unit or
 a PDB module, each once however often it is read (`Skipped`, `line.rs`), and
