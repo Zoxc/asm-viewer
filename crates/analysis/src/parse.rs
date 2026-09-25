@@ -874,7 +874,8 @@ pub(crate) fn parse_unshared(
 /// for the line info and the code listing both ([`section_biases`]), and what went wrong
 /// deciding it is pushed onto `messages`. A section whose name will not read is kept under a
 /// made-up one, and one message counts them. A code section whose bytes will not read is left
-/// out, and another counts those.
+/// out, and another counts those. So does a relocation whose address runs past the end of the
+/// address space.
 fn read_sections(
     file: &object::File<'_>,
     messages: &mut Vec<LoadMessage>,
@@ -884,6 +885,7 @@ fn read_sections(
     let format = file.format();
     let mut unnamed = 0usize;
     let mut unread = 0usize;
+    let mut unaddressed = 0usize;
     let sections = file
         .sections()
         .filter_map(|section| {
@@ -927,8 +929,9 @@ fn read_sections(
             let mut relocations = BTreeMap::<_, Vec<_>>::new();
             if file.kind() == ObjectKind::Relocatable {
                 for (offset, relocation) in section.relocations() {
-                    if let Some(address) = SectionAddress::new(base).checked_add(offset) {
-                        relocations.entry(address).or_default().push(relocation);
+                    match SectionAddress::new(base).checked_add(offset) {
+                        Some(address) => relocations.entry(address).or_default().push(relocation),
+                        None => unaddressed = unaddressed.saturating_add(1),
                     }
                 }
             }
@@ -951,6 +954,9 @@ fn read_sections(
     }
     if unread > 0 {
         messages.push(LoadMessage::UnreadableCodeSections { count: unread });
+    }
+    if unaddressed > 0 {
+        messages.push(LoadMessage::RelocationsWithoutAddress { count: unaddressed });
     }
     sections
 }

@@ -93,6 +93,10 @@ pub enum LoadMessage {
     /// could not be worked out: their section does not exist, or its address plus their
     /// offset runs past the end of the address space.
     FunctionsWithoutAddress { count: usize },
+    /// `count` relocations in a code section were left out because their section's address
+    /// plus their offset runs past the end of the address space. The fields they fill show
+    /// the bytes the file holds, with no name.
+    RelocationsWithoutAddress { count: usize },
     /// `count` sections are called `<section N>` by their index, because their names could
     /// not be read. They are kept, code and all.
     UnreadableSectionNames { count: usize },
@@ -173,6 +177,8 @@ impl LoadMessage {
             LoadMessage::UnreadableDescriptors { .. } => Severity::Warning,
             // What is shown is right; some functions are missing.
             LoadMessage::FunctionsWithoutAddress { .. } => Severity::Warning,
+            // What is shown is the file's own bytes; some names are missing.
+            LoadMessage::RelocationsWithoutAddress { .. } => Severity::Warning,
             // Only the name is wrong, and it says so.
             LoadMessage::UnreadableSectionNames { .. } => Severity::Warning,
             // What is shown is right; the code in those sections is missing.
@@ -218,6 +224,10 @@ impl fmt::Display for LoadMessage {
             LoadMessage::FunctionsWithoutAddress { count } => write!(
                 f,
                 "Functions left out because their address could not be worked out: {count}."
+            ),
+            LoadMessage::RelocationsWithoutAddress { count } => write!(
+                f,
+                "Relocations left out because their address could not be worked out: {count}."
             ),
             LoadMessage::UnreadableSectionNames { count } => write!(
                 f,

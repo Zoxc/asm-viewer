@@ -185,6 +185,13 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         "Functions left out because their address could not be worked out: 1."
     );
 
+    let relocations = LoadMessage::RelocationsWithoutAddress { count: 2 };
+    assert_eq!(relocations.severity(), Severity::Warning);
+    assert_eq!(
+        relocations.to_string(),
+        "Relocations left out because their address could not be worked out: 2."
+    );
+
     let unnamed = LoadMessage::UnreadableSectionNames { count: 1 };
     assert_eq!(unnamed.severity(), Severity::Warning);
     assert_eq!(

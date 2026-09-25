@@ -89,7 +89,8 @@ loader, which asks the same rule again, drops the second copy. The Objects list 
 functions left out because the descriptor naming their code could not be read (below) or their
 address could not be worked out (below), sections
 named `<section N>` because their own names would not read (below), code sections left out because
-their bytes would not read or decompress, imports left out because their names would not read
+their bytes would not read or decompress, code relocations left out because their address
+would not fit (below), imports left out because their names would not read
 (below), unwind entries and exports that would not read (below), the three an archive's members
 are left out for (above), and the six a whole file shows nothing for (above). Those six are
 `Severity::Fatal`, the file not loading at all, above `Severity::Error`, which is for something
@@ -346,7 +347,8 @@ back what the format states: an address in COFF, but an offset from the start of
 ELF and Mach-O. A Mach-O `.o` lays its sections out one after another, and an ELF `.o` may state
 an address for a section too (`ld -r` given a linker script), which the instructions are decoded
 at. So `read_sections` adds an ELF or Mach-O section's address as it builds the map, and `Code::relocations` can ask by address
-whatever the file is. The map is a `BTreeMap`, so that question is one range over an instruction's
+whatever the file is. A relocation whose sum runs past the end of the address space is left out,
+and one message counts them (`LoadMessage::RelocationsWithoutAddress`). The map is a `BTreeMap`, so that question is one range over an instruction's
 bytes, every entry of which is an answer. Each address holds a list, in the file's order: one
 entry per address kept only the last of two relocations at one place, and nothing says a file
 will not state two. The debug sections are relocated straight from `object`'s iterator

@@ -779,6 +779,46 @@ fn a_function_past_the_end_of_the_address_space_is_said() {
     );
 }
 
+/// Defect: a code relocation whose section's address plus its offset ran past the end of
+/// the address space was left out without a word. It still is, and the object says so.
+/// Here `.text` starts two bytes below the top, so the `call` in `last` fits and the field
+/// its relocation fills does not.
+#[test]
+fn a_relocation_past_the_end_of_the_address_space_is_said() {
+    let mut data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "first",
+                bytes: &[0xC3, 0xC3],
+            },
+            TextSymbol {
+                name: "last",
+                bytes: &[0xE8, 0, 0, 0, 0],
+            },
+        ],
+        &[TextRelocation {
+            in_symbol: 1,
+            offset: 1,
+            target: 0,
+        }],
+    );
+    common::elf_place_section(&mut data, ".text", u64::MAX - 2);
+    let object = parse(&data);
+
+    assert_eq!(names(&object), ["first", "last"]);
+    // The first message is the layout's, about `.text` being so high.
+    assert_eq!(
+        object.messages,
+        [
+            LoadMessage::CodeSectionsOverlap {
+                section: ".text".to_owned(),
+                address: u64::MAX - 2,
+            },
+            LoadMessage::RelocationsWithoutAddress { count: 1 },
+        ]
+    );
+}
+
 /// Defect: an import whose name would not read, in `.symtab` or `.dynsym`, was left out
 /// without a word. It still is, since an import is nothing but its name, and the object
 /// says so. The 64-bit MIPS image imports `symtab_import` in one table and `plt_import` in
