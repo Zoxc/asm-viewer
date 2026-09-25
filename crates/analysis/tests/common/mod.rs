@@ -491,6 +491,13 @@ fn unreadable_symbol_name(data: &[u8], name: &str, table: &str) -> Vec<u8> {
     data
 }
 
+/// Make one section of a written ELF `SHT_NOBITS`, so it states a size and holds no bytes: the
+/// shape `objcopy --only-keep-debug` leaves every section in that is not debug info.
+pub fn elf_nobits_section(data: &mut [u8], name: &str) {
+    let (header, _) = elf_section_header(data, name);
+    data[header + 4..header + 8].copy_from_slice(&8u32.to_le_bytes());
+}
+
 /// Point the `sh_name` of one section of a written ELF past `.shstrtab`, so `object` answers
 /// `Err` for its name and nothing else about the section changes.
 pub fn elf_unreadable_section_name(data: &mut [u8], name: &str) {

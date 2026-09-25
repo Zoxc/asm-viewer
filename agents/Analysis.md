@@ -215,7 +215,8 @@ either is one warning, a count and whether the walk was cut short
 (`LoadMessage::UnreadableEntryCommands`). A PE with no entry point states an
 `AddressOfEntryPoint` of 0, which `entry()` answers as the image base, so it is read from the
 header and 0 is none. An entry point that is found but in no code section is left out and says
-so (`LoadMessage::EntryPointOutsideCode`). **A function's stated address is read through to
+so (`LoadMessage::EntryPointOutsideCode`), unless the file holds no code bytes at all: a separate
+debug file (`objcopy --only-keep-debug`) keeps `e_entry` but makes `.text` `SHT_NOBITS`. **A function's stated address is read through to
 its code** (`CodeAddresses`), on the formats where `object` hands over a number that is not the
 code's. Where bit 0 says which instruction set the code is in, it is cleared, and `ModeBit` says
 which addresses carry it. On 32-bit ARM ELF (Thumb) and MIPS ELF (MIPS16, microMIPS) it is an

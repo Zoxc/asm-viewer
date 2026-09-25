@@ -148,6 +148,21 @@ fn an_entry_point_in_no_code_section_is_said() {
     }
 }
 
+/// Defect: a separate debug file (`objcopy --only-keep-debug`) keeps `e_entry` but none of
+/// the code, its `.text` being `SHT_NOBITS`, and was said to have its entry point in no code
+/// section. A file with no code at all has no entry point to miss.
+#[test]
+fn a_file_with_no_code_says_nothing_of_its_entry_point() {
+    let mut data = elf_shared_object(stripped(Some(6)));
+    common::elf_nobits_section(&mut data, ".text");
+    let object = parse(&data);
+    assert!(object
+        .sections
+        .iter()
+        .all(|section| section.code().is_none()));
+    assert_eq!(object.messages, []);
+}
+
 /// An `LC_MAIN` a segment holds, but in its headers rather than its code.
 #[test]
 fn a_macho_entry_point_in_no_code_section_is_said() {

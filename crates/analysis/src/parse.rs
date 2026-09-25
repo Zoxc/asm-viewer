@@ -119,7 +119,8 @@ struct Imports {
 /// real function's first byte.
 ///
 /// Exports that would not read, a Mach-O entry point that could not be found
-/// ([`macho_entry`]), and an entry point in no code section are said on `messages`. An
+/// ([`macho_entry`]), and an entry point in no code section, where the file has code, are
+/// said on `messages`. An
 /// undefined `.dynsym` function whose name will not read is counted in `imports`, as the
 /// symbol table's are.
 ///
@@ -290,7 +291,9 @@ fn declared_code(
         .filter(|&entry| !none(entry))
         .and_then(|entry| addresses.entry(file, entry));
     if let Some(entry) = entry {
-        if code.get(SectionAddress::new(entry)).is_none() {
+        // A file with no code bytes at all, such as a separate debug file whose `.text` is
+        // `SHT_NOBITS`, keeps its entry point with nothing for it to be in.
+        if !code.is_empty() && code.get(SectionAddress::new(entry)).is_none() {
             messages.push(LoadMessage::EntryPointOutsideCode { address: entry });
         }
         take(

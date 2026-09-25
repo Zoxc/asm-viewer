@@ -1218,6 +1218,11 @@ impl<A: Ord + Copy, T: Copy> FirstCovering<A, T> {
         let index = covering(&self.pieces, |(piece, _)| piece.clone(), address)?;
         Some(self.pieces[index].1)
     }
+
+    /// Whether no range holds anything.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.pieces.is_empty()
+    }
 }
 
 #[cfg(test)]
