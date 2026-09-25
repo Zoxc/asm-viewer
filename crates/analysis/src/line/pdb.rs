@@ -105,8 +105,9 @@ pub(super) struct Pdb {
 
     /// The modules whose symbols or rows were read only up to something that would not read,
     /// by index, the first module a module list that stops short lost ([`Pdb::modules`]),
-    /// the publics ([`GLOBALS`]) and the file names ([`NAMES`]); and the modules a row of
-    /// which names a file that will not read.
+    /// the publics ([`GLOBALS`]) and the file names ([`NAMES`]); and the modules with a row
+    /// that names a file that will not read, or a row or contribution whose place will not
+    /// map ([`rebased`]).
     skipped: Skipped,
 
     /// How many walks of the DBI module list this PDB has started, so a test can pin that a
@@ -115,7 +116,8 @@ pub(super) struct Pdb {
     walks: std::sync::atomic::AtomicUsize,
 }
 
-/// A `section:offset` the PDB states that will not map to an address ([`Pdb::address`]).
+/// A `section:offset` the PDB states that will not map to an address ([`Pdb::address`],
+/// [`rebased`]).
 struct Unmapped;
 
 /// One module's line info, decoded whole on first touch.
@@ -188,7 +190,8 @@ impl Pdb {
         // ([`Pdb::intern_file`]).
         let strings = pdb.string_table().ok();
 
-        let contributions = contributions(&dbi, &address_map, image_base)?;
+        let skipped = Skipped::default();
+        let contributions = contributions(&dbi, &address_map, image_base, &skipped)?;
 
         Some(Ok(Pdb {
             pdb: Mutex::new(pdb),
@@ -199,7 +202,7 @@ impl Pdb {
             contributions,
             modules: Mutex::default(),
             every: OnceLock::new(),
-            skipped: Skipped::default(),
+            skipped,
             #[cfg(test)]
             walks: std::sync::atomic::AtomicUsize::new(0),
         }))
@@ -529,7 +532,10 @@ impl Pdb {
                 let line_number = (line.line_start != 0).then_some(line.line_start);
                 let column = line.column_start;
                 for range in rebased(&self.address_map, self.image_base, line.offset, len) {
-                    rows.push(placed(range), file, line_number, column);
+                    match range {
+                        Ok(range) => rows.push(placed(range), file, line_number, column),
+                        Err(Unmapped) => self.skipped.note(index as u64),
+                    }
                 }
             }
         }
@@ -649,10 +655,13 @@ impl LineBackend for Pdb {
 /// The DBI's section contributions, each as the ranges of the image's own addresses it lies
 /// over, to its module; or [`None`] where the list will not open. A malformed tail stops the
 /// walk where it goes wrong and keeps what was read.
+/// A contribution whose place will not map ([`rebased`]) is dropped and its module counted in
+/// `skipped`: no question over it finds the module.
 fn contributions(
     dbi: &DebugInformation<'_>,
     address_map: &AddressMap<'_>,
     image_base: SectionAddress,
+    skipped: &Skipped,
 ) -> Option<Intervals<SectionAddress, usize>> {
     let mut contributions = Vec::new();
     let mut listed = dbi.section_contributions().ok()?;
@@ -663,7 +672,12 @@ fn contributions(
             contribution.offset,
             contribution.size,
         );
-        contributions.extend(ranges.map(|range| (range, contribution.module)));
+        for range in ranges {
+            match range {
+                Ok(range) => contributions.push((range, contribution.module)),
+                Err(Unmapped) => skipped.note(contribution.module as u64),
+            }
+        }
     }
     Some(Intervals::new(contributions))
 }
@@ -740,23 +754,37 @@ fn find(
 
 /// The `len` bytes the PDB states at `offset`, as the ranges of the image's own address
 /// space they lie over: through the address map, which can split them, and onto the image
-/// base. Nothing when the offset will not map or its end overflows; a piece that would
-/// overflow the address space, or that is empty, is dropped.
+/// base. An empty piece is dropped.
+///
+/// Nothing where the PDB places the bytes nowhere on purpose, as [`Pdb::address`] has it: in
+/// section 0, or where an OMAP maps them nowhere. [`Unmapped`] where they will not map: a
+/// section the PDB has no header for, an end past the 32-bit space, or a piece past the end
+/// of the image's.
 fn rebased<'a>(
     address_map: &'a AddressMap<'_>,
     image_base: SectionAddress,
     offset: PdbInternalSectionOffset,
     len: u32,
-) -> impl Iterator<Item = Range<SectionAddress>> + 'a {
-    let pieces = offset.to_internal_rva(address_map).and_then(|start| {
-        let end = start.0.checked_add(len)?;
-        Some(address_map.rva_ranges(start..PdbInternalRva(end)))
+) -> impl Iterator<Item = Result<Range<SectionAddress>, Unmapped>> + 'a {
+    let range = || {
+        let start = offset.to_internal_rva(address_map).ok_or(Unmapped)?;
+        let end = start.0.checked_add(len).ok_or(Unmapped)?;
+        Ok(start..PdbInternalRva(end))
+    };
+    let (pieces, unmapped) = match (offset.section != 0).then(range) {
+        Some(Ok(range)) => (Some(address_map.rva_ranges(range)), None),
+        Some(Err(unmapped)) => (None, Some(unmapped)),
+        None => (None, None),
+    };
+    let pieces = pieces.into_iter().flatten().filter_map(move |range| {
+        let start = image_base.checked_add(u64::from(range.start.0));
+        let end = image_base.checked_add(u64::from(range.end.0));
+        match (start, end) {
+            (Some(start), Some(end)) => (start < end).then_some(Ok(start..end)),
+            _ => Some(Err(Unmapped)),
+        }
     });
-    pieces.into_iter().flatten().filter_map(move |range| {
-        let start = image_base.checked_add(u64::from(range.start.0))?;
-        let end = image_base.checked_add(u64::from(range.end.0))?;
-        (start < end).then_some(start..end)
-    })
+    unmapped.map(Err).into_iter().chain(pieces)
 }
 
 /// The paths the `.pdb` an image records is looked for at, in order: the recorded file name

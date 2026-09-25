@@ -657,7 +657,10 @@ tried; where none matches, it is counted as the image's own that would not read 
 below).
 **Addresses**: a PDB states `section:offset`. Every one goes through the PDB's own `AddressMap` to
 an RVA, which is also where an OMAP-rearranged image is undone (a path no fixture exercises beyond
-its identity form), and onto the image base with checked arithmetic. A matching PDB whose address
+its identity form), and onto the image base with checked arithmetic. A row or a section
+contribution whose `section:offset` will not map at all (a section the PDB has no header for, or
+an end past the space) is dropped and its module counted (`rebased`); one in section 0, or that
+the OMAP maps nowhere, is placed nowhere on purpose and is not. A matching PDB whose address
 map will not read has nothing that can be placed. It is kept as a backend that answers nothing and
 counts as one part skipped (`Unreadable`, `line.rs`), so the reader is told. So answers are in the virtual
 address space a linked image's symbols already are, which is also the placed space the seam asks

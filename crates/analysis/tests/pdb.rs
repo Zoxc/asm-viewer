@@ -1282,6 +1282,35 @@ fn a_file_entry_that_will_not_read_is_counted() {
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
+/// A section contribution whose place will not map is dropped and its module counted;
+/// before, it was without a word. Section 0x7F is none the PDB has a header for. The
+/// contributions are the object's module's in `.text`, section 1: each is 28 bytes after the
+/// list's version, its section at 0 and its module at 16. No question over `add` then finds
+/// its module, so it has no rows.
+#[test]
+fn a_contribution_that_will_not_map_is_counted() {
+    let dll = committed_fixture(NOEXPORT_DLL);
+    let pdb = committed_fixture("line_fixture_noexport.pdb");
+    let mut msf = Msf::new(&pdb);
+    let start = 64 + msf.u32_at(DBI, 24) as usize;
+    let end = start + msf.u32_at(DBI, 28) as usize;
+    let entries: Vec<usize> = (start + 4..end)
+        .step_by(28)
+        .filter(|&entry| msf.u16_at(DBI, entry) == 1 && msf.u16_at(DBI, entry + 16) == 0)
+        .collect();
+    assert!(!entries.is_empty(), "the module's contributions in .text");
+    for entry in entries {
+        msf.write(DBI, entry, &0x7Fu16.to_le_bytes());
+    }
+    let dir = scratch("unmapped_contribution");
+    std::fs::write(dir.join("line_fixture_noexport.pdb"), &msf.bytes).unwrap();
+    let object = parse_at(&dll, dir.join(NOEXPORT_DLL));
+
+    assert!(symbol(&object, "add").line_info(&object).is_none());
+    assert_eq!(names(&object), ["add", "sum_to", "twice"]);
+    assert_eq!(object.debug_info_skipped(), 1);
+}
+
 /// What the debug info could not read is told once it has been found, which is after the
 /// parse: the object read cleanly, and a question found the bad module.
 #[test]
