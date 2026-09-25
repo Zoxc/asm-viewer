@@ -530,7 +530,9 @@ offset pairs rustc writes for an inlined subroutine's ranges are offsets from a 
 relocated and are correctly left alone. Only a unit's own list is examined and only that one is
 dropped; the lists its children hold are read by nobody here and are not ours to rewrite. An object
 with relocations in `.debug_addr` is declined rather than judged, since DWARF 5's `DW_RLE_startx_*`
-state their addresses there. Measured on the 196-member rlib the rule fires on nothing, and the
+state their addresses there. Each list's first entry is looked up in the section's relocations,
+sorted once, rather than by walking them: a walk costs units times relocations, and on a kernel's
+`vmlinux.o` that is hours. Measured on the 196-member rlib the rule fires on nothing, and the
 root-DIE pass costs 1.5% of a sweep of every symbol's line info and extent (200 ms -> 203 ms).
 
 **The PDB backend** (`line/pdb.rs`) reads the other debug format a linked PE comes with: not

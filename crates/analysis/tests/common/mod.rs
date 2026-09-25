@@ -1412,6 +1412,145 @@ pub fn elf_x86_64_two_sequences() -> Vec<u8> {
     obj.write().expect("writing the fixture object")
 }
 
+/// A relocatable object with `stale` units whose range lists did not move with the code, and
+/// one unit whose range list holds `relocated` entries that did: what makes judging the
+/// stale lists cost their number times the relocations, where each lookup is not a search.
+///
+/// `first` (6 bytes) is alone in `.text.first` and `second` (2 bytes) in `.text.second`, so
+/// the bias moves `second`. The one relocated unit has a line program over `second`, with one
+/// row (`main.c:42`), and states every entry of its range list as `second`'s own two bytes,
+/// each end relocated against it. Each stale unit has no line program and states its one
+/// range as an offset pair from an unrelocated 0, as [`UnitRanges::OffsetPairs`] does.
+pub fn elf_x86_64_many_range_lists(stale: usize, relocated: usize) -> Vec<u8> {
+    use gimli::write::{
+        Address, AttributeValue, Dwarf, LineProgram, LineString, Range, RangeList, Sections, Unit,
+    };
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let mut symbols = Vec::new();
+    for (name, bytes) in [
+        (".text.first", &[0x90, 0x90, 0x90, 0x90, 0x90, 0xC3][..]),
+        (".text.second", &[0x90, 0xC3][..]),
+    ] {
+        let section = obj.add_section(Vec::new(), name.as_bytes().to_vec(), SectionKind::Text);
+        let value = obj.append_section_data(section, bytes, 1);
+        symbols.push(obj.add_symbol(write::Symbol {
+            name: name[".text.".len()..].as_bytes().to_vec(),
+            value,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(section),
+            flags: SymbolFlags::None,
+        }));
+    }
+    let second = Address::Symbol {
+        symbol: 1,
+        addend: 0,
+    };
+
+    let encoding = gimli::Encoding {
+        format: gimli::Format::Dwarf32,
+        version: 4,
+        address_size: 8,
+    };
+    let mut dwarf = Dwarf::new();
+
+    let mut program = LineProgram::new(
+        encoding,
+        gimli::LineEncoding::default(),
+        LineString::String(b"/src".to_vec()),
+        None,
+        LineString::String(b"main.c".to_vec()),
+        None,
+    );
+    let directory = program.default_directory();
+    let file = program.add_file(LineString::String(b"main.c".to_vec()), directory, None);
+    program.begin_sequence(Some(second));
+    let row = program.row();
+    row.file = file;
+    row.line = 42;
+    program.generate_row();
+    program.end_sequence(2);
+
+    let id = dwarf.units.add(Unit::new(encoding, program));
+    let unit = dwarf.units.get_mut(id);
+    let ranges = unit.ranges.add(RangeList(vec![
+        Range::StartLength {
+            begin: second,
+            length: 2,
+        };
+        relocated
+    ]));
+    let root = unit.root();
+    let entry = unit.get_mut(root);
+    entry.set(
+        gimli::DW_AT_comp_dir,
+        AttributeValue::String(b"/src".to_vec()),
+    );
+    entry.set(
+        gimli::DW_AT_name,
+        AttributeValue::String(b"main.c".to_vec()),
+    );
+    entry.set(gimli::DW_AT_ranges, AttributeValue::RangeListRef(ranges));
+
+    for _ in 0..stale {
+        let id = dwarf.units.add(Unit::new(encoding, LineProgram::none()));
+        let unit = dwarf.units.get_mut(id);
+        let ranges = unit.ranges.add(RangeList(vec![
+            Range::BaseAddress {
+                address: Address::Constant(0),
+            },
+            Range::OffsetPair { begin: 0, end: 2 },
+        ]));
+        let root = unit.root();
+        let entry = unit.get_mut(root);
+        entry.set(
+            gimli::DW_AT_low_pc,
+            AttributeValue::Address(Address::Constant(0)),
+        );
+        entry.set(gimli::DW_AT_ranges, AttributeValue::RangeListRef(ranges));
+    }
+
+    let mut sections = Sections::new(RelocWriter::default());
+    dwarf.write(&mut sections).expect("writing the DWARF");
+
+    sections
+        .for_each(|id, writer| {
+            if writer.slice().is_empty() {
+                return Ok::<_, ()>(());
+            }
+            let section = obj.add_section(
+                Vec::new(),
+                id.name().as_bytes().to_vec(),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(section, writer.slice(), 1);
+
+            for relocation in &writer.relocations {
+                obj.add_relocation(
+                    section,
+                    write::Relocation {
+                        offset: relocation.offset,
+                        symbol: symbols[relocation.symbol],
+                        addend: relocation.addend,
+                        flags: RelocationFlags::Generic {
+                            kind: RelocationKind::Absolute,
+                            encoding: RelocationEncoding::Generic,
+                            size: relocation.size * 8,
+                        },
+                    },
+                )
+                .expect("adding a relocation to a debug section");
+            }
+            Ok(())
+        })
+        .expect("laying out the DWARF sections");
+
+    obj.write().expect("writing the fixture object")
+}
+
 /// `storer` = `mov dword ptr [rip+displacement], 7; ret`, relocated at offset 2 against a
 /// **data** symbol — which parsing drops, so the relocation is on the instruction and yet
 /// resolves to nothing navigable. `displacement` is what the four placeholder bytes hold:

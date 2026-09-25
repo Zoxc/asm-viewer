@@ -286,13 +286,19 @@ fn stale_range_lists(
         return stale;
     }
 
-    let relocations = |id: gimli::SectionId| match file.section_by_name(id.name()) {
-        Some(section) => section
-            .relocations()
-            .filter(|(_, relocation)| relocation.kind() == RelocationKind::Absolute)
-            .map(|(offset, _)| offset)
-            .collect(),
-        None => Vec::new(),
+    // Sorted, so each unit's list is a search rather than a walk of every relocation: both
+    // counts are the file's to choose, and a kernel's `vmlinux.o` has millions of one.
+    let relocations = |id: gimli::SectionId| {
+        let mut offsets: Vec<u64> = match file.section_by_name(id.name()) {
+            Some(section) => section
+                .relocations()
+                .filter(|(_, relocation)| relocation.kind() == RelocationKind::Absolute)
+                .map(|(offset, _)| offset)
+                .collect(),
+            None => Vec::new(),
+        };
+        offsets.sort_unstable();
+        offsets
     };
     if !relocations(gimli::SectionId::DebugAddr).is_empty() {
         return stale;
@@ -326,13 +332,18 @@ fn stale_range_lists(
             (gimli::SectionId::DebugRanges, &ranges, 2 * address_size)
         };
 
+        // An offset no `u64` holds is past every section there is; left alone.
+        let Ok(start) = u64::try_from(offset) else {
+            continue;
+        };
         // The first entry, plus the opcode byte DWARF 5 puts in front of it. Reaching into
         // the second entry only makes the list look relocated when it partly is, which is
         // the answer that leaves it alone.
-        let first = offset..offset.saturating_add(2 * address_size + 1);
+        let end = start.saturating_add(2 * u64::from(encoding.address_size) + 1);
+        let after = relocations.partition_point(|&relocation| relocation < start);
         if relocations
-            .iter()
-            .any(|&relocation| first.contains(&(relocation as usize)))
+            .get(after)
+            .is_some_and(|&relocation| relocation < end)
         {
             continue;
         }

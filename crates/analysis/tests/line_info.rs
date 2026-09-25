@@ -6,7 +6,9 @@ use common::{
     at, elf_x86_64_with_dwarf, parse, symbol, DwarfFixture, DwarfRow, DwarfSection, TextSymbol,
     UnitRanges,
 };
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 const COMP_DIR: &str = "/src";
 
@@ -390,6 +392,31 @@ fn a_unit_whose_ranges_did_not_move_with_its_code_still_answers() {
         position(&info, at(1)),
         Some((Some("/src/other.c"), Some(42), Some(7)))
     );
+}
+
+/// Judging which units' range lists were left behind looked for a relocation in each list by
+/// walking every relocation in the range section: units times relocations, both counts the
+/// file's to choose, and hours on a kernel's `vmlinux.o`. Sized so that walk takes over a
+/// minute in a debug build; with a search, the test takes about a second.
+#[test]
+fn judging_stale_range_lists_is_not_units_times_relocations() {
+    let data = common::elf_x86_64_many_range_lists(20_000, 200_000);
+
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let object = parse(&data);
+        let info = symbol(&object, "second").line_info(&object);
+        let position = info.and_then(|info| {
+            let (file, line, column) = position(&info, at(0))?;
+            Some((file.map(String::from), line, column))
+        });
+        sender.send(position)
+    });
+    let position = receiver
+        .recv_timeout(Duration::from_secs(20))
+        .expect("the line info is read");
+
+    assert_eq!(position, Some((Some("/src/main.c".into()), Some(42), None)));
 }
 
 /// A linked image holds the addresses its linker resolved, and one linked with
