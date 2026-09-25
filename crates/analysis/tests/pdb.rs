@@ -1282,6 +1282,31 @@ fn a_file_entry_that_will_not_read_is_counted() {
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
+/// A checksum shorter than its kind's is dropped and the module counted; the name is kept.
+/// It was dropped without a word. The one entry in the file checksums states its size at 4.
+#[test]
+fn a_checksum_of_the_wrong_length_is_counted() {
+    let dll = committed_fixture(NOEXPORT_DLL);
+    let pdb = committed_fixture("line_fixture_noexport.pdb");
+    let mut msf = Msf::new(&pdb);
+    let stream = module_stream(&msf, 0);
+    let (_, checksums) = subsections(&msf)
+        .into_iter()
+        .find(|&(kind, _)| kind == 0xF4)
+        .expect("a file checksums subsection");
+    let size = msf.u16_at(stream, checksums + 4) as u8;
+    msf.write(stream, checksums + 4, &[size - 1]);
+    let dir = scratch("checksum_wrong_length");
+    std::fs::write(dir.join("line_fixture_noexport.pdb"), &msf.bytes).unwrap();
+    let object = parse_at(&dll, dir.join(NOEXPORT_DLL));
+
+    let add = line_info(&object, "add");
+    assert_eq!(rows(&add).len(), 4);
+    assert_eq!(common::file_of(&add, &add.rows()[0]), Some(SOURCE));
+    assert_eq!(add.hash_for(SOURCE), None);
+    assert_eq!(object.debug_info_skipped(), 1);
+}
+
 /// A section contribution whose place will not map is dropped and its module counted;
 /// before, it was without a word. Section 0x7F is none the PDB has a header for. The
 /// contributions are the object's module's in `.text`, section 1: each is 28 bytes after the

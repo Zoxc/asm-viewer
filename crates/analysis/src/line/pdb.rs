@@ -560,7 +560,8 @@ impl Pdb {
     /// table and interned into `rows` with its checksum; or [`None`] where either lookup
     /// fails, which is counted ([`Skipped`]): under the module where its entry for the file,
     /// or the name it states, will not read, and under [`NAMES`] where there is no string
-    /// table.
+    /// table. A checksum of the wrong length for its kind is dropped and the name kept, the
+    /// module counted.
     fn intern_file(
         &self,
         index: usize,
@@ -580,7 +581,11 @@ impl Pdb {
             self.skipped.note(index as u64);
             return None;
         };
-        Some(rows.file(&name.to_string(), source_hash(info.checksum)))
+        let hash = source_hash(info.checksum).unwrap_or_else(|WrongLength| {
+            self.skipped.note(index as u64);
+            None
+        });
+        Some(rows.file(&name.to_string(), hash))
     }
 }
 
@@ -682,16 +687,19 @@ fn contributions(
     Some(Intervals::new(contributions))
 }
 
-/// A file's checksum as the PDB records it, or [`None`] where it records none or one of the
-/// wrong length.
-fn source_hash(checksum: pdb2::FileChecksum<'_>) -> Option<SourceHash> {
-    match checksum {
-        pdb2::FileChecksum::Md5(bytes) => bytes.try_into().ok().map(SourceHash::Md5),
-        pdb2::FileChecksum::Sha1(bytes) => bytes.try_into().ok().map(SourceHash::Sha1),
-        pdb2::FileChecksum::Sha256(bytes) => bytes.try_into().ok().map(SourceHash::Sha256),
-        pdb2::FileChecksum::None => None,
-    }
+/// A file's checksum as the PDB records it, or [`None`] where it records none.
+fn source_hash(checksum: pdb2::FileChecksum<'_>) -> Result<Option<SourceHash>, WrongLength> {
+    let hash = match checksum {
+        pdb2::FileChecksum::Md5(bytes) => bytes.try_into().map(SourceHash::Md5),
+        pdb2::FileChecksum::Sha1(bytes) => bytes.try_into().map(SourceHash::Sha1),
+        pdb2::FileChecksum::Sha256(bytes) => bytes.try_into().map(SourceHash::Sha256),
+        pdb2::FileChecksum::None => return Ok(None),
+    };
+    hash.map(Some).map_err(|_| WrongLength)
 }
+
+/// A checksum not as long as its kind's ([`source_hash`]).
+struct WrongLength;
 
 /// A range the seam asked about, in the image's own addresses, and [`placed`] is the way
 /// back. A PDB describes a **linked image**, which nothing placed, so the two spaces hold

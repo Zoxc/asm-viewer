@@ -689,7 +689,8 @@ keeps a unit's subprogram extents. A row with no length, one whose successor sit
 assemblers emit, is dropped rather than given an end. A module's rows are in subsections, usually one
 per function, each a run of blocks; `pdb2` walks them as one and ends at the first block whose
 stated size runs past its subsection. The rows before it are kept, the rest are lost and the module
-is counted: no linker writes such a block, so nothing reads the module again. A
+is counted: no linker writes such a block, so nothing reads the module again. A file checksum of a
+known kind but the wrong length loses its hash and keeps its name, and its module is counted. A
 record in a module's symbols that will not read ends the walk over them, keeping what came before:
 it is either one whose length runs past the stream, or one too short to hold a kind, and `pdb2`
 does not say how short, so the next record's start is not known. A module whose stream, or the
