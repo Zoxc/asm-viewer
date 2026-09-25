@@ -485,11 +485,11 @@ fn load_section(
 /// takes ([`symbol_address`]): a function tagged with a mode bit is at its code, and an ELF
 /// symbol's offset has its section's address added, as a section target's does. A Mach-O
 /// relocation against a section already holds the section's address in its bytes, so that
-/// address is not added again. A
-/// Mach-O `SUBTRACTOR` pair states the difference of two symbols, so the second symbol's
-/// address, bias included, is taken off. Every step wraps and every write is
-/// bounds-checked, so no relocation table, however corrupt, can do more than scribble on
-/// this copy.
+/// address is not added again. A relocation with no symbol (ELF's index 0) targets 0, so
+/// the addend alone is written. A Mach-O `SUBTRACTOR` pair states the difference of two
+/// symbols, so the second symbol's address, bias included, is taken off. Every step wraps
+/// and every write is bounds-checked, so no relocation table, however corrupt, can do more
+/// than scribble on this copy.
 ///
 /// A relocation whose symbol or section will not resolve, either of a pair's, cannot be
 /// skipped: the field would keep what the compiler wrote there, usually 0, which is an
@@ -536,6 +536,9 @@ fn relocate<'data, 'file>(
                     .ok()
                     .map(|s| SectionAddress::new(s.address()).placed(bias(Some(index)))),
             ),
+            // No symbol: ELF's symbol index 0, whose value is 0, or Mach-O's `R_ABS`. The
+            // addend is the whole value, and it is in no section, so nothing places it.
+            RelocationTarget::Absolute => Some(Some(PlacedAddress::ZERO)),
             _ => None,
         };
         let Some(target) = target else { continue };

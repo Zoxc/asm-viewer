@@ -254,3 +254,66 @@ fn a_relocation_against_a_thumb_function_resolves_to_its_code() {
     assert_eq!(read_uint(&data[..4], Little), placed(".text", 0));
     assert_eq!(read_uint(&data[4..], Little), placed(".data", 1));
 }
+
+/// An ELF relocation with symbol index 0 names no symbol, whose value the ELF spec makes 0,
+/// so the field comes out as the addend. `object` calls its target `Absolute`. Skipped, the
+/// field kept the 0 the compiler wrote where a `RELA` addend belongs.
+#[test]
+fn a_relocation_with_no_symbol_writes_its_addend() {
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let text = obj.section_id(write::StandardSection::Text);
+    obj.append_section_data(text, &[0xC3], 1);
+    let function = obj.add_symbol(write::Symbol {
+        name: b"function".to_vec(),
+        value: 0,
+        size: 1,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+    let debug = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);
+    obj.append_section_data(debug, &[0; 8], 1);
+    obj.add_relocation(
+        debug,
+        write::Relocation {
+            offset: 0,
+            symbol: function,
+            addend: 0x1234,
+            flags: RelocationFlags::Elf {
+                r_type: object::elf::R_X86_64_64,
+            },
+        },
+    )
+    .expect("adding the relocation");
+    let mut bytes = obj.write().expect("writing the fixture object");
+
+    // The one `RELA` entry's symbol index, the high half of its second word, set to 0.
+    let (start, _) = object::File::parse(&*bytes)
+        .expect("parsing the fixture object")
+        .section_by_name(".rela.debug_info")
+        .and_then(|section| section.file_range())
+        .expect("the relocation section");
+    let info = start as usize + 8;
+    bytes[info + 4..info + 8].fill(0);
+
+    let file = object::File::parse(&*bytes).expect("parsing the patched object");
+    let section = file
+        .section_by_name(".debug_info")
+        .expect("the fixture has a debug section");
+    let (_, relocation) = section.relocations().next().expect("one relocation");
+    assert_eq!(relocation.target(), RelocationTarget::Absolute);
+    let mut data = section.data().expect("the debug section reads").to_vec();
+    let lost = Cell::new(false);
+    relocate(
+        &mut data,
+        &file,
+        &section,
+        Little,
+        &section_biases(&file).biases,
+        &lost,
+    );
+    assert_eq!(read_uint(&data, Little), 0x1234);
+    assert!(!lost.get());
+}

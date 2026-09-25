@@ -597,6 +597,9 @@ or debug info that says nothing about the range asked about. Four design points 
   compiler wrote, usually 0, which is some other code's address, and its rows were drawn there.
   No toolchain writes one, so the object's DWARF is lost whole instead, and counts as one part
   skipped.
+  A relocation with no symbol at all (ELF's index 0, which `object` calls an `Absolute` target)
+  is not one of those: the ELF spec gives it the value 0, so the addend is the value, and
+  skipping it left the compiler's 0 where a `RELA` addend belonged.
 
 The bias moves exactly what `relocate` moves (`line/dwarf.rs`), and a unit's declared ranges need
 not be among them. A line program's `DW_LNE_set_address` is always relocated in a relocatable
