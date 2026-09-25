@@ -853,8 +853,9 @@ pub(crate) fn read_program(executable: &Path, built_from: String) -> Option<Prog
     // handed it, joined onto the directory the compiler ran in.
     let files = object.source_files();
     let named = own_source(files.iter().map(|file| &**file));
-    let opening = named
-        .and_then(|file| compiled::lowest_placed(&object.symbols_from_lines(file, 0..=u32::MAX)));
+    let opening = named.and_then(|file| {
+        compiled::lowest_placed(&object, &object.symbols_from_lines(file, 0..=u32::MAX))
+    });
     let file: Option<Arc<Path>> = named.map(|file| Arc::from(Path::new(file)));
     Some(Program {
         executable: executable.to_path_buf(),

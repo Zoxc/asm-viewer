@@ -677,8 +677,12 @@ own meaning over a name: the symbol alone, in a tab of its own. Following a link
 listing is unchanged: there is nowhere to move to, so it replaces what the tab shows and the
 function left is one Back away. Both doors into the object's code, this one and the menu's, take a
 **placed** address: `SymbolData::placed`, the section's bias added, asked of the row's own symbol
-through `AsmData::placed` and of the target itself for a name. The bias the *listing* draws is
-nothing in a symbol's own tab, and the code tab's rows are placed. Undefined
+through `AsmData::in_code` and of the target itself for a name (`Object::placed_in_code`).
+The bias the *listing* draws is nothing in a symbol's own tab, and the code tab's rows are
+placed. A symbol in a section the code listing leaves out, for overlapping another, has no
+place there: at its placed address that listing shows the other section's bytes, or
+nothing. So its listing offers no door into its own bytes, neither the menu's nor a bare
+address, and a name for it in the code tab opens it alone in place. Undefined
 imports and relocations against a section symbol stay plain text; the crate says why. **A relocation
 link and the companion header are clicks inside the tab**, and are followed **in place**: pushed
 onto the tab's trail so the function left is one Back away, the way a browser follows a link, and in

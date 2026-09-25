@@ -724,7 +724,8 @@ pub(crate) fn reduced(path: &Path) -> Option<PathBuf> {
     full.ok()
 }
 
-/// Show the instruction at `address` -- placed, in `object`'s code -- among its
+/// Show the instruction at `address` -- placed, in `object`'s code, and one that code
+/// shows as the caller's (`AsmData::in_code`, `Object::placed_in_code`) -- among its
 /// neighbours: the object's code tab, opened the way `reach` says on that address, with
 /// the caret on the instruction's row and the line the instruction was compiled from
 /// picked out in the source pane where it has one.

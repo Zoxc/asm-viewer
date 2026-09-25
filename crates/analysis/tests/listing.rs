@@ -1167,3 +1167,14 @@ fn an_address_under_another_section_is_not_named_by_its_symbol() {
     assert_eq!(name_at(0x1004), None);
     assert_eq!(name_at(0x1008), Some("a2"));
 }
+
+/// Only `.text`'s symbols have a place in the listing of all the code: `b`'s placed address
+/// is `a1`'s bytes there.
+#[test]
+fn a_symbol_under_another_section_has_no_place_in_the_code() {
+    let object = overlapped(&[0x90; 0x10]);
+    let place = |name| object.placed_in_code(&common::symbol(&object, name));
+    assert_eq!(place("a1"), Some(placed_at(0x1000)));
+    assert_eq!(place("a2"), Some(placed_at(0x1008)));
+    assert_eq!(place("b"), None);
+}

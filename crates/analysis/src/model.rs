@@ -363,8 +363,8 @@ pub(crate) struct PlacedSymbol {
     pub(crate) placed: PlacedAddress,
     pub(crate) index: SymbolIndex,
     pub(crate) symbol: Arc<SymbolData>,
-    /// Whether one of the [`drawn_sections`] other than the symbol's own covers `placed`:
-    /// the listing of all the code shows that section's bytes here, not this symbol's.
+    /// Whether the symbol's section is not one of the [`drawn_sections`]: the listing of
+    /// all the code does not show its bytes, only another section's or nothing.
     pub(crate) hidden: bool,
 }
 
@@ -383,8 +383,9 @@ impl PlacedSymbol {
 /// order: every section whose bytes have a place, less any whose range overlaps the one
 /// drawn before it. Of two starting at one address, the lower index comes first.
 ///
-/// [`CodeListing`](crate::CodeListing) draws these, and [`Object::symbol_at_placed`] skips
-/// the symbols they hide, so a name never disagrees with the code shown at its address.
+/// [`CodeListing`](crate::CodeListing) draws these, and [`Object::symbol_at_placed`] and
+/// [`Object::placed_in_code`] skip the symbols of every other section, so a name never
+/// disagrees with the code shown at its address.
 pub(crate) fn drawn_sections(
     sections: &[Arc<Section>],
 ) -> Vec<(Arc<Section>, Range<PlacedAddress>)> {
@@ -466,8 +467,8 @@ impl Object {
                     symbol: symbol.clone(),
                     hidden: false,
                 };
-                entry.hidden = covering(&drawn, |(_, range)| range.clone(), entry.placed)
-                    .is_some_and(|at| !entry.is_in(&drawn[at].0));
+                entry.hidden = !covering(&drawn, |(_, range)| range.clone(), entry.placed)
+                    .is_some_and(|at| entry.is_in(&drawn[at].0));
                 Some(entry)
             })
             .collect();
@@ -593,8 +594,8 @@ impl Object {
     /// answer is the same however the map behind them was iterated.
     ///
     /// Where two code sections overlap, a symbol of the one the listing of all the code
-    /// leaves out ([`drawn_sections`]) is skipped where the other covers it: the name has
-    /// to be of the code that listing shows there.
+    /// leaves out ([`drawn_sections`]) is skipped: the name has to be of the code that
+    /// listing shows there.
     ///
     /// **Named for the space it answers in**, as `Code::symbol_at_local` is for its own:
     /// the address alone is only a key with the bias in it, and in a relocatable object
@@ -605,6 +606,17 @@ impl Object {
     /// still just a number.
     pub fn symbol_at_placed(&self, placed: PlacedAddress) -> Option<&Arc<SymbolData>> {
         first_by_name(self.placed_at(placed).iter().filter(|entry| !entry.hidden))
+    }
+
+    /// Where the listing of all the code draws `symbol`: its placed start, or [`None`]
+    /// where that listing does not show it -- a symbol in no code section's bytes, or in a
+    /// section left out for overlapping another ([`drawn_sections`]). A binary search.
+    pub fn placed_in_code(&self, symbol: &SymbolData) -> Option<PlacedAddress> {
+        let placed = symbol.code_place()?;
+        self.placed_at(placed)
+            .iter()
+            .any(|entry| std::ptr::eq(Arc::as_ptr(&entry.symbol), symbol) && !entry.hidden)
+            .then_some(placed)
     }
 
     /// The entries of [`placed`](Self::placed) at exactly `placed`.
@@ -891,7 +903,7 @@ impl Section {
     /// The addresses this section's bytes take up, in the section's own terms. [`None`] for
     /// a section with no bytes — one holding no code among them — and for one that does not
     /// fit in the address space ([`end`](Self::end)).
-    pub(crate) fn bytes_range(&self) -> Option<Range<SectionAddress>> {
+    pub fn bytes_range(&self) -> Option<Range<SectionAddress>> {
         let end = self.end()?;
         (self.address < end).then_some(self.address..end)
     }

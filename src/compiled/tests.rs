@@ -128,23 +128,47 @@ fn one_name_in_two_objects_stays_two_candidates() {
     assert!(picked != candidates[0]);
 }
 
-/// A symbol in a section that was placed somewhere: what the section view draws it at.
-fn placed(name: &str, address: u64, bias: Bias) -> Arc<SymbolData> {
-    let section = Section::text(
-        SectionIndex(0),
-        ".text".into(),
-        Vec::new(),
-        SectionAddress::new(0),
-        BTreeMap::new(),
-        bias,
+/// An object of code sections, each 0x80 bytes from 0 and placed by its bias, holding
+/// `symbols` -- a name, which section and an address -- which come back in that order.
+fn laid_out(biases: &[u64], symbols: &[(&str, usize, u64)]) -> (Object, Vec<Arc<SymbolData>>) {
+    let sections: Vec<_> = biases
+        .iter()
+        .enumerate()
+        .map(|(index, &bias)| {
+            Arc::new(Section::text(
+                SectionIndex(index),
+                format!(".text.{index}"),
+                vec![0xC3; 0x80],
+                SectionAddress::new(0),
+                BTreeMap::new(),
+                Bias::new(bias),
+            ))
+        })
+        .collect();
+    let symbols: Vec<_> = symbols
+        .iter()
+        .map(|&(name, section, address)| {
+            Arc::new(SymbolData::new(
+                name.to_owned(),
+                None,
+                SectionAddress::new(address),
+                Some(sections[section].clone()),
+                None,
+            ))
+        })
+        .collect();
+    let object = Object::new(
+        PathBuf::from("/tmp/image"),
+        "image".to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        (symbols.iter().cloned().enumerate())
+            .map(|(index, symbol)| (SymbolIndex(index), symbol))
+            .collect(),
+        sections,
+        ObjectData::from(b"bytes".as_slice()),
     );
-    Arc::new(SymbolData::new(
-        name.to_owned(),
-        None,
-        SectionAddress::new(address),
-        Some(Arc::new(section)),
-        None,
-    ))
+    (object, symbols)
 }
 
 /// The place a listing opens at is the lowest **placed** address, which is not the lowest
@@ -153,23 +177,24 @@ fn placed(name: &str, address: u64, bias: Bias) -> Arc<SymbolData> {
 #[test]
 fn the_lowest_placed_address_is_not_the_first() {
     // Raw order: `early` at 0x10 comes first, but its section sits above the other's.
-    let symbols = [
-        placed("early", 0x10, Bias::new(0x2000)),
-        placed("late", 0x40, Bias::new(0x1000)),
-    ];
-    assert_eq!(lowest_placed(&symbols), Some(PlacedAddress::new(0x1040)));
+    let (object, symbols) = laid_out(&[0x2000, 0x1000], &[("early", 0, 0x10), ("late", 1, 0x40)]);
+    assert_eq!(
+        lowest_placed(&object, &symbols),
+        Some(PlacedAddress::new(0x1040))
+    );
 
     // One section is the ordinary case, and there the two agree.
-    let one = [
-        placed("a", 0x40, Bias::new(0x1000)),
-        placed("b", 0x10, Bias::new(0x1000)),
-    ];
-    assert_eq!(lowest_placed(&one), Some(PlacedAddress::new(0x1010)));
+    let (object, one) = laid_out(&[0x1000], &[("a", 0, 0x40), ("b", 0, 0x10)]);
+    assert_eq!(
+        lowest_placed(&object, &one),
+        Some(PlacedAddress::new(0x1010))
+    );
 }
 
 /// A symbol in no section is in no listing either, and nothing at all is no answer.
 #[test]
 fn a_symbol_with_no_section_is_nowhere_to_open() {
+    let (object, placed) = laid_out(&[0], &[("a", 0, 0x40)]);
     let loose = Arc::new(SymbolData::new(
         "absolute".to_owned(),
         None,
@@ -177,11 +202,24 @@ fn a_symbol_with_no_section_is_nowhere_to_open() {
         None,
         None,
     ));
-    assert_eq!(lowest_placed(std::slice::from_ref(&loose)), None);
+    assert_eq!(lowest_placed(&object, std::slice::from_ref(&loose)), None);
     // And it is stepped over rather than taken as the lowest.
     assert_eq!(
-        lowest_placed(&[loose, placed("a", 0x40, Bias::NONE)]),
+        lowest_placed(&object, &[loose, placed[0].clone()]),
         Some(PlacedAddress::new(0x40))
     );
-    assert_eq!(lowest_placed(&[]), None);
+    assert_eq!(lowest_placed(&object, &[]), None);
+}
+
+/// Two sections placed on top of each other: the listing of all the code draws only the
+/// first, so `b`, lower but in the second, is nowhere in it. Its placed address would land
+/// on the first section's bytes.
+#[test]
+fn a_symbol_in_a_section_the_listing_leaves_out_is_nowhere_to_open() {
+    let (object, symbols) = laid_out(&[0x1000, 0x1000], &[("b", 1, 0x10), ("a", 0, 0x40)]);
+    assert_eq!(
+        lowest_placed(&object, &symbols),
+        Some(PlacedAddress::new(0x1040))
+    );
+    assert_eq!(lowest_placed(&object, &symbols[..1]), None);
 }

@@ -73,22 +73,21 @@ pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
         .cloned()
 }
 
-/// The lowest **placed** address any of `symbols` starts at, or [`None`] for none of them
-/// that is in a section.
+/// The lowest **placed** address any of `symbols` starts at, of those the listing of
+/// `object`'s whole code shows ([`Object::placed_in_code`]); [`None`] for none of them.
 ///
-/// Placed ([`SymbolData::placed`]), which is the section's bias added: that is the space
-/// the listing of a whole object's code draws in and the space `symbol_at_placed` answers
-/// in, so a place worked out here names the row a reader would land on.
+/// Placed, which is the section's bias added: that is the space the listing of a whole
+/// object's code draws in and the space `symbol_at_placed` answers in, so a place worked
+/// out here names the row a reader would land on. A symbol in a section that listing leaves
+/// out is skipped: its placed address is another section's bytes there, or nothing.
 ///
-/// For an answer of [`Object::symbols_from_lines`] this is its first symbol's place, since
-/// the crate answers in placed order and every symbol it names is in a section. It is still
-/// the lowest and not the first because it takes any slice, and one built some other way
-/// carries neither guarantee.
-pub fn lowest_placed(symbols: &[Arc<SymbolData>]) -> Option<PlacedAddress> {
+/// For an answer of [`Object::symbols_from_lines`] this is the first shown symbol's place,
+/// since the crate answers in placed order. It is still the lowest and not the first
+/// because it takes any slice, and one built some other way carries no such guarantee.
+pub fn lowest_placed(object: &Object, symbols: &[Arc<SymbolData>]) -> Option<PlacedAddress> {
     symbols
         .iter()
-        .filter(|data| data.section.is_some())
-        .map(|data| data.placed_start())
+        .filter_map(|data| object.placed_in_code(data))
         .min()
 }
 

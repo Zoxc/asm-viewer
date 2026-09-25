@@ -19833,7 +19833,7 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
         .lines_from_source(&file)
         .first()
         .expect("the fixture has code from it");
-    let opening = compiled::lowest_placed(&object.symbols_from_lines(&file, line..=line))
+    let opening = compiled::lowest_placed(&object, &object.symbols_from_lines(&file, line..=line))
         .expect("an address");
 
     // The program the build already read, told which file is the pad's own: the fixture's
@@ -24493,6 +24493,102 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
     let landed = landing.peek().clone().expect("the target is left to land");
     assert!(landed.at.is_none(), "a line was left to land");
     assert_eq!(landed.address, Some(Address::Placed(target)));
+}
+
+/// A linked image whose headers put `.text.b` inside `.text`: `a` is `.text`, sixteen
+/// `nop`s at 0x1000, and `b` at 0x1004 is `call 0x100a; ret; ret`, a call into its own
+/// section where no symbol starts. The listing of all the code draws `.text` only, so it
+/// shows `a`'s bytes where `b` is. Handed back with `b`.
+fn under_another_section() -> Symbol {
+    use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolIndex};
+
+    let section = |index, name: &str, address, bytes: &[u8]| {
+        Arc::new(Section::text(
+            SectionIndex(index),
+            name.into(),
+            bytes.to_vec(),
+            SectionAddress::new(address),
+            std::collections::BTreeMap::new(),
+            Bias::NONE,
+        ))
+    };
+    let text = section(1, ".text", 0x1000, &[0x90; 0x10]);
+    let text_b = section(2, ".text.b", 0x1004, &[0xE8, 0x01, 0, 0, 0, 0xC3, 0xC3]);
+    let symbol = |name: &str, address, size, section: &Arc<Section>| {
+        Arc::new(SymbolData::new(
+            name.to_owned(),
+            None,
+            SectionAddress::new(address),
+            Some(section.clone()),
+            Some(size),
+        ))
+    };
+    let b = symbol("b", 0x1004, 7, &text_b);
+    let symbols = [symbol("a", 0x1000, 0x10, &text), b.clone()]
+        .into_iter()
+        .enumerate()
+        .map(|(index, symbol)| (SymbolIndex(index), symbol))
+        .collect();
+    let object = Arc::new(Object::new(
+        PathBuf::from("/linked/image"),
+        "image".to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        symbols,
+        vec![text, text_b],
+        ObjectData::from(&[][..]),
+    ));
+    Symbol { object, data: b }
+}
+
+/// A symbol in a section the listing of all the code leaves out has no place in it, so
+/// its listing offers no door there: the call into its own bytes is no link, and its
+/// rows' menu does not offer "Show in unified view". Either would land on `a`'s bytes.
+#[test]
+fn a_symbol_the_code_listing_leaves_out_offers_no_door_into_it() {
+    let b = under_another_section();
+    let operand = call_operand(&b);
+    let shown = Shown {
+        ask: Ask::Symbol(b.clone()),
+        studied: Studied::new(b.clone()),
+    };
+    let (mut test, roots) = TestingRunner::new(
+        menu_listing_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let states = roots.states;
+    let symbol = Document::Symbol(b.clone());
+    open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    let door = link_centre(&test, &operand);
+    test.move_cursor(door);
+    settle(&mut test);
+    assert_ne!(
+        icon_now(),
+        CursorIcon::Pointer,
+        "the call is drawn as a door"
+    );
+    press_at(&mut test, door);
+    settle(&mut test);
+    assert!(
+        states.open.active() == Some(symbol),
+        "a press on the call opened something"
+    );
+
+    let row = centre_of(&test, &format!("{:016X} ", 0x1004));
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Bookmark symbol".to_owned()),
+        "the menu never opened: {drawn:?}"
+    );
+    assert!(
+        !drawn.contains(&"Show in unified view".to_owned()),
+        "{drawn:?}"
+    );
 }
 
 /// A symbol named in an operand of the unified view is a place further down that same

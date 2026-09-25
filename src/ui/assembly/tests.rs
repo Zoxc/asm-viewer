@@ -382,10 +382,22 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
 
     // In the unified view a plain press moves down the listing already on screen, at the
     // address that listing draws the target at; Ctrl opens the symbol on its own.
+    let shown = (object.symbols_sorted.iter())
+        .find(|data| object.placed_in_code(data).is_some())
+        .expect("the fixture has code");
+    let shown_in_code = Door::Symbol {
+        symbol: Symbol {
+            object: object.clone(),
+            data: shown.clone(),
+        },
+        code_tab: true,
+    };
     assert!(matches!(
-        in_code.opens(false),
-        Some(Opens::InCode { placed, .. }) if placed == target.placed_start()
+        shown_in_code.opens(false),
+        Some(Opens::InCode { placed, .. }) if placed == shown.placed_start()
     ));
+    // A target that listing does not show, here one in no section, opens alone in place.
+    assert!(in_code.opens(false) == Some(Opens::Symbol(symbol.clone(), Reach::InPlace)));
     // With Ctrl either door is the symbol on its own, in a tab that stays: the two
     // listings differ in where a plain press goes and not in what Ctrl means.
     for door in [&in_code, &alone] {

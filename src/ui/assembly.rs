@@ -294,11 +294,23 @@ impl AsmData {
     }
 
     /// `address`, one of this listing's own, in the object's one address space: the
-    /// section's place in the layout added (`SymbolData::placed`), which is what a door
-    /// into the object's code takes. Not [`drawn_address`](Self::drawn_address), which is
+    /// section's place in the layout added (`SymbolData::placed`), which a door into the
+    /// object's code takes where [`in_code`](Self::in_code) allows. Not [`drawn_address`](Self::drawn_address), which is
     /// what this listing *draws*, and is a symbol's own where the listing is that symbol.
     pub(crate) fn placed(&self, address: SectionAddress) -> PlacedAddress {
         self.symbol().placed(address)
+    }
+
+    /// [`placed`](Self::placed), where the object's code shows that address as this
+    /// listing's: what a door into that code takes. [`None`] for an address in this
+    /// symbol's own section where that listing leaves the section out
+    /// ([`Object::placed_in_code`]), since it shows another section's bytes there, or none.
+    pub(crate) fn in_code(&self, address: SectionAddress) -> Option<PlacedAddress> {
+        let own = (self.symbol().section.as_ref())
+            .and_then(|section| section.bytes_range())
+            .is_some_and(|range| range.contains(&address));
+        let shown = !own || self.object().placed_in_code(self.symbol()).is_some();
+        shown.then(|| self.placed(address))
     }
 
     /// The source position the instruction at `index` was compiled from, or `None` where
@@ -567,12 +579,20 @@ impl Door {
         let reach = Reach::inside_with(ctrl);
         Some(match self {
             // In the unified view the target is further down this same listing: moved to,
-            // at the address that listing draws it at, which is the placed one.
-            Door::Symbol { symbol, code_tab } if *code_tab && !ctrl => Opens::InCode {
-                object: symbol.object.clone(),
-                placed: symbol.data.placed_start(),
-            },
-            Door::Symbol { symbol, .. } => Opens::Symbol(symbol.clone(), reach),
+            // at the address that listing draws it at, which is the placed one. A target in
+            // a section that listing leaves out is not in it, and opens alone in place.
+            Door::Symbol { symbol, code_tab } => {
+                let placed = (*code_tab && !ctrl)
+                    .then(|| symbol.object.placed_in_code(&symbol.data))
+                    .flatten();
+                match placed {
+                    Some(placed) => Opens::InCode {
+                        object: symbol.object.clone(),
+                        placed,
+                    },
+                    None => Opens::Symbol(symbol.clone(), reach),
+                }
+            }
             Door::Address { object, address } => Opens::Code {
                 object: object.clone(),
                 address: *address,
@@ -1024,8 +1044,8 @@ impl InstructionRow {
 /// Where a press on each of instruction `index`'s links goes, in [`links`]' order, picked
 /// by what its operands name: each relocation target's symbol; a branch's own row where
 /// this listing has the row it lands on, which is the same set the gutter draws an arrow
-/// for; and otherwise the address it goes to, a door into the object's code there in
-/// either listing -- the unified view's own rows included, where the target may be
+/// for; and otherwise the address it goes to, a door into the object's code there
+/// ([`AsmData::in_code`]) in either listing -- the unified view's own rows included, where the target may be
 /// screens away.
 fn doors_of(data: &AsmData, index: usize) -> Vec<Door> {
     let Some(instruction) = data.assembly().instructions.get(index) else {
@@ -1050,14 +1070,20 @@ fn doors_of(data: &AsmData, index: usize) -> Vec<Door> {
                 to: data.base() + data.lanes().row_of(edge.to),
                 at: data.position(edge.to),
             },
-            None => Door::Address {
-                object: data.object().clone(),
-                address: data.placed(*address),
+            None => match data.in_code(*address) {
+                Some(address) => Door::Address {
+                    object: data.object().clone(),
+                    address,
+                },
+                None => return Vec::new(),
             },
         },
-        Some(Operand::Call { address, .. }) => Door::Address {
-            object: data.object().clone(),
-            address: data.placed(*address),
+        Some(Operand::Call { address, .. }) => match data.in_code(*address) {
+            Some(address) => Door::Address {
+                object: data.object().clone(),
+                address,
+            },
+            None => return Vec::new(),
         },
         Some(Operand::Placeholder) | None => return Vec::new(),
     };
@@ -1152,8 +1178,10 @@ fn instruction_menu(
     // The row's door into the object's code, unless this listing is that already -- and
     // from there, the door back to the symbol read alone. The door takes the placed
     // address, which in a symbol's own listing is not the one drawn.
-    let neighbours =
-        (!data.code_tab()).then(|| (data.object().clone(), data.placed(instruction.address)));
+    let neighbours = (!data.code_tab())
+        .then(|| data.in_code(instruction.address))
+        .flatten()
+        .map(|placed| (data.object().clone(), placed));
     // The door back takes the symbol's own address, the space its listing draws.
     // Wherever this listing is not the tab itself, which is an object's code and the
     // assembly side of a source-driven tab: in the second the symbol has no other door,
