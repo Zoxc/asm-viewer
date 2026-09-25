@@ -303,7 +303,8 @@ them (`bytes_to`), and nothing else: every other arithmetic goes through `get()`
 means a plain number. A forgotten bias used to be invisible on a linked image, where every bias
 is 0, and wrong on every relocatable object; it is now a type error. A *section* is still not
 in the type, so two of one section's addresses and two of another's compare alike -- which is
-why `Code::symbol_at_local` still checks its hit is in the section it asked about. What crosses into the app
+why `Code::symbol_at_local` still checks, in a relocatable object, that its hit is in the section
+it asked about. What crosses into the app
 crosses as these types too -- a stretch's range, a gap's, an assembly's, an instruction's
 address, a line row's -- and the app carries them on (`agents/UI.md`), converting only where a
 number goes to a file.
@@ -886,11 +887,16 @@ it is a direct near `call`, the backend asks `Code::symbol_at_local` for the tex
 span, and the UI draws it as the same link with no change of its own. Three limits, each deliberate.
 *Exact start only*: a call into the middle of a function
 stays the number it is, and a target no symbol starts at (a PLT stub, a stripped static) stays plain
-text. *Same section*: the index is by placed address (`Section::bias` added), which makes a
-relocatable object's all-at-0 code sections distinct places, but a displacement past a section's end
-still lands in the placed space on some other section's function, so the hit has to be in the
-instruction's own section; `tests/linked_call.rs` pins a two-section object whose call would
-otherwise name the other's. **Each of the two takes the space it is named for**, and now says
+text. *Same section, in a relocatable object*: the index is by placed address (`Section::bias`
+added), which makes a relocatable object's all-at-0 code sections distinct places, but a
+displacement past a section's end still lands in the placed space on some other section's
+function, so there the hit has to be in the instruction's own section. The test is
+`Object::relocatable` and not whether two biases differ, since a layout that ran out of room leaves
+some sections at 0 on top of each other. A linked image's addresses are real, so its calls from one
+code section into another (vmlinux's `.init.text` into `.text`, a PE's `INIT` into `.text`) are
+named. `tests/linked_call.rs` pins both: a two-section object whose call would otherwise name
+the other's, and a linked image whose call does. **Each of the two takes the space it is named
+for**, and now says
 so in its signature: `Code::symbol_at_local` a `SectionAddress`, `Object::symbol_at_placed` a
 `PlacedAddress`. While both were `symbol_at` over a `u64`, a caller holding a section-local
 address and reaching for `Object`'s got an answer rather than an error -- the right one on a

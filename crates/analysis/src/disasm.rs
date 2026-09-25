@@ -127,16 +127,25 @@ impl<'a> Code<'a> {
     ///
     /// **Named for the space it takes**, as [`Object::symbol_at_placed`] is for its own,
     /// the two being the same question a bias apart. The object's index is by *placed*
-    /// address, so the section's bias goes on first, and the hit has to be in this section:
-    /// with every code section of a relocatable object at 0, a displacement past this
-    /// section's end lands on some other section's function in the placed space, and that
-    /// is not where the call goes. A target nothing starts at is [`None`], and the operand
-    /// stays the number it is.
+    /// address, so the section's bias goes on first. A target nothing starts at is
+    /// [`None`], and the operand stays the number it is.
+    ///
+    /// **In a relocatable object the hit has to be in this section.** Its code sections all
+    /// start at 0, so a displacement past this section's end lands on some other section's
+    /// function in the placed space, and that is not where the call goes. Checking the
+    /// object rather than the biases matters: a layout that ran out of room leaves some
+    /// sections unmoved and on top of each other. A linked image's addresses are real, so
+    /// there a call into another code section (`.init.text` into `.text`) is named.
     pub fn symbol_at_local(&self, address: SectionAddress) -> Option<Arc<SymbolData>> {
         let section = self.section?;
         let symbol = self.object.symbol_at_placed(section.place(address))?;
-        let home = symbol.section.as_ref()?;
-        std::ptr::eq(Arc::as_ptr(home), section).then(|| symbol.clone())
+        if self.object.relocatable {
+            let home = symbol.section.as_ref()?;
+            if !std::ptr::eq(Arc::as_ptr(home), section) {
+                return None;
+            }
+        }
+        Some(symbol.clone())
     }
 }
 

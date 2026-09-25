@@ -790,6 +790,7 @@ pub(crate) fn parse_unshared(
 
     let format = file.format();
     let architecture = file.architecture();
+    let relocatable = file.kind() == ObjectKind::Relocatable;
     let endianness = if file.is_little_endian() {
         Endianness::Little
     } else {
@@ -808,6 +809,7 @@ pub(crate) fn parse_unshared(
     );
     object.messages = messages;
     object.endianness = endianness;
+    object.relocatable = relocatable;
     Ok(object)
 }
 

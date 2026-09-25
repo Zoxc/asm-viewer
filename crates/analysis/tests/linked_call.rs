@@ -6,8 +6,8 @@ mod common;
 
 use analysis::{Operand, SpanKind};
 use common::{
-    at, elf_shared_object, elf_x86_64, goes_to, parse, pe_dll, symbol, text, ExportedSymbol,
-    SharedObject, TextSymbol, TEXT_ADDRESS,
+    at, elf_image, elf_shared_object, elf_x86_64, goes_to, parse, pe_dll, symbol, text, ElfImage,
+    ExportedSymbol, ImageSection, ImageSymbol, SharedObject, TextSymbol, TEXT_ADDRESS,
 };
 use object::{
     write, Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags,
@@ -273,6 +273,60 @@ fn an_unrelocated_call_never_reaches_across_sections() {
     // And the number is still where the call goes, in the section's own addresses:
     // nothing is judged about a target past the section's end.
     assert_eq!(goes_to(call), Some(at(6)));
+}
+
+#[test]
+fn a_linked_call_into_another_code_section_names_its_target() {
+    // A linked image with `f` in `.init.text` at 0x1000 calling `g` in `.text` at 0x2000,
+    // as vmlinux's init code calls into its `.text`. The addresses are real, so the call
+    // reaches `g` whichever section it is in.
+    let object = parse(&elf_image(ElfImage {
+        is_64: true,
+        big_endian: false,
+        machine: object::elf::EM_X86_64,
+        flags: object::elf::FileFlags(0),
+        entry: 0,
+        sections: &[
+            ImageSection {
+                name: ".init.text",
+                address: 0x1000,
+                code: true,
+                // `call 0x2000; ret`
+                bytes: &[0xE8, 0xFB, 0x0F, 0x00, 0x00, 0xC3],
+            },
+            ImageSection {
+                name: ".text",
+                address: 0x2000,
+                code: true,
+                bytes: &[0xC3],
+            },
+        ],
+        symbols: &[
+            ImageSymbol {
+                name: "f",
+                value: 0x1000,
+                size: 6,
+                kind: object::elf::STT_FUNC,
+                section: Some(0),
+            },
+            ImageSymbol {
+                name: "g",
+                value: 0x2000,
+                size: 1,
+                kind: object::elf::STT_FUNC,
+                section: Some(1),
+            },
+        ],
+        dynamic: &[],
+    }));
+
+    let f = symbol(&object, "f");
+    let g = symbol(&object, "g");
+    let assembly = f.assembly(&object).expect("f disassembles");
+    let call = &assembly.instructions[0];
+    let resolved = call.symbol().expect("the call names g");
+    assert!(Arc::ptr_eq(resolved, &g));
+    assert_eq!(text(call).trim_end(), "call      g");
 }
 
 #[test]

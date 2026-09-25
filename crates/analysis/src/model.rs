@@ -37,6 +37,11 @@ pub struct Object {
     /// say it, since MIPS, PowerPC and ARM each come in both. Little for an object made
     /// by [`Object::new`].
     pub endianness: Endianness,
+    /// Whether the file is a relocatable object (an ELF `.o`, a COFF `.obj`, a Mach-O `.o`)
+    /// rather than a linked image. Its code sections all start where the file says, usually
+    /// 0, until [`CodeSection::bias`] places them apart. `false` for an object made by
+    /// [`Object::new`].
+    pub relocatable: bool,
     pub symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
     /// The same symbols **sorted by name**, byte order, and one name's by index, the file's
     /// order. The Symbols list draws them in this order and a saved place is found in it by
@@ -274,6 +279,7 @@ impl Object {
             format: Some(format),
             architecture,
             endianness: Endianness::Little,
+            relocatable: false,
             symbols,
             symbols_sorted,
             imports,
@@ -301,6 +307,7 @@ impl Object {
             format: None,
             architecture: Architecture::Unknown,
             endianness: Endianness::Little,
+            relocatable: false,
             symbols: HashMap::new(),
             symbols_sorted: Vec::new(),
             imports: Vec::new(),
@@ -358,10 +365,10 @@ impl Object {
     /// **Named for the space it answers in**, as `Code::symbol_at_local` is for its own:
     /// the address alone is only a key with the bias in it, and in a relocatable object
     /// every code section starts at 0. A caller holding an address in a section's own terms
-    /// adds the section's bias first, which is all `Code::symbol_at_local` does, and one
-    /// that knows which section the address is in checks the answer is in it too — the bias
-    /// makes two sections two places, but a number past one section's end is still just a
-    /// number.
+    /// adds the section's bias first, as `Code::symbol_at_local` does. In a relocatable
+    /// object, one that knows which section the address is in checks the answer is in it
+    /// too: the bias makes two sections two places, but a number past one section's end is
+    /// still just a number.
     pub fn symbol_at_placed(&self, placed: PlacedAddress) -> Option<&Arc<SymbolData>> {
         let all = self.placed_symbols();
         let start = all.partition_point(|entry| entry.placed < placed);
