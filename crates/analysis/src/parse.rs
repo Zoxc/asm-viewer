@@ -363,21 +363,33 @@ enum Rule<'data, 'file> {
 struct Opd<'data, 'file> {
     section: object::Section<'data, 'file>,
     relocations: HashMap<u64, (RelocationTarget, i64)>,
+    /// In a linked image, the section a descriptor's code is in: the first the file lists
+    /// whose addresses hold it. Built once, since a walk of the sections per descriptor
+    /// costs functions times sections, and the file chooses both. In `u128`, so a section
+    /// running to the top of the address space ends where [`at`] says it does.
+    code_in: FirstCovering<u128, SectionIndex>,
 }
 
 impl<'data, 'file> Opd<'data, 'file> {
     fn of(file: &'file object::File<'data>, section: object::Section<'data, 'file>) -> Self {
         let mut relocations = HashMap::new();
+        let mut code_in = Vec::new();
         if file.kind() == ObjectKind::Relocatable {
             for (offset, relocation) in section.relocations() {
                 relocations
                     .entry(offset)
                     .or_insert((relocation.target(), relocation.addend()));
             }
+        } else {
+            for section in file.sections() {
+                let start = u128::from(section.address());
+                code_in.push((start..start + u128::from(section.size()), section.index()));
+            }
         }
         Opd {
             section,
             relocations,
+            code_in: FirstCovering::new(code_in),
         }
     }
 }
@@ -575,10 +587,7 @@ fn opd_code(file: &object::File<'_>, opd: &Opd<'_, '_>, address: u64) -> Option<
     }
     let endian = Endianness::from_big_endian(!file.is_little_endian())?;
     let code = read_word(&opd.section, offset, 8, endian)?;
-    let section = file
-        .sections()
-        .find(|section| at(section, code).is_some())
-        .map(|section| section.index());
+    let section = opd.code_in.get(u128::from(code));
     Some(Code {
         address: code,
         section,

@@ -168,7 +168,9 @@ export is, so a data export is cleared too, and dropped anyway for being in no c
 DWARF relocation against a tagged function in a `.o` takes the same address (`symbol_address`), so
 its line info starts where its symbol does. On PPC64 ELFv1 a
 function's symbol and `e_entry` name a descriptor in `.opd`, whose first doubleword is the code's
-address; the symbol's size is the descriptor's, so none is kept. In a relocatable object that
+address; the symbol's size is the descriptor's, so none is kept. The code's section is the first
+the file lists that holds it, from a `FirstCovering` over every section built once per image, since a
+walk per function costs functions times sections. In a relocatable object that
 doubleword is 0 until the linker writes it, so the relocation that fills it is read instead. A
 symbol already outside `.opd` is code: older toolchains name it `.foo` beside `foo`, and once `foo`
 is read through, `.foo` is dropped as the same place twice and gives `foo` its size. On XCOFF only

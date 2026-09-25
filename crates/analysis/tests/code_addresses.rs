@@ -10,9 +10,9 @@ use object::pe;
 
 use analysis::LoadMessage;
 use common::{
-    arm_pe_dll, arm_thumb_image, at, macho_arm_executable, mips_compressed_image, named, parse,
-    ppc64_elfv1_image, ppc64_elfv1_object, xcoff_image, ARMNT_TEXT, ARM_TEXT, MACHO_ARM_TEXT,
-    MIPS_TEXT, PPC64_TEXT, XCOFF_DATA, XCOFF_TEXT,
+    arm_pe_dll, arm_thumb_image, at, elf_image, macho_arm_executable, mips_compressed_image, named,
+    parse, ppc64_elfv1_image, ppc64_elfv1_object, xcoff_image, ElfImage, ImageSection, ImageSymbol,
+    ARMNT_TEXT, ARM_TEXT, MACHO_ARM_TEXT, MIPS_TEXT, PPC64_OPD, PPC64_TEXT, XCOFF_DATA, XCOFF_TEXT,
 };
 
 fn sorted_names(object: &analysis::Object) -> Vec<&str> {
@@ -203,6 +203,68 @@ fn a_ppc64_elfv1_function_is_at_the_code_its_descriptor_names() {
         object.messages,
         [LoadMessage::UnreadableDescriptors { count: 1 }]
     );
+}
+
+/// Where two sections overlap, the code a descriptor names is in the one the file lists
+/// first, whichever starts lower.
+#[test]
+fn a_ppc64_elfv1_function_in_two_sections_is_in_the_one_listed_first() {
+    // `in_both`'s code is in both sections, `below`'s in the lower one alone.
+    let mut opd = Vec::new();
+    for code in [PPC64_TEXT + 0xC, PPC64_TEXT + 4] {
+        opd.extend_from_slice(&code.to_be_bytes());
+        opd.extend_from_slice(&[0; 16]);
+    }
+    let lower = || ImageSection {
+        name: ".text.lower",
+        address: PPC64_TEXT,
+        code: true,
+        bytes: &[0; 0x20],
+    };
+    let inner = || ImageSection {
+        name: ".text.inner",
+        address: PPC64_TEXT + 8,
+        code: true,
+        bytes: &[0; 0x10],
+    };
+    let descriptor = |name, offset| ImageSymbol {
+        name,
+        value: PPC64_OPD + offset,
+        size: 24,
+        kind: object::elf::STT_FUNC,
+        section: Some(2),
+    };
+    let image = |code: [ImageSection; 2]| {
+        let [first, second] = code;
+        let opd = ImageSection {
+            name: ".opd",
+            address: PPC64_OPD,
+            code: false,
+            bytes: &opd,
+        };
+        parse(&elf_image(ElfImage {
+            is_64: true,
+            big_endian: true,
+            machine: object::elf::EM_PPC64,
+            flags: object::elf::FileFlags(1), // ELFv1
+            entry: 0,
+            sections: &[first, second, opd],
+            symbols: &[descriptor("in_both", 0), descriptor("below", 0x18)],
+            dynamic: &[],
+        }))
+    };
+    let section = |object: &analysis::Object, name| {
+        let symbol = named(object, name);
+        symbol.section.as_ref().map(|section| section.name.clone())
+    };
+
+    let object = image([inner(), lower()]);
+    assert_eq!(named(&object, "in_both").address, at(PPC64_TEXT + 0xC));
+    assert_eq!(section(&object, "in_both").as_deref(), Some(".text.inner"));
+    assert_eq!(section(&object, "below").as_deref(), Some(".text.lower"));
+
+    let object = image([lower(), inner()]);
+    assert_eq!(section(&object, "in_both").as_deref(), Some(".text.lower"));
 }
 
 #[test]
