@@ -81,8 +81,9 @@ pub(super) struct Pdb {
     /// The DBI stream, owned: modules are found in it by index.
     dbi: DebugInformation<'static>,
 
-    /// The `/names` stream, or [`None`] when the PDB has none — rows then name no file, and
-    /// extents still answer.
+    /// The `/names` stream, or [`None`] when the PDB has none or it will not read — rows then
+    /// name no file, and extents still answer. A row that names a file then counts
+    /// ([`NAMES`]).
     strings: Option<StringTable<'static>>,
 
     address_map: AddressMap<'static>,
@@ -104,7 +105,8 @@ pub(super) struct Pdb {
 
     /// The modules whose symbols or rows were read only up to something that would not read,
     /// by index, the first module a module list that stops short lost ([`Pdb::modules`]),
-    /// and the publics ([`GLOBALS`]).
+    /// the publics ([`GLOBALS`]) and the file names ([`NAMES`]); and the modules a row of
+    /// which names a file that will not read.
     skipped: Skipped,
 
     /// How many walks of the DBI module list this PDB has started, so a test can pin that a
@@ -152,6 +154,10 @@ const PROCEDURES: [pdb2::SymbolKind; 8] = [
 /// the DBI's module list, each of which is more than one byte.
 const GLOBALS: u64 = u64::MAX;
 
+/// The key [`Skipped`] counts a missing string table under, where a row names a file and
+/// there is no table to find its name in. No module has it, as none has [`GLOBALS`].
+const NAMES: u64 = u64::MAX - 1;
+
 /// The symbol record kinds that are publics, `S_PUB32` and its `_ST` spelling: the other
 /// kind the walks parse ([`PROCEDURES`]).
 const PUBLICS: [pdb2::SymbolKind; 2] = [
@@ -177,6 +183,9 @@ impl Pdb {
         let Ok(address_map) = pdb.address_map() else {
             return Some(Err(Unreadable));
         };
+        // A table that will not read costs the file names, and the rows, procedures and
+        // publics still answer. The loss is counted once a row names a file
+        // ([`Pdb::intern_file`]).
         let strings = pdb.string_table().ok();
 
         let contributions = contributions(&dbi, &address_map, image_base)?;
@@ -511,9 +520,9 @@ impl Pdb {
                 let Some(len) = line.length else {
                     continue;
                 };
-                let file = *files
-                    .entry(line.file_index.0)
-                    .or_insert_with(|| self.intern_file(&program, line.file_index, &mut rows));
+                let file = *files.entry(line.file_index.0).or_insert_with(|| {
+                    self.intern_file(index, &program, line.file_index, &mut rows)
+                });
                 // CodeView's line 0 is DWARF's: instructions belonging to no line. Column 0
                 // is the "no column" it writes when asked for none, which the collector
                 // takes as none.
@@ -541,17 +550,31 @@ impl Pdb {
         Some(ModuleLines { lines, procedures })
     }
 
-    /// The file a module's line program names by `index`, resolved through the string table
-    /// and interned into `rows` with its checksum, or [`None`] where either lookup fails.
+    /// The file module `index`'s line program names by `file`, resolved through the string
+    /// table and interned into `rows` with its checksum; or [`None`] where either lookup
+    /// fails, which is counted ([`Skipped`]): under the module where its entry for the file,
+    /// or the name it states, will not read, and under [`NAMES`] where there is no string
+    /// table.
     fn intern_file(
         &self,
+        index: usize,
         program: &pdb2::LineProgram<'_>,
-        index: pdb2::FileIndex,
+        file: pdb2::FileIndex,
         rows: &mut RowCollector,
     ) -> Option<usize> {
-        let info = program.get_file_info(index).ok()?;
-        let name = self.strings.as_ref()?.get(info.name).ok()?.to_string();
-        Some(rows.file(&name, source_hash(info.checksum)))
+        let Ok(info) = program.get_file_info(file) else {
+            self.skipped.note(index as u64);
+            return None;
+        };
+        let Some(strings) = &self.strings else {
+            self.skipped.note(NAMES);
+            return None;
+        };
+        let Ok(name) = strings.get(info.name) else {
+            self.skipped.note(index as u64);
+            return None;
+        };
+        Some(rows.file(&name.to_string(), source_hash(info.checksum)))
     }
 }
 

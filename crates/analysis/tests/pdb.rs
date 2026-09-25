@@ -1191,32 +1191,51 @@ unsafe impl GlobalAlloc for Capped {
 static ALLOCATOR: Capped = Capped;
 
 /// The object's module with the first block of its first line subsection stating a size far
-/// past the subsection. A module's C13 line data follows its symbols and its C11 lines, whose
-/// sizes the module's DBI record states at 36 and 40, and is a run of subsections, each a kind
-/// and a size; `pdb2` walks the lines subsections (kind `0xF2`) in order of the `offset`,
-/// `section` pair each begins with, so the first is the one with the lowest.
+/// past the subsection.
 fn first_line_block_overstated(pdb: &[u8]) -> Vec<u8> {
+    // After the block's file and line count.
+    first_line_block_patched(pdb, 8, 0xFFFF)
+}
+
+/// The object's module with the `u32` at `field` in the first block of its first line
+/// subsection set to `value`. The block follows the subsection's 12-byte header.
+fn first_line_block_patched(pdb: &[u8], field: usize, value: u32) -> Vec<u8> {
     let mut msf = Msf::new(pdb);
-    let record = module_record(&msf, 0);
     let stream = module_stream(&msf, 0);
+    let lines = first_line_subsection(&msf);
+    msf.write(stream, lines + 12 + field, &value.to_le_bytes());
+    msf.bytes
+}
+
+/// The object's module's C13 subsections, each its kind and where its data begins in the
+/// module's stream. A module's C13 line data follows its symbols and its C11 lines, whose
+/// sizes the module's DBI record states at 36 and 40, and is a run of subsections, each a kind
+/// and a size.
+fn subsections(msf: &Msf) -> Vec<(u32, usize)> {
+    let record = module_record(msf, 0);
+    let stream = module_stream(msf, 0);
     let mut at = (msf.u32_at(DBI, record + 36) + msf.u32_at(DBI, record + 40)) as usize;
     let end = at + msf.u32_at(DBI, record + 44) as usize;
-    let mut first: Option<((u16, u32), usize)> = None;
+    let mut subsections = Vec::new();
     while at < end {
         let (kind, size) = (msf.u32_at(stream, at), msf.u32_at(stream, at + 4));
-        let data = at + 8;
-        if kind == 0xF2 {
-            let key = (msf.u16_at(stream, data + 4), msf.u32_at(stream, data));
-            if first.is_none_or(|(first, _)| key < first) {
-                first = Some((key, data));
-            }
-        }
-        at = data + size as usize;
+        subsections.push((kind, at + 8));
+        at += 8 + size as usize;
     }
-    let (_, lines) = first.expect("a lines subsection");
-    // After the subsection's 12-byte header, the block's file and line count.
-    msf.write(stream, lines + 12 + 8, &0xFFFFu32.to_le_bytes());
-    msf.bytes
+    subsections
+}
+
+/// Where the data of the object's module's first line subsection begins in its stream.
+/// `pdb2` walks the lines subsections (kind `0xF2`) in order of the `offset`, `section` pair
+/// each begins with, so the first is the one with the lowest.
+fn first_line_subsection(msf: &Msf) -> usize {
+    let stream = module_stream(msf, 0);
+    subsections(msf)
+        .into_iter()
+        .filter(|&(kind, _)| kind == 0xF2)
+        .min_by_key(|&(_, data)| (msf.u16_at(stream, data + 4), msf.u32_at(stream, data)))
+        .map(|(_, data)| data)
+        .expect("a lines subsection")
 }
 
 /// A line block that will not read ends the module's rows there, and the module is counted;
@@ -1237,6 +1256,29 @@ fn a_line_block_that_does_not_read_is_counted() {
 
     assert!(symbol(&object, "add").line_info(&object).is_none());
     assert_eq!(symbol(&object, "add").debug_extent(&object), Some(0x11));
+    assert_eq!(object.debug_info_skipped(), 1);
+}
+
+/// A row whose file entry will not read has no file, and its module is counted; before, it
+/// was without a word. Here the first line block of `add`'s subsection names its file at an
+/// offset far past the file checksums.
+#[test]
+fn a_file_entry_that_will_not_read_is_counted() {
+    let dll = committed_fixture(NOEXPORT_DLL);
+    let pdb = committed_fixture("line_fixture_noexport.pdb");
+    let dir = scratch("file_entry_unread");
+    // The block's file, at its start.
+    std::fs::write(
+        dir.join("line_fixture_noexport.pdb"),
+        first_line_block_patched(&pdb, 0, 0xFFFF_0000),
+    )
+    .unwrap();
+    let object = parse_at(&dll, dir.join(NOEXPORT_DLL));
+
+    let add = line_info(&object, "add");
+    assert_eq!(rows(&add).len(), 4);
+    assert!(add.rows().iter().all(|row| row.file.is_none()));
+    assert!(line_info(&object, "twice").rows()[0].file.is_some());
     assert_eq!(object.debug_info_skipped(), 1);
 }
 

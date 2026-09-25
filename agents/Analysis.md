@@ -816,7 +816,9 @@ one that would run off the end of the address space.
 line block's size less its header, `section:offset + length` as a plain `+`, a string-table name at
 a declared offset), and debug-build panics on what the file states (a line whose successor is in
 another section or below it, and a line block with bytes left over), all under the same net
-(`notes/upstream/pdb2.md`): no real linker output reaches them. Two `pdb2` defects no guard
+(`notes/upstream/pdb2.md`): no real linker output reaches them. A PDB with no string table, or one
+that will not read, costs its rows their files, and counts as one part skipped once a row names a
+file; a row whose own file entry, or the name it states, will not read counts its module. Two `pdb2` defects no guard
 catches, both a count the file states allocated before it is checked. A stream directory's declared length is
 answered the way `section_data` answers a lying compressed size: `BoundedFile` weighs every
 declared slice and their total against the file's length first. An `S_CALLEES` or `S_CALLERS`
