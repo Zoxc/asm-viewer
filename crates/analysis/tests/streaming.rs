@@ -417,6 +417,22 @@ fn stand_in(objects: Vec<Arc<analysis::Object>>) -> (Vec<analysis::LoadMessage>,
     (object.messages.clone(), object.is_archive())
 }
 
+/// A cgo package's archive may also hold `preferlinkext` and `dynimportfail`, the empty files
+/// the go command writes to tell Go's linker to link externally. Neither is code, so both are
+/// left out without a word.
+#[test]
+fn a_cgo_archive_passes_over_its_linker_tokens() {
+    let objects = objects_of(archive(&[
+        ("_x001.o", &caller_and_target()),
+        ("preferlinkext", b""),
+        ("dynimportfail", b""),
+    ]));
+    let [object] = objects.as_slice() else {
+        panic!("one object, the cgo member: {}", objects.len());
+    };
+    assert_eq!(object.messages, []);
+}
+
 /// A whole file that yields no object is shown to say why: it is no object at all, it is
 /// one that would not parse, or it is an archive that would not, or that holds nothing.
 #[test]

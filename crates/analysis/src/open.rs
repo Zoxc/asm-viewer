@@ -542,13 +542,16 @@ pub(crate) fn name_of(path: &Path) -> String {
 /// Whether an archive member that did not parse was never meant to hold code, so leaving it
 /// out is nothing to report: rustc's metadata in an rlib, which is an object on the targets
 /// rustc knows how to wrap it for and bare bytes elsewhere, the Go compiler's export data in
-/// a Go package's archive, which starts as a Go object file does, and an import library's
-/// short entries, each only a name the DLL exports. The archive's symbol and name tables are
+/// a Go package's archive, which starts as a Go object file does, the two empty files the go
+/// command packs into a cgo package's archive to tell Go's linker to link externally, and an
+/// import library's short entries, each only a name the DLL exports. The archive's symbol and name tables are
 /// not among the members `object` hands over at all.
 fn not_code(name: &[u8], bytes: &[u8]) -> bool {
     name == b"lib.rmeta"
         || name == b"lib.rmeta-link"
         || name == b"__.PKGDEF"
+        || name == b"preferlinkext"
+        || name == b"dynimportfail"
         || matches!(FileKind::parse(bytes), Ok(FileKind::CoffImport))
 }
 

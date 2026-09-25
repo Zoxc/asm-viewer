@@ -74,12 +74,14 @@ kind it knows and does not read, counted and named per kind, since an LTO build'
 nothing but LLVM bitcode, and among them an archive inside the archive, which is not opened, and
 a Go package's code in Go's own object format (`go object `), which is code, so it is counted
 rather than passed over (`LoadMessage::UnsupportedMembers`), and the rest
-(`LoadMessage::UnreadableMembers`); each a count. Three
+(`LoadMessage::UnreadableMembers`); each a count. Four
 kinds of member are expected not to be code and are left out without a word: rustc's metadata in an
 rlib (`lib.rmeta`, `lib.rmeta-link`), which is an object on the targets rustc can wrap it for and
 bare bytes elsewhere, the Go compiler's export data in a Go package's archive (`__.PKGDEF`, told
-by its name, since it starts `go object ` as the code does), and an import library's short
-entries, each only a name a DLL exports. So
+by its name, since it starts `go object ` as the code does), the empty `preferlinkext` and
+`dynimportfail` the go command packs into a cgo package's archive to tell Go's linker to link
+externally (by name, as `cmd/link` finds them), and an import library's short entries, each only
+a name a DLL exports. So
 what is counted is members that should have held code: across the 478 rlibs and `.a` files a
 workspace build leaves in `target/`, none is. The archive's symbol and name tables never reach the
 walk: `object` takes them at parse. And a **thin archive**'s members (`!<thin>`, from
