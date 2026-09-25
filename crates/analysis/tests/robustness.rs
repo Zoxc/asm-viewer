@@ -759,10 +759,56 @@ fn a_subprogram_whose_bounds_do_not_read_is_counted() {
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
+/// Defect: a subprogram whose `DW_AT_high_pc` is an address below its `DW_AT_low_pc` was
+/// passed over without a word. Its extent is still lost, but its unit is counted, once.
+#[test]
+fn a_subprogram_ending_before_it_starts_is_counted() {
+    use gimli::write::{Address, AttributeValue};
+    let object = parse(&elf_with_subprograms(vec![
+        (
+            AttributeValue::Address(Address::Constant(0)),
+            AttributeValue::Udata(0x10),
+        ),
+        (
+            AttributeValue::Address(Address::Constant(0x30)),
+            AttributeValue::Address(Address::Constant(0x20)),
+        ),
+    ]));
+    let text = object
+        .sections
+        .iter()
+        .find(|section| section.name == ".text")
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(object.function_extent(text, at(0)), Some(0x10));
+        assert_eq!(object.function_extent(text, at(0x30)), None);
+    }
+    assert_eq!(object.debug_info_skipped(), 1);
+}
+
 /// An ELF with one unit over its 0x40 bytes of `.text` and three subprograms in it: one at 0
 /// stating 0x10 bytes, one whose `DW_AT_low_pc` is a plain number, and one at 0x30 whose
-/// `DW_AT_high_pc` is a string. Nothing is relocated: a lone `.text` is placed at 0.
+/// `DW_AT_high_pc` is a string.
 fn elf_with_unreadable_subprogram_bounds() -> Vec<u8> {
+    use gimli::write::{Address, AttributeValue};
+    elf_with_subprograms(vec![
+        (
+            AttributeValue::Address(Address::Constant(0)),
+            AttributeValue::Udata(0x10),
+        ),
+        (AttributeValue::Udata(0x20), AttributeValue::Udata(0x10)),
+        (
+            AttributeValue::Address(Address::Constant(0x30)),
+            AttributeValue::String(b"x".to_vec()),
+        ),
+    ])
+}
+
+/// An ELF with one unit over its 0x40 bytes of `.text` and a subprogram in it for each
+/// `(DW_AT_low_pc, DW_AT_high_pc)` pair. Nothing is relocated: a lone `.text` is placed at 0.
+fn elf_with_subprograms(
+    subprograms: Vec<(gimli::write::AttributeValue, gimli::write::AttributeValue)>,
+) -> Vec<u8> {
     use gimli::write::{
         Address, AttributeValue, DwarfUnit, EndianVec, LineProgram, LineString, Sections,
     };
@@ -793,17 +839,6 @@ fn elf_with_unreadable_subprogram_bounds() -> Vec<u8> {
     dwarf.unit.line_program = program;
 
     let root = dwarf.unit.root();
-    let subprograms = [
-        (
-            AttributeValue::Address(Address::Constant(0)),
-            AttributeValue::Udata(0x10),
-        ),
-        (AttributeValue::Udata(0x20), AttributeValue::Udata(0x10)),
-        (
-            AttributeValue::Address(Address::Constant(0x30)),
-            AttributeValue::String(b"x".to_vec()),
-        ),
-    ];
     for (low, high) in subprograms {
         let die = dwarf.unit.add(root, gimli::DW_TAG_subprogram);
         let entry = dwarf.unit.get_mut(die);

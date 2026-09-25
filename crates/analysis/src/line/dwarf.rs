@@ -229,8 +229,8 @@ fn location_ranges<'context>(
 /// not followed: only the DIE carrying `low_pc` knows where the bytes are.
 ///
 /// Whether every subprogram in the unit read. One whose `DW_AT_low_pc` or `DW_AT_high_pc`
-/// will not read as an address, or is of a form no address is, is skipped and the walk goes
-/// on. A DIE that will not read ends the walk, keeping what was read before: nothing past it
+/// will not read as an address, or is of a form no address is, or whose end is below its
+/// start, is skipped and the walk goes on. A DIE that will not read ends the walk, keeping what was read before: nothing past it
 /// can be found. A DIE is as long as its abbreviation's attributes make it, so one whose
 /// abbreviation or forms will not read does not say where the next begins. An ancestor's
 /// `DW_AT_sibling` would, but only gcc writes it.
@@ -270,7 +270,10 @@ fn subprogram_extents(
             Some(value) => match sections.attr_address(unit, value) {
                 Ok(Some(high)) => match low.bytes_to(PlacedAddress::new(high)) {
                     Some(size) => size,
-                    None => continue,
+                    None => {
+                        whole = false;
+                        continue;
+                    }
                 },
                 _ => {
                     whole = false;
