@@ -93,6 +93,9 @@ pub enum LoadMessage {
     /// read and were skipped, and, where `cut_short`, the table would not read to its end.
     /// The functions they state may be missing or of estimated length.
     UnreadableUnwindEntries { count: usize, cut_short: bool },
+    /// `count` of a linked image's exports would not read and were skipped, and, where
+    /// `cut_short`, the export table would not read to its end.
+    UnreadableExports { count: usize, cut_short: bool },
     /// An archive's members stopped at the `member`th (from 1), whose header would not
     /// read, or whose bytes run past the end of the file. Said on the last object shown
     /// before it, or on the archive when none was.
@@ -156,6 +159,8 @@ impl LoadMessage {
             LoadMessage::UnreadableSectionNames { .. } => Severity::Warning,
             // What is shown is right; some functions are missing or of estimated length.
             LoadMessage::UnreadableUnwindEntries { .. } => Severity::Warning,
+            // What is shown is right; some names are missing.
+            LoadMessage::UnreadableExports { .. } => Severity::Warning,
             // What is shown is right; only some of it is missing.
             LoadMessage::ArchiveCutShort { .. } => Severity::Warning,
             // Nothing shown is wrong; the members are simply not shown.
@@ -199,6 +204,14 @@ impl fmt::Display for LoadMessage {
                     (count, true) => {
                         write!(f, "Unwind entries that would not read: {count}. {rest}")
                     }
+                }
+            }
+            LoadMessage::UnreadableExports { count, cut_short } => {
+                let rest = "The export table would not read to its end.";
+                match (*count, *cut_short) {
+                    (0, _) => write!(f, "{rest}"),
+                    (count, false) => write!(f, "Exports that would not read: {count}."),
+                    (count, true) => write!(f, "Exports that would not read: {count}. {rest}"),
                 }
             }
             LoadMessage::ArchiveCutShort { member } => write!(

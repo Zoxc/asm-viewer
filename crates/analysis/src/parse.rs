@@ -105,6 +105,8 @@ struct SymbolTable {
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
 ///
+/// Exports that would not read are said on `messages`.
+///
 /// The indices start at `next`, *past* the file's own symbol table, which is the only honest
 /// thing they can be. Nothing can reach them by relocation, since a file that declares
 /// exports is a linked image.
@@ -118,6 +120,7 @@ fn declared_code(
     next: usize,
     named: Vec<Declared>,
     unwind: &[UnwindEntry],
+    messages: &mut Vec<LoadMessage>,
 ) -> Vec<Pending> {
     let mut declared = Vec::new();
     if file.kind() == ObjectKind::Relocatable {
@@ -189,19 +192,34 @@ fn declared_code(
         }
     }
 
-    // `exports` reports one entry at a time, so a malformed one is skipped rather than
-    // taken as the end of the table. Not in a Mach-O export trie: past a bad node `object`
-    // hands back the same error forever (`notes/upstream/object.md`), so there the first
-    // error ends the walk. An export names a place in this image only when it has a name
-    // and an address: one identified by ordinal has nothing to draw, and a forwarder or a
-    // re-export names a place in another image. The name is the file's, and on a Windows
-    // DLL very often MSVC-mangled.
+    // `exports` reports one entry at a time, so a malformed one is skipped and counted
+    // rather than taken as the end of the table. Not in a Mach-O export trie: past a bad
+    // node `object` hands back the same error forever (`notes/upstream/object.md`), so
+    // there the first error ends the walk, and the table is cut short. An export names a
+    // place in this image only when it has a name and an address: one identified by
+    // ordinal has nothing to draw, and a forwarder or a re-export names a place in another
+    // image. The name is the file's, and on a Windows DLL very often MSVC-mangled.
     let stuck_at_error = file.format() == BinaryFormat::MachO;
-    for export in file.exports().into_iter().flatten() {
+    let mut unread = 0usize;
+    let mut cut_short = false;
+    let exports = match file.exports() {
+        Ok(exports) => Some(exports),
+        Err(_) => {
+            cut_short = true;
+            None
+        }
+    };
+    for export in exports.into_iter().flatten() {
         let export = match export {
             Ok(export) => export,
-            Err(_) if stuck_at_error => break,
-            Err(_) => continue,
+            Err(_) if stuck_at_error => {
+                cut_short = true;
+                break;
+            }
+            Err(_) => {
+                unread = unread.saturating_add(1);
+                continue;
+            }
         };
         let ExportTarget::Address { address } = export.target() else {
             continue;
@@ -223,6 +241,13 @@ fn declared_code(
             SectionAddress::new(addresses.export(address)),
             None,
         );
+    }
+
+    if unread > 0 || cut_short {
+        messages.push(LoadMessage::UnreadableExports {
+            count: unread,
+            cut_short,
+        });
     }
 
     // No entry point is 0 in an ELF image and all ones by the file's width in XCOFF, where 0
@@ -777,6 +802,7 @@ pub(crate) fn parse_unshared(
         next,
         named,
         &unwind,
+        &mut messages,
     );
     messages.extend(addresses.message());
     let ranges = place_unwind(&code, &unwind);

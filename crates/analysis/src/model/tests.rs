@@ -199,6 +199,20 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         assert_eq!(unwind.to_string(), words);
     }
 
+    for (count, cut_short, words) in [
+        (2, false, "Exports that would not read: 2."),
+        (0, true, "The export table would not read to its end."),
+        (
+            1,
+            true,
+            "Exports that would not read: 1. The export table would not read to its end.",
+        ),
+    ] {
+        let exports = LoadMessage::UnreadableExports { count, cut_short };
+        assert_eq!(exports.severity(), Severity::Warning);
+        assert_eq!(exports.to_string(), words);
+    }
+
     let cut = LoadMessage::ArchiveCutShort { member: 2 };
     assert_eq!(cut.severity(), Severity::Warning);
     assert_eq!(

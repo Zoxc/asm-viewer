@@ -85,8 +85,8 @@ went wrong beside its answer rather than reporting it itself, as `section_biases
 loader, which asks the same rule again, drops the second copy. The Objects list marks the row
 (`agents/Sidebar.md`). The cases reported so far: the layout running out of address space,
 functions left out because the descriptor naming their code could not be read (below), sections
-named `<section N>` because their own names would not read (below), unwind entries that would not
-read (below), the three an archive's members
+named `<section N>` because their own names would not read (below), unwind entries and exports that would
+not read (below), the three an archive's members
 are left out for (above), and the five a whole file shows nothing for (above). Those five are
 `Severity::Fatal`, the file not loading at all, above `Severity::Error`, which is for something
 shown that is wrong. What the debug info could not read is not among them,
@@ -193,7 +193,8 @@ wins. The lookup (`FirstCovering`, in `model.rs`) is built once, by cutting the 
 start and end into pieces that each belong to the first section over them, and each address is a
 binary search: a walk of the sections per name costs names times sections, and a file chooses both. A bad export is skipped and the walk reads on,
 except in a Mach-O's export trie, where `object` answers the same error forever and the first one
-ends the walk (`notes/upstream/object.md`). A relocatable object is skipped entirely:
+ends the walk (`notes/upstream/object.md`). Either is one warning, a count and whether the table
+was cut short (`LoadMessage::UnreadableExports`). A relocatable object is skipped entirely:
 `entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. For a Mach-O,
 `entry()` answers an `LC_MAIN` as a file offset, so `macho_entry` walks the load commands
 itself and is not asked at all: an `LC_MAIN`'s offset is placed through the segment whose file

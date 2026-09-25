@@ -6,6 +6,7 @@
 
 mod common;
 
+use analysis::LoadMessage;
 use common::{
     at, elf_image, elf_shared_object, macho_arm_executable, macho_executable, named, parse, pe_dll,
     ElfImage, ExportedSymbol, ImageSection, ImageSymbol, SharedObject, MACHO_ARM_TEXT,
@@ -320,6 +321,43 @@ fn a_macho_export_trie_cut_inside_an_edge_ends_the_export_walk() {
     assert_eq!(
         named(&object, "<entry point>").address,
         at(MACHO_ARM_TEXT + 4)
+    );
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableExports {
+            count: 0,
+            cut_short: true
+        }]
+    );
+}
+
+/// A PE export whose name will not read is skipped and counted, and the walk reads on.
+#[test]
+fn a_pe_export_whose_name_will_not_read_is_skipped_and_counted() {
+    let mut data = pe_dll(TEXT, EXPORTS, None);
+    // The first name pointer, sent past every section.
+    let at_pointer = {
+        let pe = object::read::pe::PeFile64::parse(data.as_slice()).unwrap();
+        let table = pe.export_table().unwrap().expect("an export table");
+        let pointers = table.name_pointers();
+        pointers.as_ptr() as usize - data.as_ptr() as usize
+    };
+    data[at_pointer..at_pointer + 4].copy_from_slice(&0xffff_ff00u32.to_le_bytes());
+
+    let object = parse(&data);
+    let mut names: Vec<&str> = object
+        .symbols_sorted
+        .iter()
+        .map(|symbol| symbol.name.as_str())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["second"], "`first` is named by nothing else");
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableExports {
+            count: 1,
+            cut_short: false
+        }]
     );
 }
 

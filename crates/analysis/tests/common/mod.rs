@@ -2002,7 +2002,9 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
     }
 
     // Past everything the export table occupies, so a data export is an address in a
-    // section that is not code.
+    // section that is not code. An address inside the export directory's range would be a
+    // forwarder's name.
+    let export_size = strings_rva + strings.len() as u64 - rdata_rva;
     let data_rva = strings_rva + strings.len() as u64 + 0x10;
 
     let mut rdata = Vec::new();
@@ -2132,7 +2134,7 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
     opt[108..112].copy_from_slice(&16u32.to_le_bytes()); // NumberOfRvaAndSizes
                                                          // Data directory 0 is the export table.
     opt[112..116].copy_from_slice(&(rdata_rva as u32).to_le_bytes());
-    opt[116..120].copy_from_slice(&(rdata_size as u32).to_le_bytes());
+    opt[116..120].copy_from_slice(&(export_size as u32).to_le_bytes());
     // Data directory 3 is the exception directory: the whole of `.pdata`, when there is one.
     if !pdata.is_empty() {
         opt[136..140].copy_from_slice(&(pdata_rva as u32).to_le_bytes());
@@ -2665,10 +2667,11 @@ pub fn arm_pe_dll(machine: object::pe::Machine) -> Vec<u8> {
     let mut writer = Writer::new(false, 0x1000, 0x200, &mut out);
     writer.reserve_dos_header();
     writer.reserve_nt_headers(16);
+    // Up to the end of the names: `odd_datum` past it is data, not a forwarder's name.
     writer.set_data_directory(
         pe::IMAGE_DIRECTORY_ENTRY_EXPORT,
         RDATA_RVA,
-        rdata.len() as u32,
+        (strings + text_names.len()) as u32,
     );
     writer.reserve_section_headers(2);
     let text_at = writer.reserve_text_section(text.len() as u32);
