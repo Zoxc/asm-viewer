@@ -545,13 +545,42 @@ fn old_arm_pe(file: &object::File<'_>) -> bool {
 }
 
 /// A symbol's value as the address it names: the code's for a function whose value is
-/// tagged ([`ModeBit::Functions`]), and the value as it is for anything else. What a
-/// relocation against the symbol resolves to.
-pub(crate) fn symbol_address(file: &object::File<'_>, symbol: &object::Symbol<'_, '_>) -> u64 {
-    let address = symbol.address();
-    match ModeBit::of(file) {
+/// tagged ([`ModeBit::Functions`]), and the value as it is for anything else, in the space
+/// its section's addresses are in ([`symbol_value`]). What a relocation against the symbol
+/// resolves to.
+pub(crate) fn symbol_address(
+    file: &object::File<'_>,
+    symbol: &object::Symbol<'_, '_>,
+) -> Option<u64> {
+    let address = symbol_value(file, symbol)?;
+    Some(match ModeBit::of(file) {
         Some(ModeBit::Functions) if symbol.kind() == SymbolKind::Text => mode_bit_cleared(address),
         _ => address,
+    })
+}
+
+/// A symbol's value in the space its section's addresses are in, which is where the section's
+/// bytes are decoded and its relocations kept. In every format but one that is the value
+/// `object` hands over. In an ELF relocatable object `st_value` is an offset into the
+/// symbol's section (the gABI), and the section may state an address of its own (`ld -r
+/// --section-start`, a linker script), so that address is added. [`None`] where the sum runs
+/// past the end of the address space.
+///
+/// A COFF object's value is an offset too, but `object` adds the section's address itself,
+/// and a Mach-O `.o` states addresses. An absolute, common or undefined ELF symbol has no
+/// section to add.
+fn symbol_value(file: &object::File<'_>, symbol: &object::Symbol<'_, '_>) -> Option<u64> {
+    let value = symbol.address();
+    if file.format() != BinaryFormat::Elf || file.kind() != ObjectKind::Relocatable {
+        return Some(value);
+    }
+    match symbol.section() {
+        SymbolSection::Section(index) => file
+            .section_by_index(index)
+            .ok()?
+            .address()
+            .checked_add(value),
+        _ => Some(value),
     }
 }
 
@@ -572,7 +601,7 @@ fn opd_code(file: &object::File<'_>, opd: &Opd<'_, '_>, address: u64) -> Option<
         let (base, section) = match target {
             RelocationTarget::Symbol(index) => {
                 let symbol = file.symbol_by_index(index).ok()?;
-                (symbol.address(), symbol.section().index())
+                (symbol_value(file, &symbol)?, symbol.section().index())
             }
             RelocationTarget::Section(index) => {
                 (file.section_by_index(index).ok()?.address(), Some(index))
@@ -884,8 +913,12 @@ fn symbol_table(file: &object::File<'_>, addresses: &CodeAddresses<'_, '_>) -> S
             continue;
         }
 
+        // Left out where its section's address and its offset add up past the end.
+        let Some(value) = symbol_value(file, &symbol) else {
+            continue;
+        };
         let stated_at = Code {
-            address: symbol.address(),
+            address: value,
             section: symbol.section().index(),
             size: stated(symbol.size()),
         };

@@ -103,8 +103,9 @@ fn the_call_resolves_to_the_target_symbol() {
 
 /// An ELF `.o` may state an address for its `.text` (`ld -r` given a linker script, some
 /// embedded toolchains). Its instructions are then decoded at that address, while each
-/// relocation states only an offset into the section, so the call is named only if the
-/// two meet.
+/// symbol's value and each relocation's place state only an offset into the section. The
+/// symbols were taken at their offsets, below the bytes they name, so neither function
+/// disassembled; and the call is named only if the relocation meets the instruction.
 #[test]
 fn a_call_in_a_section_that_states_an_address_resolves_through_its_relocation() {
     let mut data = caller_and_target();
@@ -112,6 +113,7 @@ fn a_call_in_a_section_that_states_an_address_resolves_through_its_relocation() 
     let object = parse(&data);
     let caller = symbol(&object, "caller");
     assert_eq!(caller.address, at(0x1000));
+    assert_eq!(symbol(&object, "target").address, at(0x1006));
 
     let assembly = caller.assembly(&object).expect("caller disassembles");
     let call = &assembly.instructions[0];

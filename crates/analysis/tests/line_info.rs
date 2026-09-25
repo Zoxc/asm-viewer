@@ -445,7 +445,9 @@ fn a_linked_images_retained_relocations_are_not_applied_again() {
 /// A relocatable object may state where a section goes — a Mach-O `.o` always does — and
 /// state it above where the parse placed it. The bias was then the wrapped difference: the
 /// rows landed where they belonged and every query saturated past them, so the section's
-/// symbols had no line info and nothing about it looked wrong.
+/// symbols had no line info and nothing about it looked wrong. In an ELF `.o` the symbol the
+/// rows are relocated against states an offset into that section, and was taken as the
+/// address: the symbol and its rows both landed 0x1000 below its code.
 #[test]
 fn a_section_stating_an_address_of_its_own_still_answers() {
     let mut data = two_sections(UnitRanges::Relocated);

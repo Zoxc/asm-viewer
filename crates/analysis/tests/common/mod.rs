@@ -426,30 +426,16 @@ fn elf_section_header(data: &[u8], name: &str) -> (usize, u16) {
     panic!("no section named {name}");
 }
 
-/// Give one section of a written ELF an address of its own, moving every symbol defined in
-/// it to match: `st_value` in a relocatable object is an offset from the section's start.
+/// Give one section of a written ELF an address of its own. Its symbols are left as they
+/// are: `st_value` in a relocatable object is an offset from the section's start, so they
+/// move with it.
 ///
 /// The shape a Mach-O `.o` has naturally and `ld -r --section-start` produces — a
 /// relocatable object that states where a section goes — and the one the writers cannot
 /// build.
 pub fn elf_place_section(data: &mut [u8], name: &str, address: u64) {
-    let (header, index) = elf_section_header(data, name);
+    let (header, _) = elf_section_header(data, name);
     data[header + 0x10..header + 0x18].copy_from_slice(&address.to_le_bytes());
-
-    let (symtab, _) = elf_section_header(data, ".symtab");
-    let field = |at: usize| u64::from_le_bytes(data[at..at + 8].try_into().unwrap()) as usize;
-    let offset = field(symtab + 0x18);
-    let size = field(symtab + 0x20);
-    let entry = field(symtab + 0x38);
-
-    for symbol in (offset..offset + size).step_by(entry) {
-        // `st_shndx`, then `st_value`.
-        if u16::from_le_bytes(data[symbol + 6..symbol + 8].try_into().unwrap()) != index {
-            continue;
-        }
-        let value = u64::from_le_bytes(data[symbol + 8..symbol + 16].try_into().unwrap());
-        data[symbol + 8..symbol + 16].copy_from_slice(&(value + address).to_le_bytes());
-    }
 }
 
 /// Point one section's bytes off the end of a written ELF, so nothing can read them. The

@@ -181,7 +181,8 @@ Windows CE PE (`IMAGE_FILE_MACHINE_ARM`, `IMAGE_FILE_MACHINE_THUMB`) is an unkno
 value is even, `ld64` flagging a Thumb one in `n_desc`. An export table says nothing of what an
 export is, so a data export is cleared too, and dropped anyway for being in no code section. A
 DWARF relocation against a tagged function in a `.o` takes the same address (`symbol_address`), so
-its line info starts where its symbol does. On PPC64 ELFv1 a
+its line info starts where its symbol does. That address has an ELF `.o` section's own address
+added too (`symbol_value`, below). On PPC64 ELFv1 a
 function's symbol and `e_entry` name a descriptor in `.opd`, whose first doubleword is the code's
 address; the symbol's size is the descriptor's, so none is kept. The code's section is the first
 the file lists that holds it, from a `FirstCovering` over every section built once per image, since a
@@ -309,7 +310,13 @@ bytes, every entry of which is an answer. Each address holds a list, in the file
 entry per address kept only the last of two relocations at one place, and nothing says a file
 will not state two. The debug sections are relocated straight from `object`'s iterator
 (`line/dwarf.rs`'s `relocate`) and want the offset as it comes, since it indexes the bytes being
-patched. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in `Object::placed`,
+patched. A symbol in an ELF `.o` has the same problem: `st_value` is an offset into its section,
+and `object` hands it over as it is, where it adds the section's address to a COFF symbol's and a
+Mach-O one states an address. So `symbol_value` (`parse.rs`) adds the section's address, and the
+symbol table, `.opd`'s relocations and `relocate` (through `symbol_address`) all take a symbol's
+address from it. Without it, a `.o` from `ld -r --section-start=.text=0x1000` had every function
+below its bytes, so none disassembled, and a DWARF relocation against a symbol landed 0x1000 below
+one against the section. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in `Object::placed`,
 **clipped to the section's own bytes**. The index holds only symbols inside a code section's bytes,
 since an address is a number out of the file and one wild `st_value` would otherwise cost the symbol
 *above* it its listing rather than only itself. The derivation is in **placed** addresses throughout,
