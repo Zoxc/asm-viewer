@@ -92,7 +92,9 @@ shown that is wrong. What the debug info could not read is not among them,
 because most of it is found after the parse, as the questions reach it, and `messages` is settled
 by then. Each backend counts the parts it went past or read only in part instead, a DWARF unit or
 a PDB module, each once however often it is read (`Skipped`, `line.rs`), and
-`Object::debug_info_skipped` answers the count so far. `Object::messages_so_far` is `messages`
+`Object::debug_info_skipped` answers the count so far. A panic the seam's net catches (below),
+building the backend or answering a question, is one more however many there are: the seam does
+not know which part the backend was reading, and a part that panics does so on every ask. `Object::messages_so_far` is `messages`
 with that count after them as one more warning (`LoadMessage::DebugInfoSkipped`), and it is what
 `Object::worst` and the Objects list read, so asking it again is what brings the count up to date.
 

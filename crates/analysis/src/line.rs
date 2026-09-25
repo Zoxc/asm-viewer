@@ -28,6 +28,7 @@ use crate::{Bias, Object, PlacedAddress, Section, SectionAddress, SymbolData};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 mod dwarf;
@@ -47,7 +48,11 @@ pub(crate) struct Declared {
 
 /// An [`Object`]'s debug info, or the fact that it has none, worked out at most once. Caching
 /// the *absence* is what keeps a stripped binary from re-scanning its section table per query.
-pub(crate) struct DebugInfoCache(OnceLock<Option<DebugInfo>>);
+pub(crate) struct DebugInfoCache {
+    info: OnceLock<Option<DebugInfo>>,
+    /// Whether building it panicked, which left "none" in `info` for good ([`DebugInfo::load`]).
+    panicked: AtomicBool,
+}
 
 impl DebugInfoCache {
     /// A cache holding `preloaded`, the backend the parse built ([`DebugInfo::declared`]'s),
@@ -55,10 +60,13 @@ impl DebugInfoCache {
     /// [`None`] means nothing was loaded yet: the first question loads it, which is not the
     /// same as the cached [`None`] of an object found to have no debug info.
     pub(crate) fn new(preloaded: Option<DebugInfo>) -> DebugInfoCache {
-        DebugInfoCache(match preloaded {
-            Some(info) => OnceLock::from(Some(info)),
-            None => OnceLock::new(),
-        })
+        DebugInfoCache {
+            info: match preloaded {
+                Some(info) => OnceLock::from(Some(info)),
+                None => OnceLock::new(),
+            },
+            panicked: AtomicBool::new(false),
+        }
     }
 }
 
@@ -73,6 +81,9 @@ pub(crate) struct DebugInfo {
     /// one's internals. A `OnceLock` and not a `Mutex` like the backends' own caches, because
     /// unlike them it is not filled in a unit at a time: see [`source`].
     index: OnceLock<SourceIndex>,
+
+    /// Whether the seam's net has caught a panic in a question ([`DebugInfo::net`]).
+    panicked: AtomicBool,
 }
 
 /// The formats read: a closed set, so adding one is a variant here, an impl of
@@ -165,10 +176,11 @@ impl Backend {
 }
 
 impl DebugInfo {
-    /// Build the debug info for one object, or [`None`] when it has none this reads. Never an
-    /// error: foreign debug info and corrupt debug info are both simply "no line info".
-    pub(crate) fn load(object: &Object) -> Option<DebugInfo> {
-        without_panicking(|| DebugInfo::load_inner(object)).flatten()
+    /// Build the debug info for one object: [`None`] where building it panicked, and
+    /// `Some(None)` where it has none this reads. Never an error: foreign debug info and
+    /// corrupt debug info are both simply "no line info".
+    fn load(object: &Object) -> Option<Option<DebugInfo>> {
+        without_panicking(|| DebugInfo::load_inner(object))
     }
 
     fn load_inner(object: &Object) -> Option<DebugInfo> {
@@ -181,6 +193,7 @@ impl DebugInfo {
         DebugInfo {
             backend,
             index: OnceLock::new(),
+            panicked: AtomicBool::new(false),
         }
     }
 
@@ -222,7 +235,7 @@ impl DebugInfo {
         // Saturating rather than wrapping, so an absurd range asks about less than it meant
         // to instead of about something else.
         let query = section.place_saturating(range.start)..section.place_saturating(range.end);
-        without_panicking(|| {
+        self.net(|| {
             let mut rows = RowCollector::over(query.clone(), section.bias());
             self.backend().line_info(query.clone(), &mut rows);
             rows.finish()
@@ -235,13 +248,13 @@ impl DebugInfo {
     /// [`None`] when the debug info does not say.
     fn extent(&self, section: &Section, address: SectionAddress) -> Option<u64> {
         let probe = section.place_checked(address)?;
-        without_panicking(|| self.backend().extent(probe)).flatten()
+        self.net(|| self.backend().extent(probe)).flatten()
     }
 
     /// Ready the backend for an extent asked of every function
     /// ([`LineBackend::prepare_extents`]).
     fn prepare_extents(&self) {
-        let _ = without_panicking(|| self.backend().prepare_extents());
+        let _ = self.net(|| self.backend().prepare_extents());
     }
 
     /// Every row that names a file and a line, whatever the object, handed to `visit` as
@@ -258,9 +271,21 @@ impl DebugInfo {
     }
 
     /// How many parts of the debug info have been read only in part so far
-    /// ([`LineBackend::skipped`]).
+    /// ([`LineBackend::skipped`]), and one more where a question panicked ([`net`](Self::net)).
     fn skipped(&self) -> usize {
-        self.backend().skipped()
+        let panicked = usize::from(self.panicked.load(Ordering::Relaxed));
+        self.backend().skipped() + panicked
+    }
+
+    /// [`without_panicking`] around a question, noting a panic it catches. One skip however
+    /// many: which part the backend was reading is not known here, and a part that panics
+    /// panics again on every ask, so counting each would count asks.
+    fn net<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
+        let answer = without_panicking(f);
+        if answer.is_none() {
+            self.panicked.store(true, Ordering::Relaxed);
+        }
+        answer
     }
 
     /// The one backend this object has, as the three questions the seam puts.
@@ -272,7 +297,9 @@ impl DebugInfo {
     }
 }
 
-/// Run a backend with a net under it, turning a panic into "no line info".
+/// Run a backend with a net under it, turning a panic into "no line info". A panic caught
+/// building the backend or answering a question is counted as one skip ([`DebugInfo::net`]),
+/// so the reader is told something was lost.
 ///
 /// Not general defensiveness: known, reachable bugs in the dependencies behind the seam, all
 /// unchecked arithmetic on numbers a debug section states and none of them something this
@@ -652,17 +679,26 @@ impl Object {
     /// How many parts of this object's debug info (a DWARF unit, a PDB module) have been found
     /// so far that would not read in whole, and were passed over or read only up to the fault.
     /// Most are read lazily, so this grows with the questions asked; 0 before the first, and
-    /// asking does not load the debug info.
+    /// asking does not load the debug info. A panic building it or answering a question is
+    /// one more.
     pub fn debug_info_skipped(&self) -> usize {
-        let loaded = self.debug_info.0.get().and_then(Option::as_ref);
-        loaded.map_or(0, DebugInfo::skipped)
+        let cache = &self.debug_info;
+        let panicked = usize::from(cache.panicked.load(Ordering::Relaxed));
+        let loaded = cache.info.get().and_then(Option::as_ref);
+        panicked + loaded.map_or(0, DebugInfo::skipped)
     }
 
     /// This object's debug info, built at most once — including the "there is none" answer.
     fn debug_info(&self) -> Option<&DebugInfo> {
-        self.debug_info
-            .0
-            .get_or_init(|| DebugInfo::load(self))
+        let cache = &self.debug_info;
+        cache
+            .info
+            .get_or_init(|| {
+                DebugInfo::load(self).unwrap_or_else(|| {
+                    cache.panicked.store(true, Ordering::Relaxed);
+                    None
+                })
+            })
             .as_ref()
     }
 }
