@@ -640,7 +640,9 @@ stated size runs past its subsection. The rows before it are kept, the rest are 
 is counted: no linker writes such a block, so nothing reads the module again. A
 record in a module's symbols that will not read ends the walk over them, keeping what came before:
 it is either one whose length runs past the stream, or one too short to hold a kind, and `pdb2`
-does not say how short, so the next record's start is not known. Line 0 and column 0 are `None` as in DWARF.
+does not say how short, so the next record's start is not known. The DBI module list ends at a
+record that will not read too: a record is fixed fields and two NUL-terminated names, so one fails
+only by running out of list. What it lost is counted as one part skipped (`Pdb::modules`). Line 0 and column 0 are `None` as in DWARF.
 `each_row` walks every module, so a first source question decodes the whole PDB, as the DWARF one
 parses every line program. The DBI module list is a chain of variable-length records with no index,
 so an index is reached only by parsing every record before it and **one walk serves every module a

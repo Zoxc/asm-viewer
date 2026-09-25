@@ -101,7 +101,7 @@ pub(super) struct Pdb {
     every: OnceLock<usize>,
 
     /// The modules whose symbols or rows were read only up to something that would not read,
-    /// by index.
+    /// by index, and the first module a module list that stops short lost ([`Pdb::modules`]).
     skipped: Skipped,
 
     /// How many walks of the DBI module list this PDB has started, so a test can pin that a
@@ -377,16 +377,35 @@ impl Pdb {
     }
 
     /// The DBI module list from the front, numbered: the one place it is walked from. A
-    /// list that will not read has no modules, and a malformed tail stops the walk where it
-    /// goes wrong and keeps what was read.
+    /// list that will not read has no modules, and a record that will not read stops the
+    /// walk there and keeps what was read. Either way what was lost is counted ([`Skipped`]),
+    /// under the index of the first module lost, which no module read has.
+    ///
+    /// The walk cannot go past a bad record. A record is fixed fields and then two
+    /// NUL-terminated names, so the only way one fails to read is by running out of list:
+    /// there is nothing after it to find.
     fn modules(&self) -> impl Iterator<Item = (usize, pdb2::Module<'_>)> + '_ {
         #[cfg(test)]
         self.walks
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let list = self.dbi.modules().ok().into_iter();
-        list.flat_map(|list| list.iterator().map_while(Result::ok))
-            .enumerate()
-            .fuse()
+        let mut list = self.dbi.modules().ok();
+        if list.is_none() {
+            self.skipped.note(0);
+        }
+        let mut index = 0;
+        std::iter::from_fn(move || {
+            let module = match list.as_mut()?.next() {
+                Ok(Some(module)) => module,
+                Ok(None) => return None,
+                Err(_) => {
+                    self.skipped.note(index as u64);
+                    return None;
+                }
+            };
+            index += 1;
+            Some((index - 1, module))
+        })
+        .fuse()
     }
 
     /// One module whole: its rows and its procedures, or [`None`] where it has neither. A walk

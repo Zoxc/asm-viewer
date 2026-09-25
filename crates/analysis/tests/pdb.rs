@@ -961,6 +961,27 @@ fn a_symbol_record_the_walks_do_not_use_is_not_parsed() {
     }
 }
 
+/// A DBI module list that stops short is counted. A record that will not read ends the list,
+/// and every module from it on is lost; before, without a word. Here the linker's module, the
+/// third pair's last, has no NUL left after its fixed fields, so its names run off the end.
+/// The two modules before it still give their names.
+#[test]
+fn a_module_list_that_stops_short_is_counted() {
+    let dll = committed_fixture(PUBLIC_DLL);
+    let pdb = committed_fixture("line_fixture_public.pdb");
+    let mut msf = Msf::new(&pdb);
+    let names_start = module_record(&msf, 2) + 64;
+    let list_end = 64 + msf.u32_at(DBI, 24) as usize;
+    msf.write(DBI, names_start, &vec![b'x'; list_end - names_start]);
+    let dir = scratch("module_list_cut");
+    std::fs::write(dir.join("line_fixture_public.pdb"), &msf.bytes).unwrap();
+    let object = parse_at(&dll, dir.join(PUBLIC_DLL));
+
+    assert_eq!(names(&object), ["?helper@@YAHXZ", "add", "sum_to", "twice"]);
+    assert_eq!(symbol(&object, "add").size, Some(0x11));
+    assert_eq!(object.debug_info_skipped(), 1);
+}
+
 /// The system allocator, refusing any one request past 1 GiB. Nothing a test here reads
 /// comes near that, so a refusal is a count `pdb2` believed ([`CALLEES`]); refused, it is an
 /// abort that fails the run at once, where granted it would have been the machine's memory.
