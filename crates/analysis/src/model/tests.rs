@@ -178,6 +178,13 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         "Functions left out because their descriptors could not be read: 2."
     );
 
+    let unaddressed = LoadMessage::FunctionsWithoutAddress { count: 1 };
+    assert_eq!(unaddressed.severity(), Severity::Warning);
+    assert_eq!(
+        unaddressed.to_string(),
+        "Functions left out because their address could not be worked out: 1."
+    );
+
     let unnamed = LoadMessage::UnreadableSectionNames { count: 1 };
     assert_eq!(unnamed.severity(), Severity::Warning);
     assert_eq!(

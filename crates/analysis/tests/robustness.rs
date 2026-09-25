@@ -740,6 +740,45 @@ fn a_walk_that_panics_part_way_keeps_what_it_read_and_says_so() {
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
+/// Defect: a function whose section's address plus its offset ran past the end of the
+/// address space was left out without a word. It still is, and the object says so. Here
+/// `.text` starts a byte below the top, so `past` is the only one that does not fit.
+#[test]
+fn a_function_past_the_end_of_the_address_space_is_said() {
+    let mut data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "first",
+                bytes: &[0xC3],
+            },
+            TextSymbol {
+                name: "last",
+                bytes: &[0xC3],
+            },
+            TextSymbol {
+                name: "past",
+                bytes: &[0xC3],
+            },
+        ],
+        &[],
+    );
+    common::elf_place_section(&mut data, ".text", u64::MAX - 1);
+    let object = parse(&data);
+
+    assert_eq!(names(&object), ["first", "last"]);
+    // The first message is the layout's, about `.text` being so high.
+    assert_eq!(
+        object.messages,
+        [
+            LoadMessage::CodeSectionsOverlap {
+                section: ".text".to_owned(),
+                address: u64::MAX - 1,
+            },
+            LoadMessage::FunctionsWithoutAddress { count: 1 },
+        ]
+    );
+}
+
 /// Defect: an import whose name would not read, in `.symtab` or `.dynsym`, was left out
 /// without a word. It still is, since an import is nothing but its name, and the object
 /// says so. The 64-bit MIPS image imports `symtab_import` in one table and `plt_import` in

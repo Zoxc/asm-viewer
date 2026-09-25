@@ -89,6 +89,10 @@ pub enum LoadMessage {
     /// `count` functions or entry points were left out because the descriptor naming their
     /// code could not be read.
     UnreadableDescriptors { count: usize },
+    /// `count` functions of a relocatable ELF object were left out because their address
+    /// could not be worked out: their section does not exist, or its address plus their
+    /// offset runs past the end of the address space.
+    FunctionsWithoutAddress { count: usize },
     /// `count` sections are called `<section N>` by their index, because their names could
     /// not be read. They are kept, code and all.
     UnreadableSectionNames { count: usize },
@@ -167,6 +171,8 @@ impl LoadMessage {
         match self {
             LoadMessage::CodeSectionsOverlap { .. } => Severity::Error,
             LoadMessage::UnreadableDescriptors { .. } => Severity::Warning,
+            // What is shown is right; some functions are missing.
+            LoadMessage::FunctionsWithoutAddress { .. } => Severity::Warning,
             // Only the name is wrong, and it says so.
             LoadMessage::UnreadableSectionNames { .. } => Severity::Warning,
             // What is shown is right; the code in those sections is missing.
@@ -208,6 +214,10 @@ impl fmt::Display for LoadMessage {
             LoadMessage::UnreadableDescriptors { count } => write!(
                 f,
                 "Functions left out because their descriptors could not be read: {count}."
+            ),
+            LoadMessage::FunctionsWithoutAddress { count } => write!(
+                f,
+                "Functions left out because their address could not be worked out: {count}."
             ),
             LoadMessage::UnreadableSectionNames { count } => write!(
                 f,

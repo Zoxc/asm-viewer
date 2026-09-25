@@ -69,6 +69,9 @@ struct SymbolTable {
     unnamed: Vec<Pending>,
     /// Each undefined one, in table order: an import, with no code here.
     imports: Imports,
+    /// How many defined ones were left out because their address could not be worked out
+    /// ([`symbol_value`]).
+    unaddressed: usize,
     /// The first index past the table, which declared code is numbered from.
     next: usize,
 }
@@ -603,8 +606,8 @@ pub(crate) fn symbol_address(
 /// bytes are decoded and its relocations kept. In every format but one that is the value
 /// `object` hands over. In an ELF relocatable object `st_value` is an offset into the
 /// symbol's section (the gABI), and the section may state an address of its own (`ld -r
-/// --section-start`, a linker script), so that address is added. [`None`] where the sum runs
-/// past the end of the address space.
+/// --section-start`, a linker script), so that address is added. [`None`] where that section
+/// does not exist or the sum runs past the end of the address space.
 ///
 /// A COFF object's value is an offset too, but `object` adds the section's address itself,
 /// and a Mach-O `.o` states addresses. An absolute, common or undefined ELF symbol has no
@@ -783,8 +786,12 @@ pub(crate) fn parse_unshared(
         named: mut symbols,
         unnamed,
         mut imports,
+        unaddressed,
         next,
     } = symbol_table(&file, &addresses);
+    if unaddressed > 0 {
+        messages.push(LoadMessage::FunctionsWithoutAddress { count: unaddressed });
+    }
     // Keyed by placed address: in a relocatable object every section starts at 0, so an
     // address alone does not say which code it is ([`section_biases`]).
     let place = |symbol: &Pending| {
@@ -956,12 +963,14 @@ fn read_sections(
 /// COFF external of function type text too ([`SymbolTable::imports`]). An import is nothing
 /// but its name, so one whose name will not read is only counted. So is a COFF weak
 /// external ([`weak_external`]). A defined one is taken at its code ([`CodeAddresses`]),
-/// and left out where that is a descriptor that cannot be read.
+/// and left out where that is a descriptor that cannot be read, or where its address cannot
+/// be worked out ([`symbol_value`]), which is counted.
 fn symbol_table(file: &object::File<'_>, addresses: &CodeAddresses<'_, '_>) -> SymbolTable {
     let mut table = SymbolTable {
         named: Vec::new(),
         unnamed: Vec::new(),
         imports: Imports::default(),
+        unaddressed: 0,
         next: 0,
     };
     for symbol in file.symbols() {
@@ -982,8 +991,9 @@ fn symbol_table(file: &object::File<'_>, addresses: &CodeAddresses<'_, '_>) -> S
             continue;
         }
 
-        // Left out where its section's address and its offset add up past the end.
+        // Left out, and counted, where its address cannot be worked out.
         let Some(value) = symbol_value(file, &symbol) else {
+            table.unaddressed = table.unaddressed.saturating_add(1);
             continue;
         };
         let stated_at = Code {

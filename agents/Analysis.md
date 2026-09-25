@@ -86,7 +86,8 @@ stand in for it (above). The parse collects them. A rule the parse follows hands
 went wrong beside its answer rather than reporting it itself, as `section_biases` does, so the DWARF
 loader, which asks the same rule again, drops the second copy. The Objects list marks the row
 (`agents/Sidebar.md`). The cases reported so far: the layout running out of address space,
-functions left out because the descriptor naming their code could not be read (below), sections
+functions left out because the descriptor naming their code could not be read (below) or their
+address could not be worked out (below), sections
 named `<section N>` because their own names would not read (below), code sections left out because
 their bytes would not read or decompress, imports left out because their names would not read
 (below), unwind entries and exports that would not read (below), the three an archive's members
@@ -354,7 +355,9 @@ patched. A symbol in an ELF `.o` has the same problem: `st_value` is an offset i
 and `object` hands it over as it is, where it adds the section's address to a COFF symbol's and a
 Mach-O one states an address. So `symbol_value` (`parse.rs`) adds the section's address, and the
 symbol table, `.opd`'s relocations and `relocate` (through `symbol_address`) all take a symbol's
-address from it. Without it, a `.o` from `ld -r --section-start=.text=0x1000` had every function
+address from it. A function whose section does not exist, or whose sum runs past the end of the
+address space, is left out of the symbol table, and one message counts them
+(`LoadMessage::FunctionsWithoutAddress`). Without it, a `.o` from `ld -r --section-start=.text=0x1000` had every function
 below its bytes, so none disassembled, and a DWARF relocation against a symbol landed 0x1000 below
 one against the section. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in `Object::placed`,
 **clipped to the section's own bytes** and taken only from the section's own symbols, since a header
