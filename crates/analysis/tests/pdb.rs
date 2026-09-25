@@ -93,6 +93,7 @@ use common::{
     ExportedSymbol, PeDll,
 };
 use object::{Object as _, ObjectKind, ObjectSection};
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -802,3 +803,188 @@ fn a_public_never_displaces_a_procedure() {
         );
     }
 }
+
+/// A PDB's multi-stream file as far as a test patches it: the page size, and where each
+/// stream's pages are. The fixtures' stream directory fits on one page.
+struct Msf {
+    bytes: Vec<u8>,
+    page: usize,
+    pages: Vec<Vec<usize>>,
+}
+
+impl Msf {
+    fn new(pdb: &[u8]) -> Msf {
+        let u32_at = |at: usize| u32::from_le_bytes(pdb[at..at + 4].try_into().unwrap());
+        let page = u32_at(32) as usize;
+        let directory = u32_at(u32_at(52) as usize * page) as usize * page;
+        let count = u32_at(directory) as usize;
+        let sizes: Vec<u32> = (0..count)
+            .map(|stream| u32_at(directory + 4 + 4 * stream))
+            .collect();
+        let mut at = directory + 4 + 4 * count;
+        let pages = sizes
+            .iter()
+            .map(|&size| {
+                let count = if size == u32::MAX {
+                    0
+                } else {
+                    (size as usize).div_ceil(page)
+                };
+                let pages = (0..count)
+                    .map(|index| u32_at(at + 4 * index) as usize)
+                    .collect();
+                at += 4 * count;
+                pages
+            })
+            .collect();
+        Msf {
+            bytes: pdb.to_vec(),
+            page,
+            pages,
+        }
+    }
+
+    /// Where byte `at` of `stream` is in the file.
+    fn offset(&self, stream: usize, at: usize) -> usize {
+        self.pages[stream][at / self.page] * self.page + at % self.page
+    }
+
+    fn u16_at(&self, stream: usize, at: usize) -> u16 {
+        let at = self.offset(stream, at);
+        u16::from_le_bytes(self.bytes[at..at + 2].try_into().unwrap())
+    }
+
+    fn write(&mut self, stream: usize, at: usize, bytes: &[u8]) {
+        for (index, &byte) in bytes.iter().enumerate() {
+            let at = self.offset(stream, at + index);
+            self.bytes[at] = byte;
+        }
+    }
+}
+
+/// The DBI is stream 3.
+const DBI: usize = 3;
+
+/// The stream module `index`'s symbols are in: its DBI record states it at 34. The records
+/// follow the DBI's 64-byte header, each 64 bytes of fields and then two NUL-terminated
+/// names, padded to 4.
+fn module_stream(msf: &Msf, index: usize) -> usize {
+    let mut record = 64;
+    for _ in 0..index {
+        let mut at = record + 64;
+        for _ in 0..2 {
+            while msf.bytes[msf.offset(DBI, at)] != 0 {
+                at += 1;
+            }
+            at += 1;
+        }
+        record = at.next_multiple_of(4);
+    }
+    usize::from(msf.u16_at(DBI, record + 34))
+}
+
+/// The symbol record at `at` in `stream` rewritten as one of `kind` whose data begins with
+/// `count`. The record keeps its length, so the walk steps past it as before.
+fn rewritten(msf: &mut Msf, stream: usize, at: usize, kind: u16, count: u32) {
+    msf.write(stream, at + 2, &kind.to_le_bytes());
+    msf.write(stream, at + 4, &count.to_le_bytes());
+}
+
+/// An `S_INLINEES` claiming more inlinees than it holds, which a debug build of `pdb2`
+/// asserts against as it parses the record (`notes/upstream/pdb2.md`).
+const INLINEES: (u16, u32) = (0x1168, 0xFFFF);
+
+/// An `S_CALLEES` stating a count of `u32::MAX`, which `pdb2` allocates 16 GiB for before
+/// it checks that the record holds that many (`notes/upstream/pdb2.md`). The allocator of
+/// this binary refuses the request ([`Capped`]).
+const CALLEES: (u16, u32) = (0x115a, u32::MAX);
+
+/// A symbol record of a kind the walks do not use costs nothing, whatever it states: it is
+/// never parsed. Before, every record was parsed. The miscounted `S_INLINEES` panicked in a
+/// debug build, costing its module's names or its public. The `S_CALLEES` asked for 16 GiB,
+/// an abort no guard catches, which [`Capped`] makes certain. The third pair's PDB has three
+/// modules: the object's with the three procedures, `public_fixture.obj`'s with none, and the
+/// linker's with none; and a public for each of the four functions.
+#[test]
+fn a_symbol_record_the_walks_do_not_use_is_not_parsed() {
+    let dll = committed_fixture(PUBLIC_DLL);
+    let pdb = committed_fixture("line_fixture_public.pdb");
+    let all = ["?helper@@YAHXZ", "add", "sum_to", "twice"];
+
+    for (case, (kind, count)) in [("inlinees", INLINEES), ("callees", CALLEES)] {
+        // The linker's module: its first record, the object name.
+        let mut msf = Msf::new(&pdb);
+        let linker = module_stream(&msf, 2);
+        rewritten(&mut msf, linker, 4, kind, count);
+        let dir = scratch(&format!("linker_{case}"));
+        std::fs::write(dir.join("line_fixture_public.pdb"), &msf.bytes).unwrap();
+        let object = parse_at(&dll, dir.join(PUBLIC_DLL));
+        assert_eq!(names(&object), all, "{case}");
+        assert_eq!(symbol(&object, "add").size, Some(0x11), "{case}");
+
+        // The object's module: its procedures are still read, by the parse and by the
+        // decode.
+        let mut msf = Msf::new(&pdb);
+        let module = module_stream(&msf, 0);
+        rewritten(&mut msf, module, 4, kind, count);
+        let dir = scratch(&format!("object_{case}"));
+        std::fs::write(dir.join("line_fixture_public.pdb"), &msf.bytes).unwrap();
+        let object = parse_at(&dll, dir.join(PUBLIC_DLL));
+        assert_eq!(names(&object), all, "{case}");
+        assert_eq!(
+            symbol(&object, "add").size,
+            Some(0x11),
+            "{case}: a procedure's"
+        );
+        assert_eq!(symbol(&object, "add").debug_extent(&object), Some(0x11));
+        assert_eq!(rows(&line_info(&object, "add")).len(), 4, "{case}");
+
+        // The public for `add`, in the symbol records stream the DBI names at 20.
+        let mut msf = Msf::new(&pdb);
+        let records = usize::from(msf.u16_at(DBI, 20));
+        rewritten(&mut msf, records, 32, kind, count);
+        let dir = scratch(&format!("public_{case}"));
+        std::fs::write(dir.join("line_fixture_public.pdb"), &msf.bytes).unwrap();
+        let object = parse_at(&dll, dir.join(PUBLIC_DLL));
+        assert_eq!(names(&object), all, "{case}");
+    }
+}
+
+/// The system allocator, refusing any one request past 1 GiB. Nothing a test here reads
+/// comes near that, so a refusal is a count `pdb2` believed ([`CALLEES`]); refused, it is an
+/// abort that fails the run at once, where granted it would have been the machine's memory.
+struct Capped;
+
+const CAP: usize = 1 << 30;
+
+// SAFETY: every call goes to `System` unchanged, or is refused with a null pointer, which
+// `GlobalAlloc` allows for any request.
+unsafe impl GlobalAlloc for Capped {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if layout.size() > CAP {
+            return std::ptr::null_mut();
+        }
+        System.alloc(layout)
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        if layout.size() > CAP {
+            return std::ptr::null_mut();
+        }
+        System.alloc_zeroed(layout)
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if new_size > CAP {
+            return std::ptr::null_mut();
+        }
+        System.realloc(ptr, layout, new_size)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        System.dealloc(ptr, layout)
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Capped = Capped;

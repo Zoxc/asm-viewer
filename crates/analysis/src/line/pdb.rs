@@ -48,6 +48,7 @@
 //! walk.
 //!
 //! Nothing here recurses, and nothing here catches a panic: the guard is [`super::DebugInfo`]'s.
+//! A symbol record is parsed only if it is a kind the walks use ([`PROCEDURES`]).
 
 use super::intervals::Intervals;
 use super::{recovered, Declared, LineBackend, LineInfo, RowCollector, SourceHash};
@@ -114,6 +115,33 @@ struct ModuleLines {
     /// first procedure read at an address keeps it.
     procedures: HashMap<SectionAddress, u64>,
 }
+
+/// The symbol record kinds that are procedures: `S_GPROC32`, `S_LPROC32` and their `_ST`,
+/// `_ID` and `_DPC` spellings, all of which `pdb2` parses as a `ProcedureSymbol`.
+///
+/// **The walks hand `pdb2` only these and [`PUBLICS`] to parse**, and read every other record
+/// by its kind alone. The parse of some other kinds trusts what the record states
+/// (`notes/upstream/pdb2.md`): an `S_CALLEES` or `S_CALLERS` allocates the count it states
+/// before checking the record holds that many, so a record of a few bytes asks for 16 GiB,
+/// an abort no guard catches. Others assert in a debug build. The crate uses none of them.
+/// `pdb2` keeps its own constants private, so the numbers are spelled here.
+const PROCEDURES: [pdb2::SymbolKind; 8] = [
+    0x100a, // S_LPROC32_ST
+    0x100b, // S_GPROC32_ST
+    0x110f, // S_LPROC32
+    0x1110, // S_GPROC32
+    0x1146, // S_LPROC32_ID
+    0x1147, // S_GPROC32_ID
+    0x1155, // S_LPROC32_DPC
+    0x1156, // S_LPROC32_DPC_ID
+];
+
+/// The symbol record kinds that are publics, `S_PUB32` and its `_ST` spelling: the other
+/// kind the walks parse ([`PROCEDURES`]).
+const PUBLICS: [pdb2::SymbolKind; 2] = [
+    0x1009, // S_PUB32_ST
+    0x110e, // S_PUB32
+];
 
 impl Pdb {
     /// Open and match the `.pdb` this image names, or [`None`]: for an image with no CodeView
@@ -198,12 +226,16 @@ impl Pdb {
         // function `function` alone, so either is taken, and the caller's code-section
         // lookup is what keeps a public out of the data sections. A public's name is the
         // linker's, decorated (`?add@@YAHHH@Z`, `_ZN4core3ptr…`) or plain for C, so it goes
-        // through the demanglers; and it has no length.
+        // through the demanglers; and it has no length. Only a public is parsed
+        // ([`PUBLICS`]).
         let Ok(table) = pdb.global_symbols() else {
             return declared;
         };
         let mut symbols = table.iter();
         while let Ok(Some(symbol)) = symbols.next() {
+            if !PUBLICS.contains(&symbol.raw_kind()) {
+                continue;
+            }
             let Ok(pdb2::SymbolData::Public(public)) = symbol.parse() else {
                 continue;
             };
@@ -224,8 +256,9 @@ impl Pdb {
 
     /// Every procedure with a length in one module, with its address, in the order the
     /// module's symbols are in: what both reads of a module stream take of its symbols. A
-    /// stream that will not read has none, a record that will not parse or whose address
-    /// will not map is skipped, and a malformed tail stops the walk where it goes wrong.
+    /// stream that will not read has none, a record of another kind is not parsed
+    /// ([`PROCEDURES`]), a procedure that will not parse or whose address will not map is
+    /// skipped, and a malformed tail stops the walk where it goes wrong.
     fn procedures_in<'a>(
         &'a self,
         info: &'a pdb2::ModuleInfo<'_>,
@@ -234,6 +267,9 @@ impl Pdb {
         let symbols = symbols.flat_map(|symbols| symbols.iterator().map_while(Result::ok));
         symbols
             .filter_map(move |symbol| {
+                if !PROCEDURES.contains(&symbol.raw_kind()) {
+                    return None;
+                }
                 let Ok(pdb2::SymbolData::Procedure(procedure)) = symbol.parse() else {
                     return None;
                 };

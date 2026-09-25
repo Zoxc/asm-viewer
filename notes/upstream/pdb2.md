@@ -17,10 +17,50 @@ four reachable from a `.pdb` a user merely opened:
 - `PDBInformation::stream_names` indexes the names buffer at a declared offset unchecked
   (`pdbi.rs`), which `PDB::string_table` reaches through.
 
+**Debug assertions on what the file states.** Two more panics, in a debug build only:
+
+- `LineInfo::set_end` has `debug_assert!(self.offset <= end_offset)` (`modi/mod.rs:200`). A
+  section offset compares only within one section, so it fails whenever a line's successor
+  is in another section or at a lower offset. The line iterator calls it for every line.
+- A C13 line block's parse has `debug_assert!(remainder.is_empty())` (`modi/c13.rs:568`),
+  for a block that declares more data than its lines and columns take.
+- Parsing a symbol record (`symbol/mod.rs`): `S_INLINEES` asserts its count equals the
+  entries it holds (`:2612`), `S_CALLEES`/`S_CALLERS` that it has no more counts than functions
+  (`:2581`), the `S_DEFRANGE*` family subtracts the header size from a record shorter than it
+  (`:2072` and the five like it, an overflow), and a numeric leaf with an unknown prefix, as in
+  an `S_CONSTANT`, is `unreachable!()` in a debug build (`common.rs:899`). The crate parsed
+  every record it walked to find the procedures and the publics; it now parses only those
+  (below), and neither has any of these.
+
+No real linker output reaches the first two either, so each is left to the seam's net.
+
 Told apart from our own mistakes by the panic location; none of them is something the crate
 can validate without parsing the stream itself first. **What it cost**: nothing new — the
 seam's one `without_panicking` already wraps the build and every question, whichever backend
 answers, and `DebugInfo::load` is under it too because the string table is read at load.
+
+**An OMAP translates in 32 bits, unchecked.** `OMAPRecord::translate` (`omap.rs:58`) is
+`(address - source) + target`, and both numbers are the file's, so a target near the top of the
+space overflows. It is reached from every `section:offset` a PDB with an OMAP is read at:
+`PdbInternalSectionOffset::to_rva` for one address, and `AddressMap::rva_ranges` for a range.
+**What it cost**: nothing of our own. No linker writes such a target, so the seam's net is left
+to catch it, and the names or the PDB the walk was reading go with it. A release build does not
+panic: the sum wraps, and the address that comes out is dropped only where it falls in no section.
+
+**A symbol record's stated count is allocated before it is checked.** `FunctionListSymbol`, the
+parse of an `S_CALLEES` or an `S_CALLERS` (`symbol/mod.rs:2573`), is
+`vec![buf.parse()?; count as usize]`: the count is the record's first field and nothing weighs it
+against the bytes the record holds, so a record of a few bytes stating `u32::MAX` asks for 16 GiB,
+and `resize`s the invocations to match. Never a panic, so no guard catches it: an abort, or the
+machine's memory, reached from every module's symbol walk at parse and again when the module is
+decoded. **What it cost**: the walks read a record's kind (`Symbol::raw_kind`, two bytes, no
+parse) and hand `pdb2` only the procedure and public kinds to parse (`PROCEDURES` and `PUBLICS`,
+`line/pdb.rs`; `pdb2` keeps its own constants private, so the numbers are spelled there). That
+also keeps every debug assertion above out of reach, and any bug yet to be found in a kind the
+crate does not use. Pinned by `pdb.rs`' `a_symbol_record_the_walks_do_not_use_is_not_parsed`,
+on the committed PDB with one record rewritten as an `S_CALLEES` stating `u32::MAX` and again as a
+miscounted `S_INLINEES`. The test binary's allocator refuses any one request past 1 GiB, so a
+regression is an abort that fails the run and not a machine out of memory.
 
 **A declared stream length is allocated before a byte is read.** The blanket `Source` for a
 `Read + Seek` sizes its `Vec` from the stream directory's page list, so a directory that lies

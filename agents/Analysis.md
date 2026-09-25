@@ -625,7 +625,8 @@ stream still had to be read for its lines. The symbol records stream (`pdb2`'s `
 one stream the publics are in, 229 318 records in `rustc_driver`'s) is read whole through
 `BoundedFile` and dropped with the walk, since nothing later asks it anything. The whole of it
 (pick, open, match, both walks) is under the seam's `without_panicking`, so a `pdb2` panic anywhere
-in it is "no PDB at parse" and the lazy path is left to try. **What is not read**:
+in it is "no PDB at parse" and the lazy path is left to try. A record is parsed only if it is a
+procedure or a public, told by its kind before `pdb2` reads anything else of it (below). **What is not read**:
 `/DEBUG:FASTLINK` PDBs, which match and then answer nothing. A stripped PDB now answers its publics
 and nothing else (no procedures, no lines, no extents), which is the shape the third committed pair
 stands in for (below). The file stays open, read a page at a time through `BoundedFile`, never
@@ -728,10 +729,16 @@ subprogram's own declared length, which the crate hands back as written, so `Sym
 one that would run off the end of the address space.
 `pdb2` 0.10 has four of the same kind (a module's line data sliced at `start + size` unchecked, a
 line block's size less its header, `section:offset + length` as a plain `+`, a string-table name at
-a declared offset), all under the same net (`notes/upstream/pdb2.md`); and one that no guard
-catches, a stream directory's declared length allocated before a byte is read, answered the way
-`section_data` answers a lying compressed size: `BoundedFile` weighs every declared slice and their
-total against the file's length first.
+a declared offset), and debug-build panics on what the file states (a line whose successor is in
+another section or below it, and a line block with bytes left over), all under the same net
+(`notes/upstream/pdb2.md`): no real linker output reaches them. Two `pdb2` defects no guard
+catches, both a count the file states allocated before it is checked. A stream directory's declared length is
+answered the way `section_data` answers a lying compressed size: `BoundedFile` weighs every
+declared slice and their total against the file's length first. An `S_CALLEES` or `S_CALLERS`
+record allocates the count it states, 16 GiB for a record of a few bytes. That one is answered by
+never parsing it: the walks read each record's kind first and hand `pdb2` only the procedures and
+the publics (`PROCEDURES`, `PUBLICS`), the two kinds the crate uses. The same rule keeps out the
+debug-build assertions `pdb2` makes parsing other kinds, which a walk that parsed every record hit.
 
 The guard is not the whole answer to the first of those. Overflow checks are on in a test and a
 debug build and off in a release one, so where a debug build panics inside `addr2line` and answers
@@ -1046,8 +1053,9 @@ everything", shared by both: every symbol's extent, listing and line info, every
 info, the reverse index, and every section's `Listing` with its first `MAX_LISTING_STRETCHES` (4)
 stretches decoded, since a decode is the symbol's disassembly over again and a section of any kind
 has a listing. The PDB sweep found nothing the seam's guard did not already catch, and it cannot
-find the one defect that is not a panic, the declared stream length `pdb2` would allocate before
-reading, which `BoundedFile` answers by construction (`notes/upstream/pdb2.md`). Nor can either
+find the two defects that are not panics, the declared stream length and the `S_CALLEES` count
+`pdb2` would allocate before checking them, which `BoundedFile` and the parse by kind answer by
+construction (`notes/upstream/pdb2.md`). Nor can either
 sweep write a zstd frame, so what `object` would inflate one to, whatever its header declared, is
 pinned by a hand-built fixture in `robustness.rs` (`notes/upstream/object.md`). The rule that goes
 with them is the user rule in `AGENTS.md`: a minimal test case every time something is found wrong,
