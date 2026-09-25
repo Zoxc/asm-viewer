@@ -1049,3 +1049,30 @@ fn a_line_block_that_does_not_read_is_counted() {
     assert_eq!(symbol(&object, "add").debug_extent(&object), Some(0x11));
     assert_eq!(object.debug_info_skipped(), 1);
 }
+
+/// What the debug info could not read is told once it has been found, which is after the
+/// parse: the object read cleanly, and a question found the bad module.
+#[test]
+fn a_skipped_module_is_told_once_a_question_finds_it() {
+    use analysis::{LoadMessage, Severity};
+
+    let dll = committed_fixture(NOEXPORT_DLL);
+    let pdb = committed_fixture("line_fixture_noexport.pdb");
+    let dir = scratch("skipped_module_told");
+    std::fs::write(
+        dir.join("line_fixture_noexport.pdb"),
+        first_line_block_overstated(&pdb),
+    )
+    .unwrap();
+    let object = parse_at(&dll, dir.join(NOEXPORT_DLL));
+    assert_eq!(object.worst(), None);
+    assert_eq!(object.messages_so_far().count(), 0);
+
+    assert!(symbol(&object, "add").line_info(&object).is_none());
+    assert_eq!(object.worst(), Some(Severity::Warning));
+    assert_eq!(
+        object.messages_so_far().collect::<Vec<_>>(),
+        [LoadMessage::DebugInfoSkipped { count: 1 }]
+    );
+    assert!(object.messages.is_empty());
+}

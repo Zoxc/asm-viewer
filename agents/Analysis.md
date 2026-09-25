@@ -88,7 +88,9 @@ stand-in shows nothing but its name. What the debug info could not read is not a
 because most of it is found after the parse, as the questions reach it, and `messages` is settled
 by then. Each backend counts the parts it went past or read only in part instead, a DWARF unit or
 a PDB module, each once however often it is read (`Skipped`, `line.rs`), and
-`Object::debug_info_skipped` answers the count so far. Nothing shows it to the reader yet.
+`Object::debug_info_skipped` answers the count so far. `Object::messages_so_far` is `messages`
+with that count after them as one more warning (`LoadMessage::DebugInfoSkipped`), and it is what
+`Object::worst` and the Objects list read, so asking it again is what brings the count up to date.
 
 **Data model**, built once at open time and shared via `Arc`. Only *defined* `SymbolKind::Text`
 symbols are kept. `object` calls an undefined ELF `STT_FUNC` or COFF function text too, but it has

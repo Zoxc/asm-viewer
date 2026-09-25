@@ -158,6 +158,9 @@ struct ObjectRow {
     /// what the tooltip says: a member's own name gets cut off, while a lone object is
     /// named after its file and the useful extra is where that file is.
     member: bool,
+    /// [`Object::debug_info_skipped`] as the row was built: the one thing the mark and the
+    /// tooltip say that changes after the object was read, so a change draws the row again.
+    skipped: usize,
     /// Where this row is in the list as it is drawn.
     at: usize,
     /// Where the filter matched in the name, for the row to mark.
@@ -173,6 +176,7 @@ impl PartialEq for ObjectRow {
         Arc::ptr_eq(&self.object, &other.object)
             && self.selected == other.selected
             && self.member == other.member
+            && self.skipped == other.skipped
             && self.at == other.at
             && self.marks == other.marks
         // `states` compares equal always -- handles the root never replaces -- so it is
@@ -261,7 +265,7 @@ pub(crate) const MEMBERS_TROUBLED: &str = "Something went wrong reading an objec
 
 /// Everything that went wrong reading `object`, as one line; empty where nothing did.
 fn told(object: &Object) -> String {
-    let texts: Vec<String> = object.messages.iter().map(ToString::to_string).collect();
+    let texts: Vec<String> = object.messages_so_far().map(|m| m.to_string()).collect();
     texts.join(" ")
 }
 
@@ -623,6 +627,7 @@ impl Component for ObjectsPanel {
     fn render(&self) -> impl IntoElement {
         let objects = use_consume::<Objects>().0;
         let loading = use_consume::<Loading>().0;
+        let skips = use_consume::<Skips>().0;
         let filter = use_state(Filter::default);
         let pane = use_list_pane(Panel::Objects);
         // What Enter on a row reaches through: the pane's, which is where the rows' own
@@ -639,7 +644,10 @@ impl Component for ObjectsPanel {
         // there are before it builds any of them. Reading `loading` here is what puts a
         // file on screen the moment it is asked for and takes the indicator off it when
         // the last of its objects has landed.
+        // Reading `skips` builds the tree again when a worker has found debug info that
+        // would not read, which changes the marks.
         let tree = use_memo(move || {
+            skips.read();
             let marking = marking.read();
             ObjectTree::new(
                 &objects.read(),
@@ -759,6 +767,7 @@ impl Component for ObjectsPanel {
                             object: object.clone(),
                             selected: *selected == Some(Arc::as_ptr(object).addr()),
                             member: *member,
+                            skipped: object.debug_info_skipped(),
                             at: row,
                             marks: marking.marks(&object.name),
                             states,

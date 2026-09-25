@@ -459,6 +459,7 @@ pub(crate) struct Roots {
     pub(crate) keys: ModifierKeys,
     pub(crate) finder: State<Finder>,
     pub(crate) analysis: State<Analyzed>,
+    pub(crate) skips: Skips,
     pub(crate) located: State<Located>,
     pub(crate) coded: State<Coded>,
     pub(crate) sectioned: Sectioned,
@@ -518,6 +519,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     let prefs = context(Prefs, EditedSettings::of(settings));
     let objects = context(Objects, Vec::new());
     let loading = context(Loading, Loads::default());
+    let skips = provide(Skips(State::create(Counted::default())));
     // What is open, the strip and the id table together. Empty: what a restored session
     // puts in the bar is what the reader left, and a session that saved nothing opens on
     // the placeholder, the pages being one menu away.
@@ -707,6 +709,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         keys,
         finder,
         analysis,
+        skips,
         located,
         coded,
         sectioned,
@@ -762,6 +765,7 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
         keys,
         finder,
         analysis,
+        skips,
         located,
         coded,
         sectioned,
@@ -835,6 +839,7 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
     let asks = use_analysis_with(
         asked,
         objects,
+        skips,
         sectioned,
         doors.visits,
         analysis,

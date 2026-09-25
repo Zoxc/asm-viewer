@@ -5251,6 +5251,91 @@ fn an_object_with_a_load_error_is_marked_on_its_row() {
     );
 }
 
+/// `line_fixture.o` with its one compile unit's DWARF version rewritten to one no reader
+/// knows. It parses cleanly, and the first question that reads its debug info skips the
+/// unit. Its `.debug_info` is found through the ELF64 section headers.
+fn fixture_with_a_bad_unit() -> Arc<Object> {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");
+    let mut data = std::fs::read(&path).expect("the fixture reads");
+    let word = |data: &[u8], at: usize, size: usize| {
+        (data[at..at + size].iter().rev()).fold(0, |value, byte| value << 8 | *byte as usize)
+    };
+    let headers = word(&data, 0x28, 8);
+    let (size, count, names) = (
+        word(&data, 0x3a, 2),
+        word(&data, 0x3c, 2),
+        word(&data, 0x3e, 2),
+    );
+    let strings = word(&data, headers + names * size + 0x18, 8);
+    let info = (0..count)
+        .map(|index| headers + index * size)
+        .find(|header| {
+            let name = strings + word(&data, *header, 4);
+            data[name..].starts_with(b".debug_info\0")
+        })
+        .map(|header| word(&data, header + 0x18, 8))
+        .expect("the fixture has .debug_info");
+    data[info + 4..info + 6].copy_from_slice(&99u16.to_le_bytes());
+    analysis::parse_object(
+        analysis::ObjectData::whole_file(data.into()),
+        "line_fixture.o".to_owned(),
+        path,
+    )
+    .expect("the fixture parses")
+}
+
+/// The Objects list over the analysis wiring: a question's answer is what finds debug
+/// info that would not read, and the list is what says so.
+fn objects_and_analysis_harness() -> impl IntoElement {
+    // The wiring draws an expanded rect of its own, which is given no room here.
+    rect()
+        .expanded()
+        .child(rect().height(Size::px(0.)).child(analysis_harness()))
+        .child(ObjectsPanel)
+}
+
+/// Debug info that would not read is found after the object was read, when a question
+/// reaches it, and the object's row says so once the answer is in.
+#[test]
+fn an_object_row_is_marked_once_an_answer_finds_debug_info_that_would_not_read() {
+    let object = fixture_with_a_bad_unit();
+    let symbol = object
+        .symbols_sorted
+        .iter()
+        .find(|data| data.name == "sum_to")
+        .map(|data| Symbol {
+            object: object.clone(),
+            data: data.clone(),
+        })
+        .expect("the fixture holds sum_to");
+    let (mut test, (roots, asking, _)) = TestingRunner::new(
+        objects_and_analysis_harness,
+        (300., 300.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let told = LoadMessage::DebugInfoSkipped { count: 1 }.to_string();
+    let marked = |test: &TestingRunner| {
+        !test
+            .find_many(|node, _| {
+                let said = node.element().accessibility().builder.label()?.to_owned();
+                (said == told).then_some(())
+            })
+            .is_empty()
+    };
+
+    let mut objects = roots.states.objects;
+    objects.set(vec![object.clone()]);
+    settle(&mut test);
+    assert!(!marked(&test), "the row is marked before anything was read");
+
+    asking.set(Some(Ask::Symbol(symbol)));
+    pump(&mut test, |_| roots.analysis.peek().shown.is_some());
+    assert_eq!(object.debug_info_skipped(), 1);
+    assert!(marked(&test), "the row does not say what the answer found");
+}
+
 /// Closing a file half way through reading it takes the objects that have already arrived
 /// *and* the ones that have not. The second half is what needs a test: the worker is
 /// already parsing when the row is closed.
@@ -5538,6 +5623,7 @@ fn analysis_harness() -> impl IntoElement {
     let asks = use_analysis_with(
         asked,
         objects,
+        use_consume::<Skips>(),
         sectioned,
         history,
         analysis,
@@ -17644,6 +17730,7 @@ fn scratchpad_listing_harness() -> impl IntoElement {
     let asks = use_analysis_with(
         asked,
         objects,
+        use_consume::<Skips>(),
         sectioned,
         use_doors().visits,
         use_consume::<Analysis>().0,

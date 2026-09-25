@@ -167,6 +167,13 @@ the count, so it changes no row's height and moves no name. Like the triangle, w
 is not in the element tree, so the words are the mark's accessibility label, which is what the
 headless test finds it by.
 
+**What the debug info could not read is found after the row was drawn**, as a worker answers a
+question (`Object::messages_so_far`, `agents/Analysis.md`). Each answer the analysis worker takes,
+and each walk over an object's code, is followed by a count of every open object's skips
+(`Skips::recount`, `src/ui/state.rs`), written only where one changed. The tree's memo reads that
+state, and an object's row holds its count as a prop, so a change builds the tree again and draws
+that row again. Counting takes one short lock per object and reads no debug info.
+
 **A file being read is a row before it has an object**, which is `notes/specs/Sidebar.md`'s file
 still being read. The state is on the **file**, not on an object, because an object that has not
 been parsed does not exist: the unit part-way through is the one the reader opened, the one

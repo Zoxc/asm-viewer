@@ -130,8 +130,8 @@ trait LineBackend {
 /// however often it is read, by a key the backend chooses (a unit's offset, a module's index).
 ///
 /// Counted as the parts are read, and most are read lazily, so the count grows with the
-/// questions asked. Nothing tells the reader yet: [`Object::messages`] is settled at parse,
-/// and most of what is counted here is found after it.
+/// questions asked, which is why it is told through [`Object::messages_so_far`] and not
+/// [`Object::messages`], settled at parse.
 #[derive(Default)]
 struct Skipped(Mutex<HashSet<u64>>);
 

@@ -239,6 +239,7 @@ impl Asked {
 pub(crate) fn use_analysis_with(
     asked: Asked,
     objects: State<Vec<Arc<Object>>>,
+    skips: Skips,
     sectioned: Sectioned,
     visits: State<Visits>,
     analysis: State<Analyzed>,
@@ -261,37 +262,42 @@ pub(crate) fn use_analysis_with(
         // Each answer is judged by the state it lands in and written only where that
         // state says it changed something: the rules are the four types' and not this
         // closure's ([`write_if`]).
-        move |answer, _| match answer {
-            Answer::Listing { ask, studied, over } => {
-                // The question being asked *now*, which is what an answer is kept for.
-                let wanted = asked.peek_ask();
-                let open = objects.peek().clone();
-                write_if(analysis, |next| {
-                    next.take(ask, studied, over, wanted.as_ref(), &open)
-                });
-            }
-            Answer::Code { ask, code, decoded } => {
-                // Taken whenever it is about the object on screen -- a decoded stretch is
-                // never stale, see `Reading::take` -- and never out of a binary closed
-                // since it was asked for, `Shown::still_open`'s rule once more. Held by
-                // the app and not open in the project: a pad's program is neither, and
-                // `holding` is the one rule for the two.
-                if !holding(&objects.peek(), &beside.peek(), &ask.object) {
-                    return;
+        move |answer, _| {
+            // Working a question out may have found debug info that would not read, which
+            // the Objects list says. Counted first: the answer itself may be dropped.
+            skips.recount(&objects.peek());
+            match answer {
+                Answer::Listing { ask, studied, over } => {
+                    // The question being asked *now*, which is what an answer is kept for.
+                    let wanted = asked.peek_ask();
+                    let open = objects.peek().clone();
+                    write_if(analysis, |next| {
+                        next.take(ask, studied, over, wanted.as_ref(), &open)
+                    });
                 }
-                // Let go around where the reader is now, which is not where they asked.
-                let now = window.peek().clone();
-                write_if(reading, |next| next.take(&ask, now.as_ref(), code, decoded));
-            }
-            Answer::Marked { file, lines, over } => {
-                // The file the pane is showing *now*, which is what an answer is kept
-                // for -- the listing's rule, and `Coded::take`'s to apply.
-                let showing = showing.peek().clone();
-                write_if(coded, |next| next.take(showing.as_ref(), file, lines, over));
-            }
-            Answer::Located { query, symbols } => {
-                let open = objects.peek().clone();
-                write_if(located, |next| next.take(query, symbols, &open));
+                Answer::Code { ask, code, decoded } => {
+                    // Taken whenever it is about the object on screen -- a decoded stretch is
+                    // never stale, see `Reading::take` -- and never out of a binary closed
+                    // since it was asked for, `Shown::still_open`'s rule once more. Held by
+                    // the app and not open in the project: a pad's program is neither, and
+                    // `holding` is the one rule for the two.
+                    if !holding(&objects.peek(), &beside.peek(), &ask.object) {
+                        return;
+                    }
+                    // Let go around where the reader is now, which is not where they asked.
+                    let now = window.peek().clone();
+                    write_if(reading, |next| next.take(&ask, now.as_ref(), code, decoded));
+                }
+                Answer::Marked { file, lines, over } => {
+                    // The file the pane is showing *now*, which is what an answer is kept
+                    // for -- the listing's rule, and `Coded::take`'s to apply.
+                    let showing = showing.peek().clone();
+                    write_if(coded, |next| next.take(showing.as_ref(), file, lines, over));
+                }
+                Answer::Located { query, symbols } => {
+                    let open = objects.peek().clone();
+                    write_if(located, |next| next.take(query, symbols, &open));
+                }
             }
         },
     );

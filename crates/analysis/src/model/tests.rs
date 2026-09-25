@@ -207,6 +207,13 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         "Archive members left out because they are not object files this reader can read: 2."
     );
 
+    let skipped = LoadMessage::DebugInfoSkipped { count: 1 };
+    assert_eq!(skipped.severity(), Severity::Warning);
+    assert_eq!(
+        skipped.to_string(),
+        "Parts of the debug info that would not read, so some code has no source lines: 1."
+    );
+
     let whole = [
         (
             LoadMessage::EmptyArchive,

@@ -35,6 +35,38 @@ use super::*;
 #[derive(Clone, Copy)]
 pub(crate) struct Objects(pub(crate) State<Vec<Arc<Object>>>);
 
+/// How many parts of each open object's debug info would not read, as last counted
+/// ([`Object::debug_info_skipped`]). Most are found after the object was read, as a worker
+/// answers a question, so each answer is followed by a count ([`Skips::recount`]). A count
+/// that changed is what redraws the Objects list's marks.
+#[derive(Clone, Copy)]
+pub(crate) struct Skips(pub(crate) State<Counted>);
+
+/// Each object with its count. `Weak` and not an address, so a closed object's address is
+/// not given to a new one while it is still listed here.
+#[derive(Default)]
+pub(crate) struct Counted(Vec<(std::sync::Weak<Object>, usize)>);
+
+impl Skips {
+    /// Count `objects` again, and write only where a count changed. One brief lock per
+    /// object, and nothing read: the debug info was read by the question that found it.
+    pub(crate) fn recount(self, objects: &[Arc<Object>]) {
+        let now: Vec<_> = objects
+            .iter()
+            .map(|object| (Arc::downgrade(object), object.debug_info_skipped()))
+            .collect();
+        write_if(self.0, |counted| {
+            let same = counted.0.len() == now.len()
+                && (counted.0.iter().zip(&now))
+                    .all(|((was, before), (is, after))| was.ptr_eq(is) && before == after);
+            if !same {
+                counted.0 = now;
+            }
+            !same
+        });
+    }
+}
+
 /// Where everything this run stores goes, opened once in `app()` and handed down rather
 /// than looked up again wherever a file is wanted. `None` on a system with no state or
 /// local data directory, which is a run that keeps nothing and says so at each write.

@@ -250,6 +250,8 @@ pub(crate) fn use_code_hunt(
     mut land: impl FnMut(&Arc<Object>, CodeLine, Range<usize>, HuntLanding) -> HuntLanding + 'static,
 ) {
     let finds = use_try_consume::<Looking>().map(|looking| looking.0);
+    let skips = use_try_consume::<Skips>();
+    let objects = use_try_consume::<Objects>().map(|objects| objects.0);
     let from = Rc::new(from);
 
     // A step over an object's code starts a walk rather than moving through an answer.
@@ -365,7 +367,15 @@ pub(crate) fn use_code_hunt(
                 let code = code.unwrap_or_else(|| Arc::new(CodeListing::new(&object)));
                 hunt(&object, &code, &filter, place, direction, emit);
             });
-            spawn(take_hunt(finds, at, id, events));
+            spawn(async move {
+                take_hunt(finds, at, id, events).await;
+                // A walk asks each function's extent of the debug info, which may have
+                // found some that would not read.
+                if let (Some(skips), Some(objects)) = (skips, objects) {
+                    let open = objects.peek().clone();
+                    skips.recount(&open);
+                }
+            });
         },
     );
 

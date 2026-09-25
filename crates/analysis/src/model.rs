@@ -110,6 +110,11 @@ pub enum LoadMessage {
     /// The file could not be read at all, for the reason `error` gives: it is missing, it
     /// is not a regular file, or it may not be read.
     CouldNotRead { error: String },
+    /// `count` parts of the debug info (a DWARF unit, a PDB module) would not read in whole,
+    /// and were passed over or read only up to the fault. Never in
+    /// [`Object::messages`]: most are found after the parse, so
+    /// [`Object::messages_so_far`] adds this from [`Object::debug_info_skipped`].
+    DebugInfoSkipped { count: usize },
 }
 
 /// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
@@ -140,6 +145,8 @@ impl LoadMessage {
             LoadMessage::NotAnObject => Severity::Warning,
             LoadMessage::Malformed { .. } => Severity::Warning,
             LoadMessage::CouldNotRead { .. } => Severity::Warning,
+            // Some code has no source lines; the lines shown are right.
+            LoadMessage::DebugInfoSkipped { .. } => Severity::Warning,
         }
     }
 }
@@ -185,6 +192,11 @@ impl fmt::Display for LoadMessage {
             LoadMessage::CouldNotRead { error } => {
                 write!(f, "This file could not be read: {error}.")
             }
+            LoadMessage::DebugInfoSkipped { count } => write!(
+                f,
+                "Parts of the debug info that would not read, so some code has no source \
+                 lines: {count}."
+            ),
         }
     }
 }
@@ -350,9 +362,22 @@ impl Object {
         &all[start..end.max(start)]
     }
 
-    /// The worst of [`messages`](Self::messages), or [`None`] where there are none.
+    /// [`messages`](Self::messages), then what the debug info could not read so far
+    /// ([`LoadMessage::DebugInfoSkipped`]), if anything. That grows as the debug info is
+    /// read, so this is asked again after each question. It takes one brief lock and reads
+    /// nothing.
+    pub fn messages_so_far(&self) -> impl Iterator<Item = LoadMessage> + '_ {
+        let count = self.debug_info_skipped();
+        let skipped = (count > 0).then_some(LoadMessage::DebugInfoSkipped { count });
+        self.messages.iter().cloned().chain(skipped)
+    }
+
+    /// The worst of [`messages_so_far`](Self::messages_so_far), or [`None`] where there
+    /// are none.
     pub fn worst(&self) -> Option<Severity> {
-        self.messages.iter().map(LoadMessage::severity).max()
+        self.messages_so_far()
+            .map(|message| message.severity())
+            .max()
     }
 
     /// [`placed`](Self::placed).
