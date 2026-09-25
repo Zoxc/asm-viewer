@@ -399,7 +399,7 @@ fn a_coff_total_size_is_not_a_functions_length() {
     ]));
     let first = named(&object, "first");
 
-    assert_eq!(object.format, analysis::BinaryFormat::Coff);
+    assert_eq!(object.format, Some(analysis::BinaryFormat::Coff));
     assert_eq!(first.size, Some(2));
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
     assert_eq!(

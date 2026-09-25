@@ -268,3 +268,41 @@ fn an_archive_read_to_its_end_says_nothing() {
     assert_eq!(objects.len(), 3);
     assert!(objects.iter().all(|object| object.messages.is_empty()));
 }
+
+/// A thin archive: `ar --thin`'s magic, then a GNU header per member stating the size of a
+/// file kept elsewhere, and none of its bytes.
+fn thin_archive(members: &[(&str, u64)]) -> Vec<u8> {
+    let mut bytes = b"!<thin>\n".to_vec();
+    for (name, size) in members {
+        let header = format!(
+            "{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n",
+            format!("{name}/"),
+            0,
+            0,
+            0,
+            644,
+            size
+        );
+        bytes.extend_from_slice(header.as_bytes());
+    }
+    bytes
+}
+
+/// A thin archive's members are in other files. `object` gives each an offset of 0 and the
+/// other file's size, so cutting the member from the archive would parse the archive's own
+/// first bytes. None is parsed, and the archive is shown alone to say why.
+#[test]
+fn a_thin_archive_says_its_members_are_elsewhere() {
+    // Sizes that fit in the archive, so a member cut from it would be its first bytes.
+    let objects = objects_of(thin_archive(&[("first.o", 64), ("second.o", 100)]));
+    let [archive] = objects.as_slice() else {
+        panic!("one object, the archive: {}", objects.len());
+    };
+    assert_eq!(archive.name, "lib.a");
+    assert_eq!(archive.format, None);
+    assert!(archive.symbols.is_empty() && archive.sections.is_empty());
+    assert_eq!(
+        archive.messages,
+        [analysis::LoadMessage::ThinArchive { members: 2 }]
+    );
+}

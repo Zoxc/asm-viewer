@@ -24,7 +24,8 @@ pub enum Progress {
 /// object file, handing each object to `emit` **as it is parsed** rather than collecting
 /// them. Anything that fails to read or parse is silently skipped. An archive's members
 /// come one member late, so the last can say the archive stopped early
-/// ([`LoadMessage::ArchiveCutShort`]).
+/// ([`LoadMessage::ArchiveCutShort`]). A thin archive's members are not read, and the
+/// archive is handed over alone, with no format, to say so ([`LoadMessage::ThinArchive`]).
 ///
 /// A callback rather than a channel or an iterator: a channel would make this crate pick a
 /// backpressure policy belonging to whoever draws the result, and an iterator would mean
@@ -86,6 +87,8 @@ fn open_one_file(
     // objects come out of it.
     let file = ObjectData::whole_file(bytes);
 
+    // How many members a thin archive names, none of which is read here.
+    let mut thin = 0usize;
     if let Ok(archive) = ArchiveFile::parse(file.bytes()) {
         // Each object is handed over one member late, so the last one can still be told
         // that the members stopped early.
@@ -100,6 +103,12 @@ fn open_one_file(
                 }
                 break;
             };
+            // Its bytes are in a file of its own, and `file_range` says offset 0 and that
+            // file's size: a range into this archive's own first bytes.
+            if member.is_thin() {
+                thin = thin.saturating_add(1);
+                continue;
+            }
             let name = String::from_utf8_lossy(member.name()).into_owned();
             // The same bytes `member.data(..)` would return, addressed as a range into the
             // archive so the member stays reachable without re-scanning the archive.
@@ -123,7 +132,12 @@ fn open_one_file(
         .map(|name| name.to_string_lossy())
         .unwrap_or_default()
         .into_owned();
-    if let Some(object) = parse_object(file, name, path.to_path_buf()) {
+    if thin > 0 {
+        // An archive does not parse as an object, so nothing else would say so.
+        let message = LoadMessage::ThinArchive { members: thin };
+        let object = Object::unread(path.to_path_buf(), name, file, message);
+        emit(Progress::Parsed(Arc::new(object)))?;
+    } else if let Some(object) = parse_object(file, name, path.to_path_buf()) {
         emit(Progress::Parsed(object))?;
     }
 

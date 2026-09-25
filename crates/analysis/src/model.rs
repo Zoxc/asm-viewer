@@ -21,7 +21,10 @@ use std::{
 pub struct Object {
     pub path: PathBuf,
     pub name: String,
-    pub format: BinaryFormat,
+    /// [`None`] for a file that is not an object at all: a thin archive, whose members are
+    /// other files, shown only to say so ([`messages`](Self::messages)). It has no sections
+    /// and no symbols.
+    pub format: Option<BinaryFormat>,
 
     /// The machine the code in here is for, as the file's own header declares it. This is
     /// what picks a disassembler ([`SymbolData::assembly`]) and the only thing that can: a
@@ -79,6 +82,9 @@ pub enum LoadMessage {
     /// An archive's members stopped at the `member`th (from 1), whose header would not
     /// read. Said on the last object shown before it.
     ArchiveCutShort { member: usize },
+    /// A thin archive's `members` are other files, named in it and not held in it, which
+    /// this reader does not open.
+    ThinArchive { members: usize },
 }
 
 /// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
@@ -100,6 +106,8 @@ impl LoadMessage {
             LoadMessage::UnreadableSectionNames { .. } => Severity::Warning,
             // What is shown is right; only some of it is missing.
             LoadMessage::ArchiveCutShort { .. } => Severity::Warning,
+            // Nothing shown is wrong; the members are simply not shown.
+            LoadMessage::ThinArchive { .. } => Severity::Warning,
         }
     }
 }
@@ -126,6 +134,11 @@ impl fmt::Display for LoadMessage {
                 f,
                 "The archive's member {member} would not read, so it and every member after it \
                  are not shown."
+            ),
+            LoadMessage::ThinArchive { members } => write!(
+                f,
+                "The archive is thin: its members are in other files, which are not opened. \
+                 Members not shown: {members}."
             ),
         }
     }
@@ -218,7 +231,7 @@ impl Object {
         Object {
             path,
             name,
-            format,
+            format: Some(format),
             architecture,
             endianness: Endianness::Little,
             symbols,
@@ -229,6 +242,31 @@ impl Object {
             messages: Vec::new(),
             debug_info: DebugInfoCache::new(preloaded),
             placed: PlacedSymbols(placed),
+        }
+    }
+
+    /// A file with nothing in it to show, standing in the list for what `message` says of
+    /// it: no format, no sections and no symbols.
+    pub(crate) fn unread(
+        path: PathBuf,
+        name: String,
+        data: ObjectData,
+        message: LoadMessage,
+    ) -> Object {
+        Object {
+            path,
+            name,
+            format: None,
+            architecture: Architecture::Unknown,
+            endianness: Endianness::Little,
+            symbols: HashMap::new(),
+            symbols_sorted: Vec::new(),
+            imports: Vec::new(),
+            sections: Vec::new(),
+            data,
+            messages: vec![message],
+            debug_info: DebugInfoCache::new(None),
+            placed: PlacedSymbols(Vec::new()),
         }
     }
 

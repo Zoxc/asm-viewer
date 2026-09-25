@@ -17,7 +17,7 @@ fn both_text_symbols_parse() {
 
     assert_eq!(names(&object), ["caller", "target"]);
     assert_eq!(object.symbols.len(), 2);
-    assert_eq!(object.format, analysis::BinaryFormat::Elf);
+    assert_eq!(object.format, Some(analysis::BinaryFormat::Elf));
 
     let caller = symbol(&object, "caller");
     let target = symbol(&object, "target");
@@ -619,7 +619,7 @@ fn a_call_to_a_weak_external_is_a_placeholder() {
     // A COFF weak external with no section is not undefined to `object`, but it is just as
     // much an import: the linker binds it to a definition elsewhere or to its default.
     let object = parse(&call_to_weak_external());
-    assert_eq!(object.format, analysis::BinaryFormat::Coff);
+    assert_eq!(object.format, Some(analysis::BinaryFormat::Coff));
     assert_eq!(names(&object), ["caller"]);
     let imports: Vec<_> = object.imports.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(imports, ["hook"]);

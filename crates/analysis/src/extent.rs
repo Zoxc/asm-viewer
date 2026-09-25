@@ -124,8 +124,8 @@ impl SymbolData {
     /// The clamp in [`stated_extent`](Self::stated_extent) catches an over-reaching one — hand-written assembly with a `.size` past
     /// the next label. One that is too small is taken as it stands, as an unwind entry's
     /// stated end and a `DW_AT_high_pc` already are.
-    fn declared_extent(&self, format: BinaryFormat) -> Option<u64> {
-        self.size.filter(|_| format == BinaryFormat::Elf)
+    fn declared_extent(&self, format: Option<BinaryFormat>) -> Option<u64> {
+        self.size.filter(|_| format == Some(BinaryFormat::Elf))
     }
 
     /// How many bytes of code this symbol is. Four answers, in order.

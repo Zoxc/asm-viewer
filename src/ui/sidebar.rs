@@ -239,7 +239,9 @@ impl Component for ObjectRow {
                 } else {
                     chevron_width()
                 })))
-                .child(tag_label(format_tag(self.object.format)))
+                .child(tag_label(
+                    self.object.format.map_or(ARCHIVE_TAG, format_tag),
+                ))
                 .child(tree_name_fitted(
                     fitted,
                     self.object.name.clone(),

@@ -191,4 +191,12 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         cut.to_string(),
         "The archive's member 2 would not read, so it and every member after it are not shown."
     );
+
+    let thin = LoadMessage::ThinArchive { members: 3 };
+    assert_eq!(thin.severity(), Severity::Warning);
+    assert_eq!(
+        thin.to_string(),
+        "The archive is thin: its members are in other files, which are not opened. \
+         Members not shown: 3."
+    );
 }
