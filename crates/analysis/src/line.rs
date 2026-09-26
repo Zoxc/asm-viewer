@@ -25,7 +25,7 @@
 use crate::model::covering;
 use crate::parse::Name;
 use crate::{Bias, Object, PlacedAddress, Section, SectionAddress, SymbolData};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -119,6 +119,31 @@ trait LineBackend {
     /// Every row that names a file and a line, handed to `visit` as `(range, file, line)`.
     /// A backend may hold its own lock for the whole walk; see [`DebugInfo::each_row`].
     fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32));
+
+    /// How many parts of the debug info the backend has so far read only in part, or not at
+    /// all, because something in them would not read ([`Skipped`]).
+    fn skipped(&self) -> usize;
+}
+
+/// The parts of one object's debug info a backend went past, or stopped reading part way,
+/// because something in them would not read: a DWARF unit, a PDB module. Each is counted once
+/// however often it is read, by a key the backend chooses (a unit's offset, a module's index).
+///
+/// Counted as the parts are read, and most are read lazily, so the count grows with the
+/// questions asked. Nothing tells the reader yet: [`Object::messages`] is settled at parse,
+/// and most of what is counted here is found after it.
+#[derive(Default)]
+struct Skipped(Mutex<HashSet<u64>>);
+
+impl Skipped {
+    /// The part `key` names went unread, in whole or in part.
+    fn note(&self, key: u64) {
+        recovered(&self.0).insert(key);
+    }
+
+    fn count(&self) -> usize {
+        recovered(&self.0).len()
+    }
 }
 
 impl Backend {
@@ -230,6 +255,12 @@ impl DebugInfo {
     /// already have been handed some of the rows.
     fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) -> bool {
         without_panicking(|| self.backend().each_row(visit)).is_some()
+    }
+
+    /// How many parts of the debug info have been read only in part so far
+    /// ([`LineBackend::skipped`]).
+    fn skipped(&self) -> usize {
+        self.backend().skipped()
     }
 
     /// The one backend this object has, as the three questions the seam puts.
@@ -616,6 +647,15 @@ impl Object {
     /// [`SymbolData::extent`] for how it and the next-symbol estimate bound each other.
     pub fn function_extent(&self, section: &Section, address: SectionAddress) -> Option<u64> {
         self.debug_info()?.extent(section, address)
+    }
+
+    /// How many parts of this object's debug info (a DWARF unit, a PDB module) have been found
+    /// so far that would not read in whole, and were passed over or read only up to the fault.
+    /// Most are read lazily, so this grows with the questions asked; 0 before the first, and
+    /// asking does not load the debug info.
+    pub fn debug_info_skipped(&self) -> usize {
+        let loaded = self.debug_info.0.get().and_then(Option::as_ref);
+        loaded.map_or(0, DebugInfo::skipped)
     }
 
     /// This object's debug info, built at most once — including the "there is none" answer.

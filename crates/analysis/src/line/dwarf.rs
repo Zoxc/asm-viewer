@@ -10,7 +10,7 @@
 //! Nothing here catches a panic: the guard is [`super::DebugInfo`]'s, one net around every
 //! question whichever backend answers it.
 
-use super::{recovered, LineBackend, RowCollector};
+use super::{recovered, LineBackend, RowCollector, Skipped};
 use crate::parse::symbol_address;
 use crate::sections::{bias_of, runtime_endian, section_biases, section_data};
 use crate::{Bias, PlacedAddress, SectionAddress};
@@ -36,6 +36,10 @@ pub(super) struct Dwarf {
     /// `DW_TAG_subprogram` in it, keyed by the unit's `.debug_info` offset and then by the
     /// subprogram's `DW_AT_low_pc`.
     extents: Mutex<HashMap<u64, HashMap<PlacedAddress, u64>>>,
+
+    /// The units left out of the context, or whose subprograms were read only up to a DIE
+    /// that would not read, by their `.debug_info` offset.
+    skipped: Skipped,
 }
 
 impl Dwarf {
@@ -86,6 +90,7 @@ impl Dwarf {
         Some(Dwarf {
             context: Mutex::new(addr2line::Context::from_dwarf(dwarf).ok()?),
             extents: Mutex::default(),
+            skipped: Skipped::default(),
         })
     }
 
@@ -141,9 +146,13 @@ impl LineBackend for Dwarf {
         // Nested under the context's lock, and only ever in that order — this is the one
         // place either is taken.
         let mut extents = recovered(&self.extents);
-        let extents = extents
-            .entry(key)
-            .or_insert_with(|| subprogram_extents(sections, unit));
+        let extents = extents.entry(key).or_insert_with(|| {
+            let (extents, whole) = subprogram_extents(sections, unit);
+            if !whole {
+                self.skipped.note(key);
+            }
+            extents
+        });
 
         extents.get(&probe).copied()
     }
@@ -165,6 +174,12 @@ impl LineBackend for Dwarf {
             };
             visit(range, file, line);
         }
+    }
+
+    /// Not counted: a unit whose lines do not parse or panic ([`location_ranges`]), which
+    /// `addr2line` does not name as it steps past it.
+    fn skipped(&self) -> usize {
+        self.skipped.count()
     }
 }
 
@@ -196,16 +211,24 @@ fn location_ranges<'context>(
 /// claiming zero bytes. `DW_AT_high_pc` is an *end address* when its form is an address and a
 /// *length* when its form is a constant; both spellings are in the wild. Abstract origins are
 /// not followed: only the DIE carrying `low_pc` knows where the bytes are.
+///
+/// Whether the walk read the whole unit: a DIE that will not read ends it, keeping what was
+/// read before. Nothing past it can be found. A DIE is as long as its abbreviation's
+/// attributes make it, so one whose abbreviation or forms will not read does not say where
+/// the next begins. An ancestor's `DW_AT_sibling` would, but only gcc writes it.
 fn subprogram_extents(
     sections: &gimli::Dwarf<Reader>,
     unit: &gimli::Unit<Reader>,
-) -> HashMap<PlacedAddress, u64> {
+) -> (HashMap<PlacedAddress, u64>, bool) {
     let mut extents = HashMap::new();
 
     let mut entries = unit.entries();
-    // A malformed unit stops the walk where it goes wrong rather than discarding what was
-    // read before it.
-    while let Ok(Some(entry)) = entries.next_dfs() {
+    loop {
+        let entry = match entries.next_dfs() {
+            Ok(Some(entry)) => entry,
+            Ok(None) => return (extents, true),
+            Err(_) => return (extents, false),
+        };
         if entry.tag() != gimli::DW_TAG_subprogram {
             continue;
         }
@@ -240,8 +263,6 @@ fn subprogram_extents(
         // a unit included twice; the first one read keeps the address.
         extents.entry(low).or_insert(size);
     }
-
-    extents
 }
 
 /// One unit range list that [`crate::sections::section_biases`] left behind, and the bytes that

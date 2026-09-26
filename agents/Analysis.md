@@ -63,7 +63,11 @@ loader, which asks the same rule again, drops the second copy. The Objects list 
 functions left out because the descriptor naming their code could not be read (below), sections
 named `<section N>` because their own names would not read (below), an archive's members
 stopping early (above), and a thin archive's members not being read (above), the one message on
-an object made only to carry it.
+an object made only to carry it. What the debug info could not read is not among them, because
+most of it is found after the parse, as the questions reach it, and `messages` is settled by then.
+Each backend counts the parts it went past or read only in part instead, a DWARF unit or a PDB
+module, each once however often it is read (`Skipped`, `line.rs`), and
+`Object::debug_info_skipped` answers the count so far. Nothing shows it to the reader yet.
 
 **Data model**, built once at open time and shared via `Arc`. Only *defined* `SymbolKind::Text`
 symbols are kept. `object` calls an undefined ELF `STT_FUNC` or COFF function text too, but it has
@@ -578,11 +582,18 @@ every backend in: a linked image is one nothing placed, so the two spaces are a 
 and `own`/`placed` say which is meant rather than leave it to be read off a type. **Per
 module, on demand**: line info in a PDB is per module (one object the linker took in), found from an
 address through the DBI's section contributions, an `Intervals` (`line/intervals.rs`, the index
-the source index's symbol ranges are too) built at load. A module is decoded whole the first time an
+the source index's symbol ranges are too) built at load; a malformed tail of the list keeps what
+came before it. A module is decoded whole the first time an
 address in it is asked about (its rows through a whole, unclipped `RowCollector` into a `LineInfo`
 if any, its `S_GPROC32`/`S_LPROC32` lengths into an extent table) and kept, the way the DWARF backend
 keeps a unit's subprogram extents. A row with no length, one whose successor sits below it, which only
-assemblers emit, is dropped rather than given an end. Line 0 and column 0 are `None` as in DWARF.
+assemblers emit, is dropped rather than given an end. A module's rows are in subsections, usually one
+per function, each a run of blocks; `pdb2` walks them as one and ends at the first block whose
+stated size runs past its subsection. The rows before it are kept, the rest are lost and the module
+is counted: no linker writes such a block, so nothing reads the module again. A
+record in a module's symbols that will not read ends the walk over them, keeping what came before:
+it is either one whose length runs past the stream, or one too short to hold a kind, and `pdb2`
+does not say how short, so the next record's start is not known. Line 0 and column 0 are `None` as in DWARF.
 `each_row` walks every module, so a first source question decodes the whole PDB, as the DWARF one
 parses every line program. The DBI module list is a chain of variable-length records with no index,
 so an index is reached only by parsing every record before it and **one walk serves every module a

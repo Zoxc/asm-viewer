@@ -849,6 +849,11 @@ impl Msf {
         self.pages[stream][at / self.page] * self.page + at % self.page
     }
 
+    fn u32_at(&self, stream: usize, at: usize) -> u32 {
+        let at = self.offset(stream, at);
+        u32::from_le_bytes(self.bytes[at..at + 4].try_into().unwrap())
+    }
+
     fn u16_at(&self, stream: usize, at: usize) -> u16 {
         let at = self.offset(stream, at);
         u16::from_le_bytes(self.bytes[at..at + 2].try_into().unwrap())
@@ -869,6 +874,12 @@ const DBI: usize = 3;
 /// follow the DBI's 64-byte header, each 64 bytes of fields and then two NUL-terminated
 /// names, padded to 4.
 fn module_stream(msf: &Msf, index: usize) -> usize {
+    usize::from(msf.u16_at(DBI, module_record(msf, index) + 34))
+}
+
+/// Where module `index`'s record is in the DBI. The records follow the DBI's 64-byte header,
+/// each 64 bytes of fields and then two NUL-terminated names, padded to 4.
+fn module_record(msf: &Msf, index: usize) -> usize {
     let mut record = 64;
     for _ in 0..index {
         let mut at = record + 64;
@@ -880,7 +891,7 @@ fn module_stream(msf: &Msf, index: usize) -> usize {
         }
         record = at.next_multiple_of(4);
     }
-    usize::from(msf.u16_at(DBI, record + 34))
+    record
 }
 
 /// The symbol record at `at` in `stream` rewritten as one of `kind` whose data begins with
@@ -988,3 +999,53 @@ unsafe impl GlobalAlloc for Capped {
 
 #[global_allocator]
 static ALLOCATOR: Capped = Capped;
+
+/// The object's module with the first block of its first line subsection stating a size far
+/// past the subsection. A module's C13 line data follows its symbols and its C11 lines, whose
+/// sizes the module's DBI record states at 36 and 40, and is a run of subsections, each a kind
+/// and a size; `pdb2` walks the lines subsections (kind `0xF2`) in order of the `offset`,
+/// `section` pair each begins with, so the first is the one with the lowest.
+fn first_line_block_overstated(pdb: &[u8]) -> Vec<u8> {
+    let mut msf = Msf::new(pdb);
+    let record = module_record(&msf, 0);
+    let stream = module_stream(&msf, 0);
+    let mut at = (msf.u32_at(DBI, record + 36) + msf.u32_at(DBI, record + 40)) as usize;
+    let end = at + msf.u32_at(DBI, record + 44) as usize;
+    let mut first: Option<((u16, u32), usize)> = None;
+    while at < end {
+        let (kind, size) = (msf.u32_at(stream, at), msf.u32_at(stream, at + 4));
+        let data = at + 8;
+        if kind == 0xF2 {
+            let key = (msf.u16_at(stream, data + 4), msf.u32_at(stream, data));
+            if first.is_none_or(|(first, _)| key < first) {
+                first = Some((key, data));
+            }
+        }
+        at = data + size as usize;
+    }
+    let (_, lines) = first.expect("a lines subsection");
+    // After the subsection's 12-byte header, the block's file and line count.
+    msf.write(stream, lines + 12 + 8, &0xFFFFu32.to_le_bytes());
+    msf.bytes
+}
+
+/// A line block that will not read ends the module's rows there, and the module is counted;
+/// before, it was without a word. `add`'s one block is the one broken, and `pdb2` walks the
+/// module's subsections as one, so every row after it goes too. The procedures still give the
+/// extents.
+#[test]
+fn a_line_block_that_does_not_read_is_counted() {
+    let dll = committed_fixture(NOEXPORT_DLL);
+    let pdb = committed_fixture("line_fixture_noexport.pdb");
+    let dir = scratch("line_block_overstated");
+    std::fs::write(
+        dir.join("line_fixture_noexport.pdb"),
+        first_line_block_overstated(&pdb),
+    )
+    .unwrap();
+    let object = parse_at(&dll, dir.join(NOEXPORT_DLL));
+
+    assert!(symbol(&object, "add").line_info(&object).is_none());
+    assert_eq!(symbol(&object, "add").debug_extent(&object), Some(0x11));
+    assert_eq!(object.debug_info_skipped(), 1);
+}

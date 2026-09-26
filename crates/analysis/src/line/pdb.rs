@@ -18,9 +18,10 @@
 //! rather than read off a type.
 //!
 //! Line info in a PDB is **per module** (one object file the linker took in), found from an
-//! address by the DBI's section contributions. A module is decoded whole the first time an
-//! address in it is asked about — its rows into one [`LineInfo`], its procedures into a
-//! table of extents — and kept, the way the DWARF backend keeps a unit's subprogram extents.
+//! address by the DBI's section contributions. A module is decoded whole the first time an address in it is asked about — its rows
+//! into one [`LineInfo`], its procedures into a table of extents — and kept, the way the DWARF
+//! backend keeps a unit's subprogram extents. A module read only up to something that would
+//! not read is counted ([`Skipped`]).
 //!
 //! The PDB is also the one debug format that names functions the image does not: a `/DEBUG`
 //! image has no COFF symbol table, so a stripped `.exe` declares its entry point and a DLL
@@ -51,7 +52,7 @@
 //! A symbol record is parsed only if it is a kind the walks use ([`PROCEDURES`]).
 
 use super::intervals::Intervals;
-use super::{recovered, Declared, LineBackend, LineInfo, RowCollector, SourceHash};
+use super::{recovered, Declared, LineBackend, LineInfo, RowCollector, Skipped, SourceHash};
 use crate::parse::Name;
 use crate::{open_regular, Bias, Links, PlacedAddress, Regular, SectionAddress};
 use object::Object as _;
@@ -98,6 +99,10 @@ pub(super) struct Pdb {
     /// How many modules the list holds, once one walk has decoded them all. Past that no
     /// question walks the list again, not even for a module the list does not hold.
     every: OnceLock<usize>,
+
+    /// The modules whose symbols or rows were read only up to something that would not read,
+    /// by index.
+    skipped: Skipped,
 
     /// How many walks of the DBI module list this PDB has started, so a test can pin that a
     /// question over every module costs one walk and not one per module. Test builds only.
@@ -157,19 +162,7 @@ impl Pdb {
         let address_map = pdb.address_map().ok()?;
         let strings = pdb.string_table().ok();
 
-        let mut contributions = Vec::new();
-        let mut listed = dbi.section_contributions().ok()?;
-        // A malformed tail stops the walk where it goes wrong and keeps what was read.
-        while let Ok(Some(contribution)) = listed.next() {
-            let ranges = rebased(
-                &address_map,
-                image_base,
-                contribution.offset,
-                contribution.size,
-            );
-            contributions.extend(ranges.map(|range| (range, contribution.module)));
-        }
-        let contributions = Intervals::new(contributions);
+        let contributions = contributions(&dbi, &address_map, image_base)?;
 
         Some(Pdb {
             pdb: Mutex::new(pdb),
@@ -180,6 +173,7 @@ impl Pdb {
             contributions,
             modules: Mutex::default(),
             every: OnceLock::new(),
+            skipped: Skipped::default(),
             #[cfg(test)]
             walks: std::sync::atomic::AtomicUsize::new(0),
         })
@@ -204,18 +198,17 @@ impl Pdb {
         // read, or a record that will not parse, is skipped and the walk goes on. A
         // procedure's name is the compiler's display name (`add`,
         // `core::ptr::drop_in_place<T>`), which no demangler claims.
-        for (_, module) in self.modules() {
+        for (index, module) in self.modules() {
             let Ok(Some(info)) = pdb.module_info(&module) else {
                 continue;
             };
-            declared.extend(
-                self.procedures_in(&info)
-                    .map(|(address, procedure)| Declared {
-                        name: Name::Informative(procedure.name.to_string().into_owned()),
-                        address,
-                        len: Some(u64::from(procedure.len)),
-                    }),
-            );
+            declared.extend(self.procedures_in(index, &info).into_iter().map(
+                |(address, procedure)| Declared {
+                    name: Name::Informative(procedure.name.to_string().into_owned()),
+                    address,
+                    len: Some(u64::from(procedure.len)),
+                },
+            ));
         }
 
         // Then every public flagged as code or a function, in the order the symbol records
@@ -254,31 +247,51 @@ impl Pdb {
         declared
     }
 
-    /// Every procedure with a length in one module, with its address, in the order the
-    /// module's symbols are in: what both reads of a module stream take of its symbols. A
+    /// Every procedure with a length in module `index`, with its address, in the order the
+    /// module's symbols are in: what every read of a module stream takes of its symbols. A
     /// stream that will not read has none, a record of another kind is not parsed
-    /// ([`PROCEDURES`]), a procedure that will not parse or whose address will not map is
-    /// skipped, and a malformed tail stops the walk where it goes wrong.
+    /// ([`PROCEDURES`]), and a procedure that will not parse or whose address will not map is
+    /// skipped.
+    ///
+    /// A record that will not read at all ends the walk, and the module is counted
+    /// ([`Skipped`]). It is one whose stated length runs past the stream, which leaves nothing
+    /// after it to find, or one too short to hold a kind. The second states where it ends, but
+    /// `pdb2`'s iterator has already read its length when it says so, and does not say what
+    /// the length was: going on from there reads the next record from the wrong byte whenever
+    /// the length was 1, and a procedure read from the wrong byte is a function that is not
+    /// there.
     fn procedures_in<'a>(
-        &'a self,
+        &self,
+        index: usize,
         info: &'a pdb2::ModuleInfo<'_>,
-    ) -> impl Iterator<Item = (SectionAddress, pdb2::ProcedureSymbol<'a>)> + 'a {
-        let symbols = info.symbols().ok().into_iter();
-        let symbols = symbols.flat_map(|symbols| symbols.iterator().map_while(Result::ok));
-        symbols
-            .filter_map(move |symbol| {
-                if !PROCEDURES.contains(&symbol.raw_kind()) {
-                    return None;
+    ) -> Vec<(SectionAddress, pdb2::ProcedureSymbol<'a>)> {
+        let mut procedures = Vec::new();
+        let Ok(mut symbols) = info.symbols() else {
+            return procedures;
+        };
+        loop {
+            let symbol = match symbols.next() {
+                Ok(Some(symbol)) => symbol,
+                Ok(None) => break,
+                Err(_) => {
+                    self.skipped.note(index as u64);
+                    break;
                 }
-                let Ok(pdb2::SymbolData::Procedure(procedure)) = symbol.parse() else {
-                    return None;
-                };
-                if procedure.len == 0 {
-                    return None;
-                }
-                Some((self.address(procedure.offset)?, procedure))
-            })
-            .fuse()
+            };
+            if !PROCEDURES.contains(&symbol.raw_kind()) {
+                continue;
+            }
+            let Ok(pdb2::SymbolData::Procedure(procedure)) = symbol.parse() else {
+                continue;
+            };
+            if procedure.len == 0 {
+                continue;
+            }
+            if let Some(address) = self.address(procedure.offset) {
+                procedures.push((address, procedure));
+            }
+        }
+        procedures
     }
 
     /// A `section:offset` the PDB states, as an address in the image's own space: through
@@ -337,7 +350,7 @@ impl Pdb {
             count = index + 1;
             let asked = wanted.is_none_or(|wanted| wanted.binary_search(&index).is_ok());
             if asked && self.remembered(index).is_none() {
-                let decoded = self.decode(&module).map(Arc::new);
+                let decoded = self.decode(index, &module).map(Arc::new);
                 let mut modules = recovered(&self.modules);
                 modules.entry(index).or_insert(decoded);
             }
@@ -376,7 +389,10 @@ impl Pdb {
             .fuse()
     }
 
-    fn decode(&self, module: &pdb2::Module<'_>) -> Option<ModuleLines> {
+    /// One module whole: its rows and its procedures, or [`None`] where it has neither. A walk
+    /// that stops at something that will not read keeps what it read, and the module is
+    /// counted ([`Skipped`]).
+    fn decode(&self, index: usize, module: &pdb2::Module<'_>) -> Option<ModuleLines> {
         let info = {
             let mut pdb = recovered(&self.pdb);
             pdb.module_info(module).ok()??
@@ -389,8 +405,15 @@ impl Pdb {
             // Each file is resolved through the string table once per module, not per row.
             let mut files: HashMap<u32, Option<usize>> = HashMap::new();
             let mut lines = program.lines();
-            // A malformed tail stops the walk where it goes wrong and keeps what was read.
-            while let Ok(Some(line)) = lines.next() {
+            loop {
+                let line = match lines.next() {
+                    Ok(Some(line)) => line,
+                    Ok(None) => break,
+                    Err(_) => {
+                        self.skipped.note(index as u64);
+                        break;
+                    }
+                };
                 // A row without a length is one whose successor sits *below* it — a shape
                 // only assemblers emit — and it is dropped rather than given an end.
                 let Some(len) = line.length else {
@@ -411,7 +434,7 @@ impl Pdb {
         }
 
         let mut procedures = HashMap::new();
-        for (address, procedure) in self.procedures_in(&info) {
+        for (address, procedure) in self.procedures_in(index, &info) {
             // Two procedures at one address is a function and its alias; the first one read
             // keeps the address.
             procedures
@@ -502,6 +525,32 @@ impl LineBackend for Pdb {
             }
         }
     }
+
+    fn skipped(&self) -> usize {
+        self.skipped.count()
+    }
+}
+
+/// The DBI's section contributions, each as the ranges of the image's own addresses it lies
+/// over, to its module; or [`None`] where the list will not open. A malformed tail stops the
+/// walk where it goes wrong and keeps what was read.
+fn contributions(
+    dbi: &DebugInformation<'_>,
+    address_map: &AddressMap<'_>,
+    image_base: SectionAddress,
+) -> Option<Intervals<SectionAddress, usize>> {
+    let mut contributions = Vec::new();
+    let mut listed = dbi.section_contributions().ok()?;
+    while let Ok(Some(contribution)) = listed.next() {
+        let ranges = rebased(
+            address_map,
+            image_base,
+            contribution.offset,
+            contribution.size,
+        );
+        contributions.extend(ranges.map(|range| (range, contribution.module)));
+    }
+    Some(Intervals::new(contributions))
 }
 
 /// A file's checksum as the PDB records it, or [`None`] where it records none or one of the

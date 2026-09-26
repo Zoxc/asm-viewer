@@ -62,6 +62,22 @@ on the committed PDB with one record rewritten as an `S_CALLEES` stating `u32::M
 miscounted `S_INLINEES`. The test binary's allocator refuses any one request past 1 GiB, so a
 regression is an abort that fails the run and not a machine out of memory.
 
+**A module's line walk ends at the first block that will not read.** `LineIterator` walks every
+lines subsection of a module as one (`modi/c13.rs`), and a block whose stated size runs past its
+subsection is an error that ends it: the rows of every subsection after it were lost. The
+subsections were framed one by one when the line program was read, so they could be walked one by
+one, but the iterator neither goes on to the next nor says which it was in. **What it cost**:
+the rest of that module's rows, and the module is counted. No linker writes such a block, so
+nothing reads the module again. Pinned by `pdb.rs`' `a_line_block_that_does_not_read_is_counted`.
+
+**The symbol walk does not say where a record too short to hold a kind ends.** `SymbolIter::next`
+(`symbol/mod.rs`) returns `SymbolTooShort` for a record whose stated length is 0 or 1, after
+reading the length and before stepping past the record. Going on from there is right for a
+length of 0 and one byte short for a length of 1, and the error does not say which. **What it
+cost**: nothing yet. `Pdb::procedures_in` stops there and keeps what it read, the module's
+publics still naming its functions; stepping past would take reading the module's stream a
+second time to frame the records ourselves.
+
 **A declared stream length is allocated before a byte is read.** The blanket `Source` for a
 `Read + Seek` sizes its `Vec` from the stream directory's page list, so a directory that lies
 asks for gigabytes — never a panic, so no guard catches it. **What it cost**: `BoundedFile`
@@ -71,3 +87,9 @@ gives a lying compressed size.
 
 Not reported: the fork is one person's, the arithmetic is pervasive, and the guard was
 already there for `addr2line`.
+
+## Wanted
+
+**A line walk per subsection**, or one that goes on to the next subsection after an error.
+
+**Where a record too short to hold a kind ends, in `SymbolTooShort`**, so a walk could step past it.
