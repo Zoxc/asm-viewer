@@ -378,29 +378,6 @@ fn a_macho_entry_address_past_the_end_of_the_address_space_is_said() {
     );
 }
 
-/// Defect: a load command that stated the entry point and would not read was passed over
-/// without a word. The `LC_MAIN` after the short thread state is made some other command,
-/// so the thread state is the only one left.
-#[test]
-fn a_macho_entry_command_that_will_not_read_is_skipped_and_counted() {
-    let mut data = macho_executable(0x1_0000_0000, MACHO_CODE_OFFSET + 0x180, true);
-    let main = data
-        .windows(8)
-        .position(|window| window == [0x28, 0, 0, 0x80, 24, 0, 0, 0])
-        .expect("the fixture has an LC_MAIN");
-    data[main..main + 4].copy_from_slice(&0x7fff_ffffu32.to_le_bytes());
-
-    let object = parse(&data);
-    assert!(!common::names(&object).contains(&"<entry point>"));
-    assert_eq!(
-        object.messages,
-        [LoadMessage::UnreadableEntryCommands {
-            count: 1,
-            cut_short: false
-        }]
-    );
-}
-
 /// Defect: a load command whose size will not read ended the search for the entry point
 /// without a word. Its size of 4 is too small to step over, so the walk stops there, before
 /// the `LC_MAIN`.

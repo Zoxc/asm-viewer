@@ -254,9 +254,9 @@ ends the walk (`notes/upstream/object.md`). Either is one warning, a count and w
 was cut short (`LoadMessage::UnreadableExports`). A relocatable object is skipped entirely:
 `entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. For a Mach-O,
 `entry()` answers an `LC_MAIN` as a file offset, so `macho_entry` walks the load commands
-itself and is not asked at all: an `LC_MAIN`'s offset is placed through the segment whose file
-bytes hold it, and an `LC_UNIXTHREAD`'s PC is read as `object` reads it
-(`notes/upstream/object.md`). An offset no segment holds, or whose address runs past the end of
+itself: an `LC_MAIN`'s offset is placed through the segment whose file bytes hold it, and where
+an `LC_UNIXTHREAD` comes first, `entry()` is asked after all, since its answer is then that
+thread's PC (`notes/upstream/object.md`). An offset no segment holds, or whose address runs past the end of
 the address space, is no entry point, and says so (`LoadMessage::EntryPointWithoutAddress`). A
 command stating an entry point that will not read is skipped; a load command whose size will not
 read ends the walk, since the next starts where that size says. When no entry point is found,

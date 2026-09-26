@@ -10,9 +10,9 @@ use crate::{
     Import, LoadMessage, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress,
     SymbolData,
 };
+use object::pe;
 use object::read::macho::{MachHeader, MachOFile};
 use object::read::pe::{ImageNtHeaders, ImageOptionalHeader as _, PeFile};
-use object::{macho, pe};
 use object::{
     Architecture, BigEndian, BinaryFormat, Endian, Endianness, ExportTarget, FileFlags,
     LittleEndian, Object as _, ObjectKind, ObjectSection, ObjectSegment, ObjectSymbol, ReadRef,
@@ -341,7 +341,8 @@ fn pe_entry<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(
 /// `LC_MAIN`'s `entryoff`, a file offset, as it is (`notes/upstream/object.md`). That offset
 /// is placed through the segment whose file bytes hold it, and is no entry point when none
 /// does or the address does not fit, which is said on `messages`. An `LC_UNIXTHREAD`'s PC is
-/// already an address ([`thread_pc`]).
+/// already an address, and `entry()` reads it: asked only where the file has no `LC_MAIN`,
+/// its answer is that PC, or 0 where the state will not give one. No linker writes both.
 ///
 /// A command that states an entry point and will not read is skipped. A load command whose
 /// size will not read ends the walk, since the next one starts where its size says. Either
@@ -351,7 +352,7 @@ fn macho_entry<'data, Mach: MachHeader, R: ReadRef<'data>>(
     messages: &mut Vec<LoadMessage>,
 ) -> Option<u64> {
     let endian = file.endian();
-    let cputype = file.macho_header().cputype(endian);
+    let mut thread = false;
     let mut unread = 0usize;
     let mut cut_short = false;
     match file.macho_load_commands() {
@@ -382,16 +383,18 @@ fn macho_entry<'data, Mach: MachHeader, R: ReadRef<'data>>(
                 Err(_) => unread = unread.saturating_add(1),
             }
             match command.unix_thread() {
-                Ok(Some((_, state))) => match thread_pc(endian, cputype, state) {
-                    Pc::At(pc) => return Some(pc),
-                    Pc::Short => unread = unread.saturating_add(1),
-                    Pc::UnknownCpu => {}
-                },
+                Ok(Some(_)) => thread = true,
                 Ok(None) => {}
                 Err(_) => unread = unread.saturating_add(1),
             }
         },
         Err(_) => cut_short = true,
+    }
+    if thread {
+        let pc = file.entry();
+        if pc != 0 {
+            return Some(pc);
+        }
     }
     if unread > 0 || cut_short {
         messages.push(LoadMessage::UnreadableEntryCommands {
@@ -400,42 +403,6 @@ fn macho_entry<'data, Mach: MachHeader, R: ReadRef<'data>>(
         });
     }
     None
-}
-
-/// What an `LC_UNIXTHREAD` says of its PC ([`thread_pc`]).
-enum Pc {
-    At(u64),
-    /// The state stops before the PC.
-    Short,
-    /// A CPU whose thread state is not read, as `object` reads none.
-    UnknownCpu,
-}
-
-/// The PC in an `LC_UNIXTHREAD`'s thread state, at the place `object` 0.40 reads it from:
-/// past the flavor and the count, then after the registers each CPU puts before it.
-fn thread_pc<E: Endian>(endian: E, cputype: macho::CpuType, state: &[u8]) -> Pc {
-    let (offset, size): (usize, usize) = match cputype {
-        // x86_thread_state64: rax to r15, then rip.
-        macho::CPU_TYPE_X86_64 => (8 + 16 * 8, 8),
-        // arm_thread_state64: x0 to x28, fp, lr, sp, then pc.
-        macho::CPU_TYPE_ARM64 => (8 + 32 * 8, 8),
-        // x86_thread_state32: ten registers, then eip.
-        macho::CPU_TYPE_X86 => (8 + 10 * 4, 4),
-        // arm_thread_state32: r0 to r12, sp, lr, then pc.
-        macho::CPU_TYPE_ARM => (8 + 15 * 4, 4),
-        _ => return Pc::UnknownCpu,
-    };
-    let Some(bytes) = state.get(offset..offset + size) else {
-        return Pc::Short;
-    };
-    let pc = match size {
-        8 => bytes.try_into().ok().map(|bytes| endian.read_u64(bytes)),
-        _ => bytes
-            .try_into()
-            .ok()
-            .map(|bytes| u64::from(endian.read_u32(bytes))),
-    };
-    pc.map_or(Pc::Short, Pc::At)
 }
 
 /// A function's code as the parse takes it: where it is, the section it is in, and the size

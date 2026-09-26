@@ -34,12 +34,10 @@ virtual address of the entry point", so callers take it as one.
 **What it cost**: with `__TEXT` at `0x100000000` the offset is in no section, so every
 Mach-O executable lost its `<entry point>`. With `__TEXT` low, as in an i386 image, the offset
 could land inside another function and put `<entry point>` in its middle, cutting its extent
-short. The fix is `macho_entry` in `crates/analysis/src/parse.rs`, which does not call
-`entry()` for a Mach-O at all. It walks the load commands in the same order. For `LC_MAIN` it
-finds the segment whose file range holds the offset and adds that segment's `vmaddr`. For
-`LC_UNIXTHREAD` it reads the PC itself (`thread_pc`, the same CPU table and offsets), and goes
-on to the next command when it cannot, as `object` does; calling `entry()` there would have
-handed back a later `LC_MAIN`'s raw offset. Pinned by `declared_code.rs`' three
+short. The fix is `macho_entry` in `crates/analysis/src/parse.rs`, which walks the load
+commands in the same order. For `LC_MAIN` it finds the segment whose file range holds the
+offset and adds that segment's `vmaddr`. Where an `LC_UNIXTHREAD` comes first it asks
+`entry()`, whose answer is then that thread's PC, or 0 where the state will not give one. Pinned by `declared_code.rs`' three
 `a_macho_…` tests.
 
 Not reported.
