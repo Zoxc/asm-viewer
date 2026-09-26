@@ -604,6 +604,14 @@ sorted once, rather than by walking them: a walk costs units times relocations, 
 `vmlinux.o` that is hours. Measured on the 196-member rlib the rule fires on nothing, and the
 root-DIE pass costs 1.5% of a sweep of every symbol's line info and extent (200 ms -> 203 ms).
 
+**A context that will not build loses the object's DWARF, and says so.** `addr2line` builds its
+context in one pass that returns the first error it meets (a `.debug_aranges` header or a unit
+header that does not parse, a root DIE whose ranges do not read), and no real toolchain output is
+known to reach one. The backend is then built over no sections: it answers nothing and counts as
+one part skipped, so the reader is told rather than shown an object with no debug info. What a
+unit's subprograms are read for, its extents, stops at the first DIE that will not read and keeps
+what came before (`subprogram_extents`), and the unit is counted.
+
 **The PDB backend** (`line/pdb.rs`) reads the other debug format a linked PE comes with: not
 sections in the image but a **second file**, so it is the one backend that touches the filesystem.
 `DebugInfo::load` tries DWARF first (a MinGW or clang PE can carry `.debug_*`) and a `.pdb` only for

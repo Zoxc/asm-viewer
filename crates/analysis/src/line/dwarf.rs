@@ -8,7 +8,8 @@
 //! [`relocate`]).
 //!
 //! Nothing here catches a panic: the guard is [`super::DebugInfo`]'s, one net around every
-//! question whichever backend answers it.
+//! question whichever backend answers it. Where `addr2line` will not build a context at all,
+//! the object's DWARF counts as one part skipped ([`Dwarf::load`]).
 
 use super::{recovered, LineBackend, RowCollector, Skipped};
 use crate::parse::symbol_address;
@@ -44,7 +45,7 @@ pub(super) struct Dwarf {
 
 impl Dwarf {
     /// Build the context for one object file, or [`None`] when it has no DWARF. Never an
-    /// error: corrupt debug info is simply "no line info".
+    /// error: corrupt debug info is simply "no line info", and counted ([`Skipped`]).
     ///
     /// The layout is [`crate::sections::section_biases`], asked again here rather than read back
     /// off the sections the parse kept: it is the rule that decides a section's place, so the
@@ -87,10 +88,25 @@ impl Dwarf {
             load(&stale)?
         };
 
+        // No real toolchain output is known to fail the build, which stops at the first error
+        // it meets (`notes/upstream/addr2line.md`). Should it fail, the backend reads nothing,
+        // answers nothing and is counted, so the reader is told.
+        let skipped = Skipped::default();
+        let context = match addr2line::Context::from_dwarf(dwarf) {
+            Ok(context) => context,
+            Err(_) => {
+                skipped.note(WHOLE);
+                let nothing =
+                    gimli::Dwarf::load::<_, ()>(|_| Ok(EndianArcSlice::new(Arc::from([]), endian)))
+                        .ok()?;
+                addr2line::Context::from_dwarf(nothing).ok()?
+            }
+        };
+
         Some(Dwarf {
-            context: Mutex::new(addr2line::Context::from_dwarf(dwarf).ok()?),
+            context: Mutex::new(context),
             extents: Mutex::default(),
-            skipped: Skipped::default(),
+            skipped,
         })
     }
 
@@ -264,6 +280,11 @@ fn subprogram_extents(
         extents.entry(low).or_insert(size);
     }
 }
+
+/// The key [`Skipped`] counts the whole of an object's DWARF under, where none of it reads
+/// ([`Dwarf::load`]). No unit has it: a unit's key is where its header starts in
+/// `.debug_info`, and no header fits in the section's last byte.
+const WHOLE: u64 = u64::MAX;
 
 /// One unit range list that [`crate::sections::section_biases`] left behind, and the bytes that
 /// make it read as a list of no ranges at all.
