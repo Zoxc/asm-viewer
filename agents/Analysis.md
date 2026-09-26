@@ -1252,7 +1252,13 @@ sweep write a zstd frame, so what `object` would inflate one to, whatever its he
 pinned by a hand-built fixture in `robustness.rs` (`notes/upstream/object.md`). The rule that goes
 with them is the user rule in `AGENTS.md`: a minimal test case every time something is found wrong,
 and **checked arithmetic in preference to a wider `catch_unwind`**; the guard is for a dependency's
-bug, never for ours. Note also what *cannot* be caught: a stack overflow aborts, so anything
+bug, never for ours. A dependency's bug is never met by reading that part of the format again by
+hand: that is a second parser to keep right, whose own bugs no one upstream will find. The guard
+catches it, a check before the call keeps the input out, or what the crate cannot read is lost,
+and the bug goes to `notes/upstream/`. Which guard catches it follows from where the bug is met:
+one real compiler, assembler or linker output reaches gets a guard around the part it costs, and
+one only a mutated file reaches is left to the seam's net around the whole question, whatever
+more that costs a file nobody's toolchain wrote. Note also what *cannot* be caught: a stack overflow aborts, so anything
 recursing over file-controlled input (the demanglers, above) has to be bounded before the call
 rather than wrapped. `demangle/tests.rs` pins both halves of that for the pool: that a split batch
 answers in its own order, and that a 1000-level name in one lands on a pool thread and not on the

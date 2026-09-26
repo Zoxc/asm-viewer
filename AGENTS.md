@@ -547,6 +547,14 @@ feature there with the substitute, so a release that brings it is noticed.
 - **Never panic on any file input.** Checked arithmetic in preference to a wider `catch_unwind`;
   the guard is for a dependency's bug, never for ours. A stack overflow aborts and cannot be
   caught, so anything recursing over file-controlled input is bounded before the call.
+  **Never reimplement part of a parsing crate** (`object`, `gimli`, `addr2line`, `pdb2`, …) to
+  get around its overflow or panic. Catch it with the guard, check the input before the call,
+  or lose what the crate cannot read; then write it up in `notes/upstream/` with a minimal
+  reproduction, so it is fixed upstream and not here.
+  **A guard finer than the seam's is for what a real toolchain emits.** A crate bug only a
+  corrupt or mutated file reaches is left to the net around the whole question: losing that
+  file's debug info is fine. Add a narrower guard only where real compiler, assembler or
+  linker output hits the bug.
 - **Nothing is analysed on the UI thread**: a parse, a decode or a search is a worker's, and
   its answer is held rather than worked out again in a render. The shape a drawn row wants of
   an answer is made *with* the answer, on the same thread -- every line of a parse cut into the
