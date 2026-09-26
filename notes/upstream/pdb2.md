@@ -70,6 +70,11 @@ one, but the iterator neither goes on to the next nor says which it was in. **Wh
 the rest of that module's rows, and the module is counted. No linker writes such a block, so
 nothing reads the module again. Pinned by `pdb.rs`' `a_line_block_that_does_not_read_is_counted`.
 
+**A checksum of a kind it does not know loses the file.** `FileChecksumKind::parse`
+(`modi/c13.rs:595`) knows kinds 0 to 3, and any other is an error from `get_file_info`, so the
+file's name goes with a checksum the entry's size byte still frames. **What it cost**: the rows
+keep no file, and the module is counted (`Pdb::intern_file`).
+
 **The symbol walk does not say where a record too short to hold a kind ends.** `SymbolIter::next`
 (`symbol/mod.rs`) returns `SymbolTooShort` for a record whose stated length is 0 or 1, after
 reading the length and before stepping past the record. Going on from there is right for a
@@ -93,3 +98,6 @@ already there for `addr2line`.
 **A line walk per subsection**, or one that goes on to the next subsection after an error.
 
 **Where a record too short to hold a kind ends, in `SymbolTooShort`**, so a walk could step past it.
+
+**A file checksum of an unknown kind handed out as its bytes**, rather than an error, so the
+file keeps its name.
