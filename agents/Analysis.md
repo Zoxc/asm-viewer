@@ -596,11 +596,23 @@ or debug info that says nothing about the range asked about. Four design points 
   whose symbol or section will not resolve cannot just be skipped: the field keeps what the
   compiler wrote, usually 0, which is some other code's address, and its rows were drawn there.
   No toolchain writes one, so the object's DWARF is lost whole instead, and counts as one part
-  skipped. So does a field that cannot be written: outside the section, or not 1 to 8 whole
-  bytes wide. A 2-byte one is written, being how DWARF for a 16-bit target states an address. A
-  relocation with no symbol at all (ELF's index 0, which `object` calls an `Absolute` target) is
-  not one of those: the ELF spec gives it the value 0, so the addend is the value, and skipping
-  it left the compiler's 0 where a `RELA` addend belonged.
+  skipped. So does a relocation of a kind `relocate` does not apply, and a field that cannot be
+  written: outside the section, or not 1 to 8 whole bytes wide. A 2-byte one is written, being
+  how DWARF for a 16-bit target states an address. Two kinds besides `Absolute` are applied. A
+  COFF `SECREL` (MinGW, clang for Windows) states its symbol's offset in its own section, which
+  is how one debug section points into another; skipped, it kept the addend alone, right only
+  for a symbol at a section's start. RISC-V and LoongArch state a length as two labels'
+  difference, since linker relaxation can still move either: a pair at one field, `ADD` the end
+  and `SUB` the start, at 1 to 8 bytes, the low six bits of a byte, or a ULEB128 kept at the
+  length it was written in. `object` calls these `Unknown`, and skipped they left the
+  compiler's value, which misplaced rows. Each half wraps at the field's width, as a linker's
+  does, so the difference is right even where the end's address alone does not fit. A
+  thread-local variable's offset (`DTPOFF`, `DTPREL`, `TLS_LDO`) is neither applied nor counted:
+  DWARF puts one only in a variable's location, which nothing here reads, and counting it would
+  lose the DWARF of every object with a thread-local variable. A relocation with no symbol at all
+  (ELF's index 0, which `object` calls an `Absolute` target) is not one that will not resolve:
+  the ELF spec gives it the value 0, so the addend is the value, and skipping it left the
+  compiler's 0 where a `RELA` addend belonged.
 
 The bias moves exactly what `relocate` moves (`line/dwarf.rs`), and a unit's declared ranges need
 not be among them. A line program's `DW_LNE_set_address` is always relocated in a relocatable

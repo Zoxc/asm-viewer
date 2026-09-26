@@ -389,3 +389,156 @@ fn a_two_byte_field_is_relocated_and_one_outside_the_section_is_lost() {
     assert_eq!(read_uint(&data, Little), 0x1234);
     assert!(lost.get());
 }
+
+/// Relocate `.debug_info`, the one debug section `obj` has, as the load does, and whether a
+/// relocation would not apply.
+fn relocated(obj: write::Object, endian: gimli::RunTimeEndian) -> (Vec<u8>, bool) {
+    let bytes = obj.write().expect("writing the fixture object");
+    let file = object::File::parse(&*bytes).expect("parsing the fixture object");
+    let section = file
+        .section_by_name(".debug_info")
+        .expect("the fixture has a debug section");
+    let mut data = section.data().expect("the debug section reads").to_vec();
+    let lost = Cell::new(false);
+    relocate(
+        &mut data,
+        &file,
+        &section,
+        endian,
+        &section_biases(&file).biases,
+        &lost,
+    );
+    (data, lost.get())
+}
+
+/// RISC-V states a length in a debug section as two labels' difference, a pair of
+/// relocations at one field: `ADD` the end, `SUB` the start. Every width a compiler writes
+/// one in comes out as `end - start`, 0x90 here: 4 and 2 bytes, the low six bits of a
+/// byte (its top two kept), and a ULEB128 of the length it was written in.
+#[test]
+fn a_risc_v_pair_writes_the_difference_of_its_labels() {
+    use object::elf::*;
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::Riscv64, Endianness::Little);
+    let text = obj.section_id(write::StandardSection::Text);
+    obj.append_section_data(text, &[0; 0x100], 4);
+    let mut label = |name: &[u8], value| {
+        obj.add_symbol(write::Symbol {
+            name: name.to_vec(),
+            value,
+            size: 0,
+            kind: SymbolKind::Label,
+            scope: SymbolScope::Compilation,
+            weak: false,
+            section: write::SymbolSection::Section(text),
+            flags: SymbolFlags::None,
+        })
+    };
+    let start = label(b".Lstart", 0x10);
+    let end = label(b".Lend", 0xa0);
+    let debug = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);
+    obj.append_section_data(debug, &[0, 0, 0, 0, 0, 0, 0x40, 0x80, 0], 1);
+    let pairs = [
+        (0, R_RISCV_ADD32, R_RISCV_SUB32),
+        (4, R_RISCV_ADD16, R_RISCV_SUB16),
+        (6, R_RISCV_SET6, R_RISCV_SUB6),
+        (7, R_RISCV_SET_ULEB128, R_RISCV_SUB_ULEB128),
+    ];
+    for (offset, first, second) in pairs {
+        for (symbol, r_type) in [(end, first), (start, second)] {
+            obj.add_relocation(
+                debug,
+                write::Relocation {
+                    offset,
+                    symbol,
+                    addend: 0,
+                    flags: RelocationFlags::Elf { r_type },
+                },
+            )
+            .expect("adding a relocation");
+        }
+    }
+
+    let (data, lost) = relocated(obj, Little);
+    assert_eq!(read_uint(&data[0..4], Little), 0x90);
+    assert_eq!(read_uint(&data[4..6], Little), 0x90);
+    assert_eq!(data[6], 0x40 | 0x10);
+    assert_eq!(data[7..9], [0x90, 0x01]);
+    assert!(!lost);
+}
+
+/// A relocation of a kind not applied loses the object's DWARF, where it was left holding the
+/// compiler's 0. A thread-local variable's offset does not: nothing is read from it.
+#[test]
+fn a_relocation_of_a_kind_not_applied_loses_the_dwarf() {
+    let one = |r_type| {
+        let mut obj =
+            write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+        let text = obj.section_id(write::StandardSection::Text);
+        obj.append_section_data(text, &[0xC3], 1);
+        let function = obj.add_symbol(write::Symbol {
+            name: b"function".to_vec(),
+            value: 0,
+            size: 1,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(text),
+            flags: SymbolFlags::None,
+        });
+        let debug = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);
+        obj.append_section_data(debug, &[0; 4], 1);
+        obj.add_relocation(
+            debug,
+            write::Relocation {
+                offset: 0,
+                symbol: function,
+                addend: 0,
+                flags: RelocationFlags::Elf { r_type },
+            },
+        )
+        .expect("adding the relocation");
+        relocated(obj, Little).1
+    };
+
+    assert!(one(object::elf::R_X86_64_PC32));
+    assert!(!one(object::elf::R_X86_64_DTPOFF32));
+}
+
+/// A COFF `SECREL` states where its symbol is in the symbol's own section, which is how a
+/// MinGW object points one debug section into another. Skipped, the field kept only the
+/// addend, 4, and lost the symbol's 8.
+#[test]
+fn a_coff_secrel_writes_the_offset_in_its_section() {
+    let mut obj = write::Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little);
+    let line = obj.add_section(Vec::new(), b".debug_line".to_vec(), SectionKind::Debug);
+    obj.append_section_data(line, &[0; 16], 1);
+    let unit = obj.add_symbol(write::Symbol {
+        name: b"unit".to_vec(),
+        value: 8,
+        size: 0,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Compilation,
+        weak: false,
+        section: write::SymbolSection::Section(line),
+        flags: SymbolFlags::None,
+    });
+    let debug = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);
+    obj.append_section_data(debug, &[0; 4], 1);
+    obj.add_relocation(
+        debug,
+        write::Relocation {
+            offset: 0,
+            symbol: unit,
+            addend: 4,
+            flags: RelocationFlags::Coff {
+                typ: object::pe::IMAGE_REL_AMD64_SECREL,
+            },
+        },
+    )
+    .expect("adding the relocation");
+
+    let (data, lost) = relocated(obj, Little);
+    assert_eq!(read_uint(&data, Little), 12);
+    assert!(!lost);
+}

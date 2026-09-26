@@ -18,8 +18,8 @@ use crate::sections::{bias_of, runtime_endian, section_biases, section_data};
 use crate::{Bias, PlacedAddress, SectionAddress};
 use gimli::{EndianArcSlice, Endianity as _, RunTimeEndian};
 use object::{
-    BinaryFormat, Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationKind,
-    RelocationTarget, SectionIndex,
+    BinaryFormat, Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationEncoding,
+    RelocationFlags, RelocationKind, RelocationTarget, SectionIndex,
 };
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -475,25 +475,28 @@ fn load_section(
 /// relocation against the function's symbol, so line info read without relocating maps every
 /// function to address 0. The bytes are already a private copy, so they are patched in place.
 ///
-/// Only `Absolute` relocations are applied, which is what DWARF's address and offset forms
-/// use; anything else (a COFF `SECREL`, say) is left alone rather than guessed at.
-///
-/// The value written is `symbol/section address + addend`, plus the bytes already there when
-/// the format keeps the addend in the section (ELF `REL`, COFF) rather than in the relocation
-/// (ELF `RELA`), plus the target section's bias. A symbol's address is the one the parse
-/// takes ([`symbol_address`]): a function tagged with a mode bit is at its code, and an ELF
-/// symbol's offset has its section's address added, as a section target's does. A Mach-O
+/// An `Absolute` relocation writes `symbol/section address + addend`, plus the bytes already
+/// there when the format keeps the addend in the section (ELF `REL`, COFF) rather than in the
+/// relocation (ELF `RELA`), plus the target section's bias. A symbol's address is the one the
+/// parse takes ([`symbol_address`]): a function tagged with a mode bit is at its code, and an
+/// ELF symbol's offset has its section's address added, as a section target's does. A Mach-O
 /// relocation against a section already holds the section's address in its bytes, so that
 /// address is not added again. A relocation with no symbol (ELF's index 0) targets 0, so
 /// the addend alone is written. A Mach-O `SUBTRACTOR` pair states the difference of two
-/// symbols, so the second symbol's address, bias included, is taken off. Every step wraps
-/// and every write is bounds-checked, so no relocation table, however corrupt, can do more
-/// than scribble on this copy.
+/// symbols, so the second symbol's address, bias included, is taken off. A COFF `SECREL`
+/// writes the symbol's offset in its section, which no bias moves. The RISC-V and LoongArch
+/// pairs that state a length as the difference of two labels are applied as [`Arithmetic`].
+/// Every step wraps and every write is bounds-checked, so no relocation table, however
+/// corrupt, can do more than scribble on this copy.
 ///
-/// A relocation whose symbol or section will not resolve, either of a pair's, cannot be
-/// skipped: the field would keep what the compiler wrote there, usually 0, which is an
-/// address some other code is at. No toolchain writes one, so it sets `lost` and the object's
-/// DWARF is lost whole rather than misplaced ([`Dwarf::load`]).
+/// A relocation that is not applied cannot just be skipped: the field would keep what the
+/// compiler wrote there, usually 0, which is an address some other code is at. That is one
+/// whose symbol or section will not resolve, either of a pair's, one of a kind not listed
+/// above, or one whose field is outside the section or of a width not known. No toolchain
+/// output is known to hold one, so it sets `lost` and the object's DWARF is lost whole rather
+/// than misplaced ([`Dwarf::load`]). None of this applies to a relocation of kind `None`, or
+/// to a thread-local variable's offset, which no row or range is read from
+/// ([`thread_local`]).
 fn relocate<'data, 'file>(
     data: &mut [u8],
     file: &object::File<'data>,
@@ -503,9 +506,34 @@ fn relocate<'data, 'file>(
     lost: &Cell<bool>,
 ) {
     for (offset, relocation) in section.relocations() {
-        if relocation.kind() != RelocationKind::Absolute {
-            continue;
-        }
+        let apply = Apply::of(file, &relocation);
+        let width = match apply {
+            Apply::Nothing => continue,
+            Apply::Arithmetic(_, width) => width,
+            Apply::Address | Apply::SectionOffset | Apply::Unknown => {
+                let bits = relocation.size();
+                Width::Bytes(if bits % 8 == 0 {
+                    usize::from(bits / 8)
+                } else {
+                    0
+                })
+            }
+        };
+
+        // A field outside the section, or of a width [`write_uint`] cannot write (whole
+        // bytes, 1 to 8), keeps what the compiler wrote, so the object's DWARF is lost.
+        let field = usize::try_from(offset).ok().and_then(|offset| {
+            let length = match width {
+                Width::Bytes(bytes) => Some(bytes).filter(|bytes| (1..=8).contains(bytes)),
+                Width::Six => Some(1),
+                Width::Uleb => uleb_length(data.get(offset..)?),
+            }?;
+            data.get_mut(offset..offset.checked_add(length)?)
+        });
+        let Some(bytes) = field else {
+            lost.set(true);
+            return;
+        };
 
         // A target's address is the one the parse takes: its section's address plus its
         // offset in it, a Thumb function's even. The section's bias then places it.
@@ -515,66 +543,252 @@ fn relocate<'data, 'file>(
             let address = symbol_address(file, &s)?;
             Some(SectionAddress::new(address).placed(bias(s.section_index())))
         };
-        // The outer [`None`] is a target of a kind not applied, and the inner one a target
-        // that will not resolve.
-        let target = match relocation.target() {
-            RelocationTarget::Symbol(index) => Some(symbol(index)),
+        let placed = || match relocation.target() {
+            RelocationTarget::Symbol(index) => symbol(index).map(PlacedAddress::get),
             // A Mach-O relocation against a section keeps the whole target address in the
             // bytes, the section's own address included, so only the bias is added to them.
             RelocationTarget::Section(index)
                 if file.format() == BinaryFormat::MachO && relocation.has_implicit_addend() =>
             {
-                Some(
-                    file.section_by_index(index)
-                        .ok()
-                        .map(|_| SectionAddress::ZERO.placed(bias(Some(index)))),
-                )
-            }
-            RelocationTarget::Section(index) => Some(
                 file.section_by_index(index)
                     .ok()
-                    .map(|s| SectionAddress::new(s.address()).placed(bias(Some(index)))),
-            ),
+                    .map(|_| SectionAddress::ZERO.placed(bias(Some(index))).get())
+            }
+            RelocationTarget::Section(index) => file.section_by_index(index).ok().map(|s| {
+                SectionAddress::new(s.address())
+                    .placed(bias(Some(index)))
+                    .get()
+            }),
             // No symbol: ELF's symbol index 0, whose value is 0, or Mach-O's `R_ABS`. The
             // addend is the whole value, and it is in no section, so nothing places it.
-            RelocationTarget::Absolute => Some(Some(PlacedAddress::ZERO)),
+            RelocationTarget::Absolute => Some(0),
             _ => None,
         };
-        let Some(target) = target else { continue };
+        // A `SECREL`'s symbol, as an offset in its own section.
+        let in_section = || {
+            let RelocationTarget::Symbol(index) = relocation.target() else {
+                return None;
+            };
+            let s = file.symbol_by_index(index).ok()?;
+            let section = file.section_by_index(s.section_index()?).ok()?;
+            Some(symbol_address(file, &s)?.wrapping_sub(section.address()))
+        };
         // A Mach-O difference: `object` folds the `SUBTRACTOR` into the `UNSIGNED` after it.
-        let subtracted = match relocation.subtractor() {
+        let subtracted = || match relocation.subtractor() {
             Some(index) => symbol(index).map(PlacedAddress::get),
             None => Some(0),
         };
-
-        // A field outside the section, or of a width [`write_uint`] cannot write, keeps what
-        // the compiler wrote, so the object's DWARF is lost.
-        let size = usize::from(relocation.size());
-        let field = usize::try_from(offset)
-            .ok()
-            .filter(|_| size % 8 == 0)
-            .and_then(|offset| data.get_mut(offset..offset.checked_add(size / 8)?))
-            .filter(|bytes| (1..=8).contains(&bytes.len()));
-        let Some(bytes) = field else {
+        let target = match apply {
+            Apply::Address => placed().zip(subtracted()).map(|(a, b)| a.wrapping_sub(b)),
+            Apply::SectionOffset => in_section(),
+            Apply::Arithmetic(..) => placed(),
+            Apply::Nothing | Apply::Unknown => None,
+        };
+        let Some(target) = target else {
             lost.set(true);
-            continue;
+            return;
         };
-        let (Some(target), Some(subtracted)) = (target, subtracted) else {
-            lost.set(true);
-            continue;
-        };
+        let value = target.wrapping_add(relocation.addend() as u64);
 
-        let implicit = if relocation.has_implicit_addend() {
-            read_uint(bytes, endian)
-        } else {
-            0
-        };
-        let value = implicit
-            .wrapping_add(target.get())
-            .wrapping_sub(subtracted)
-            .wrapping_add(relocation.addend() as u64);
+        match apply {
+            Apply::Arithmetic(arithmetic, Width::Bytes(_)) => {
+                let old = read_uint(bytes, endian);
+                write_uint(bytes, endian, arithmetic.apply(old, value));
+            }
+            Apply::Arithmetic(arithmetic, Width::Six) => {
+                if let [byte] = bytes {
+                    let old = u64::from(*byte & 0x3f);
+                    *byte = *byte & 0xc0 | arithmetic.apply(old, value) as u8 & 0x3f;
+                }
+            }
+            Apply::Arithmetic(arithmetic, Width::Uleb) => {
+                let old = read_uleb(bytes);
+                write_uleb(bytes, arithmetic.apply(old, value));
+            }
+            _ => {
+                let implicit = if relocation.has_implicit_addend() {
+                    read_uint(bytes, endian)
+                } else {
+                    0
+                };
+                write_uint(bytes, endian, implicit.wrapping_add(value));
+            }
+        }
+    }
+}
 
-        write_uint(bytes, endian, value);
+/// What [`relocate`] does with one relocation.
+#[derive(Clone, Copy)]
+enum Apply {
+    /// Write the target's placed address: an `Absolute` relocation.
+    Address,
+    /// Write the target's offset in its own section: a COFF `SECREL`.
+    SectionOffset,
+    /// Work the target into what the field holds: a RISC-V or LoongArch pair's half.
+    Arithmetic(Arithmetic, Width),
+    /// Leave the field alone: nothing a row or a range is read from.
+    Nothing,
+    /// A kind not applied, which loses the object's DWARF.
+    Unknown,
+}
+
+/// How an [`Apply::Arithmetic`] relocation works `S + A` into the field, as a linker does.
+/// A length is written as one label's address added and another's taken off, since
+/// relaxation can still move either. Each step wraps at the field's width, so the
+/// difference is right even where the first label's address alone does not fit.
+#[derive(Clone, Copy)]
+enum Arithmetic {
+    Add,
+    Sub,
+    Set,
+}
+
+/// How much of the section a relocation's field is.
+#[derive(Clone, Copy)]
+enum Width {
+    /// A whole number of bytes, in the object's byte order.
+    Bytes(usize),
+    /// The low six bits of one byte, its top two kept.
+    Six,
+    /// A ULEB128, as long as the compiler wrote it.
+    Uleb,
+}
+
+impl Apply {
+    fn of(file: &object::File<'_>, relocation: &object::Relocation) -> Self {
+        use object::elf::*;
+        use object::Architecture as A;
+        use Arithmetic::{Add, Set, Sub};
+        use Width::{Bytes, Six, Uleb};
+
+        match relocation.kind() {
+            RelocationKind::None => return Apply::Nothing,
+            RelocationKind::Absolute => {
+                return match relocation.encoding() {
+                    // `R_X86_64_32S` writes the same low 32 bits.
+                    RelocationEncoding::Generic | RelocationEncoding::X86Signed => Apply::Address,
+                    _ => Apply::Unknown,
+                };
+            }
+            RelocationKind::SectionOffset
+                if relocation.encoding() == RelocationEncoding::Generic =>
+            {
+                return Apply::SectionOffset;
+            }
+            _ => {}
+        }
+        let RelocationFlags::Elf { r_type } = relocation.flags() else {
+            return Apply::Unknown;
+        };
+        if thread_local(file.architecture(), r_type) {
+            return Apply::Nothing;
+        }
+        let (arithmetic, width) = match (file.architecture(), r_type) {
+            (A::Riscv32 | A::Riscv64, r_type) => match r_type {
+                R_RISCV_ADD8 => (Add, Bytes(1)),
+                R_RISCV_ADD16 => (Add, Bytes(2)),
+                R_RISCV_ADD32 => (Add, Bytes(4)),
+                R_RISCV_ADD64 => (Add, Bytes(8)),
+                R_RISCV_SUB8 => (Sub, Bytes(1)),
+                R_RISCV_SUB16 => (Sub, Bytes(2)),
+                R_RISCV_SUB32 => (Sub, Bytes(4)),
+                R_RISCV_SUB64 => (Sub, Bytes(8)),
+                R_RISCV_SET8 => (Set, Bytes(1)),
+                R_RISCV_SET16 => (Set, Bytes(2)),
+                R_RISCV_SET32 => (Set, Bytes(4)),
+                R_RISCV_SET6 => (Set, Six),
+                R_RISCV_SUB6 => (Sub, Six),
+                R_RISCV_SET_ULEB128 => (Set, Uleb),
+                R_RISCV_SUB_ULEB128 => (Sub, Uleb),
+                _ => return Apply::Unknown,
+            },
+            (A::LoongArch32 | A::LoongArch64, r_type) => match r_type {
+                R_LARCH_ADD8 => (Add, Bytes(1)),
+                R_LARCH_ADD16 => (Add, Bytes(2)),
+                R_LARCH_ADD24 => (Add, Bytes(3)),
+                R_LARCH_ADD32 => (Add, Bytes(4)),
+                R_LARCH_ADD64 => (Add, Bytes(8)),
+                R_LARCH_SUB8 => (Sub, Bytes(1)),
+                R_LARCH_SUB16 => (Sub, Bytes(2)),
+                R_LARCH_SUB24 => (Sub, Bytes(3)),
+                R_LARCH_SUB32 => (Sub, Bytes(4)),
+                R_LARCH_SUB64 => (Sub, Bytes(8)),
+                R_LARCH_ADD6 => (Add, Six),
+                R_LARCH_SUB6 => (Sub, Six),
+                R_LARCH_ADD_ULEB128 => (Add, Uleb),
+                R_LARCH_SUB_ULEB128 => (Sub, Uleb),
+                _ => return Apply::Unknown,
+            },
+            _ => return Apply::Unknown,
+        };
+        Apply::Arithmetic(arithmetic, width)
+    }
+}
+
+impl Arithmetic {
+    fn apply(self, old: u64, value: u64) -> u64 {
+        match self {
+            Arithmetic::Add => old.wrapping_add(value),
+            Arithmetic::Sub => old.wrapping_sub(value),
+            Arithmetic::Set => value,
+        }
+    }
+}
+
+/// Whether an ELF relocation writes a thread-local variable's offset in its block, which
+/// DWARF puts only in a variable's location. `object` names none of these kinds, and
+/// nothing is read from where they point.
+fn thread_local(architecture: object::Architecture, r_type: object::elf::RelocationType) -> bool {
+    use object::elf::*;
+    use object::Architecture as A;
+
+    match architecture {
+        A::X86_64 | A::X86_64_X32 => matches!(r_type, R_X86_64_DTPOFF32 | R_X86_64_DTPOFF64),
+        A::I386 => r_type == R_386_TLS_LDO_32,
+        A::Arm => r_type == R_ARM_TLS_LDO32,
+        A::Aarch64 => r_type == R_AARCH64_TLS_DTPREL,
+        A::Aarch64_Ilp32 => r_type == R_AARCH64_P32_TLS_DTPREL,
+        A::Riscv32 | A::Riscv64 => {
+            matches!(r_type, R_RISCV_TLS_DTPREL32 | R_RISCV_TLS_DTPREL64)
+        }
+        A::LoongArch32 | A::LoongArch64 => {
+            matches!(r_type, R_LARCH_TLS_DTPREL32 | R_LARCH_TLS_DTPREL64)
+        }
+        A::PowerPc => r_type == R_PPC_DTPREL32,
+        A::PowerPc64 => r_type == R_PPC64_DTPREL64,
+        A::Mips | A::Mips64 | A::Mips64_N32 => {
+            matches!(r_type, R_MIPS_TLS_DTPREL32 | R_MIPS_TLS_DTPREL64)
+        }
+        A::S390x => matches!(r_type, R_390_TLS_LDO32 | R_390_TLS_LDO64),
+        A::Sparc | A::Sparc32Plus | A::Sparc64 => {
+            matches!(r_type, R_SPARC_TLS_DTPOFF32 | R_SPARC_TLS_DTPOFF64)
+        }
+        _ => false,
+    }
+}
+
+/// How many bytes the ULEB128 at the start of `bytes` is: through the first byte without its
+/// top bit. [`None`] where the section ends first.
+fn uleb_length(bytes: &[u8]) -> Option<usize> {
+    Some(bytes.iter().position(|byte| byte & 0x80 == 0)? + 1)
+}
+
+/// The ULEB128 that is all of `bytes`, as its low 64 bits.
+fn read_uleb(bytes: &[u8]) -> u64 {
+    bytes.iter().enumerate().fold(0, |value, (i, byte)| {
+        let shift = u32::try_from(i * 7).unwrap_or(u32::MAX);
+        value | u64::from(byte & 0x7f).checked_shl(shift).unwrap_or(0)
+    })
+}
+
+/// `value` written over the ULEB128 that is all of `bytes`, in as many bytes as it had. The
+/// high bits that do not fit are lost, as a pair's first half's can be.
+fn write_uleb(bytes: &mut [u8], value: u64) {
+    let last = bytes.len().saturating_sub(1);
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        let shift = u32::try_from(i * 7).unwrap_or(u32::MAX);
+        let bits = value.checked_shr(shift).unwrap_or(0) as u8 & 0x7f;
+        *byte = if i == last { bits } else { bits | 0x80 };
     }
 }
 

@@ -122,3 +122,9 @@ no `LC_MAIN` and no export trie, and there is no lower-level Mach-O writer, only
 `macho_arm_executable` (`crates/analysis/tests/common/mod.rs`) put the load commands
 together through the encoder, lay out the file by hand, and write the export trie byte by
 byte.
+
+**A kind for the relocations a debug section carries besides an address.** `object` calls
+RISC-V's and LoongArch's `ADD`/`SUB`/`SET` pairs `RelocationKind::Unknown` with a size of 0,
+and so every thread-local offset (`R_X86_64_DTPOFF32` and the like), so a caller cannot tell
+the two apart, or learn a field's width, without the raw `r_type`. What the crate does
+instead: `Apply::of` in `crates/analysis/src/line/dwarf.rs` matches the `r_type`s itself.
