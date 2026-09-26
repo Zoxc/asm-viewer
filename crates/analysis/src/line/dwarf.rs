@@ -9,7 +9,8 @@
 //!
 //! Nothing here catches a panic: the guard is [`super::DebugInfo`]'s, one net around every
 //! question whichever backend answers it. Where `addr2line` will not build a context at all,
-//! the object's DWARF counts as one part skipped ([`Dwarf::load`]).
+//! or a relocation will not apply, the object's DWARF counts as one part skipped
+//! ([`Dwarf::load`]).
 
 use super::{recovered, LineBackend, RowCollector, Skipped};
 use crate::parse::symbol_address;
@@ -20,6 +21,7 @@ use object::{
     BinaryFormat, Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationKind,
     RelocationTarget, SectionIndex,
 };
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -39,7 +41,8 @@ pub(super) struct Dwarf {
     extents: Mutex<HashMap<u64, HashMap<PlacedAddress, u64>>>,
 
     /// The units whose subprograms were read only in part ([`subprogram_extents`]), by their
-    /// `.debug_info` offset, and the whole DWARF where the context would not build ([`WHOLE`]).
+    /// `.debug_info` offset, and the whole DWARF where the context would not build or a
+    /// relocation would not apply ([`WHOLE`]).
     skipped: Skipped,
 }
 
@@ -70,9 +73,19 @@ impl Dwarf {
         // addend sits in the bytes rather than in the relocation (ELF `REL`).
         let relocatable = file.kind() == ObjectKind::Relocatable;
 
+        // Set where a relocation will not apply ([`relocate`]).
+        let lost = Cell::new(false);
         let load = |stale: &[StaleRangeList]| {
             gimli::Dwarf::load::<_, ()>(|id| {
-                Ok(load_section(file, id, endian, relocatable, &biases, stale))
+                Ok(load_section(
+                    file,
+                    id,
+                    endian,
+                    relocatable,
+                    &biases,
+                    stale,
+                    &lost,
+                ))
             })
             .ok()
         };
@@ -89,12 +102,13 @@ impl Dwarf {
         };
 
         // No real toolchain output is known to fail the build, which stops at the first error
-        // it meets (`notes/upstream/addr2line.md`). Should it fail, the backend reads nothing,
-        // answers nothing and is counted, so the reader is told.
+        // it meets (`notes/upstream/addr2line.md`), or to hold a relocation that will not
+        // apply. Either way the backend reads nothing, answers nothing and is counted, so the
+        // reader is told.
         let skipped = Skipped::default();
         let context = match addr2line::Context::from_dwarf(dwarf) {
-            Ok(context) => context,
-            Err(_) => {
+            Ok(context) if !lost.get() => context,
+            _ => {
                 skipped.note(WHOLE);
                 let nothing =
                     gimli::Dwarf::load::<_, ()>(|_| Ok(EndianArcSlice::new(Arc::from([]), endian)))
@@ -414,7 +428,8 @@ fn stale_range_lists(
 
 /// Read one DWARF section, decompressing it and, for a relocatable object, relocating it. A
 /// section that is missing or unreadable becomes an empty reader, which is what `gimli`
-/// expects for "not present".
+/// expects for "not present". A relocation that will not resolve is noted in `skipped`
+/// ([`relocate`]).
 fn load_section(
     file: &object::File<'_>,
     id: gimli::SectionId,
@@ -422,6 +437,7 @@ fn load_section(
     relocatable: bool,
     biases: &HashMap<SectionIndex, Bias>,
     stale: &[StaleRangeList],
+    lost: &Cell<bool>,
 ) -> Reader {
     let data = file
         .section_by_name(id.name())
@@ -430,7 +446,7 @@ fn load_section(
             // dropped, not believed.
             let mut data = section_data(&section)?;
             if relocatable {
-                relocate(&mut data, file, &section, endian, biases);
+                relocate(&mut data, file, &section, endian, biases, lost);
             }
 
             // A stale list ([`stale_range_lists`]) is ended where it begins rather than
@@ -471,15 +487,21 @@ fn load_section(
 /// relocation against a section already holds the section's address in its bytes, so that
 /// address is not added again. A
 /// Mach-O `SUBTRACTOR` pair states the difference of two symbols, so the second symbol's
-/// address, bias included, is taken off; a pair whose second symbol does not resolve is
-/// skipped. Every step wraps and every write is bounds-checked, so no relocation table,
-/// however corrupt, can do more than scribble on this copy.
+/// address, bias included, is taken off. Every step wraps and every write is
+/// bounds-checked, so no relocation table, however corrupt, can do more than scribble on
+/// this copy.
+///
+/// A relocation whose symbol or section will not resolve, either of a pair's, cannot be
+/// skipped: the field would keep what the compiler wrote there, usually 0, which is an
+/// address some other code is at. No toolchain writes one, so it sets `lost` and the object's
+/// DWARF is lost whole rather than misplaced ([`Dwarf::load`]).
 fn relocate<'data, 'file>(
     data: &mut [u8],
     file: &object::File<'data>,
     section: &object::Section<'data, 'file>,
     endian: RunTimeEndian,
     biases: &HashMap<SectionIndex, Bias>,
+    lost: &Cell<bool>,
 ) {
     for (offset, relocation) in section.relocations() {
         if relocation.kind() != RelocationKind::Absolute {
@@ -494,31 +516,33 @@ fn relocate<'data, 'file>(
             let address = symbol_address(file, &s)?;
             Some(SectionAddress::new(address).placed(bias(s.section_index())))
         };
+        // The outer [`None`] is a target of a kind not applied, and the inner one a target
+        // that will not resolve.
         let target = match relocation.target() {
-            RelocationTarget::Symbol(index) => symbol(index),
+            RelocationTarget::Symbol(index) => Some(symbol(index)),
             // A Mach-O relocation against a section keeps the whole target address in the
             // bytes, the section's own address included, so only the bias is added to them.
             RelocationTarget::Section(index)
                 if file.format() == BinaryFormat::MachO && relocation.has_implicit_addend() =>
             {
+                Some(
+                    file.section_by_index(index)
+                        .ok()
+                        .map(|_| SectionAddress::ZERO.placed(bias(Some(index)))),
+                )
+            }
+            RelocationTarget::Section(index) => Some(
                 file.section_by_index(index)
                     .ok()
-                    .map(|_| SectionAddress::ZERO.placed(bias(Some(index))))
-            }
-            RelocationTarget::Section(index) => file
-                .section_by_index(index)
-                .ok()
-                .map(|s| SectionAddress::new(s.address()).placed(bias(Some(index)))),
+                    .map(|s| SectionAddress::new(s.address()).placed(bias(Some(index)))),
+            ),
             _ => None,
         };
         let Some(target) = target else { continue };
         // A Mach-O difference: `object` folds the `SUBTRACTOR` into the `UNSIGNED` after it.
         let subtracted = match relocation.subtractor() {
-            Some(index) => match symbol(index) {
-                Some(subtracted) => subtracted.get(),
-                None => continue,
-            },
-            None => 0,
+            Some(index) => symbol(index).map(PlacedAddress::get),
+            None => Some(0),
         };
 
         let Ok(offset) = usize::try_from(offset) else {
@@ -526,6 +550,10 @@ fn relocate<'data, 'file>(
         };
         let size = usize::from(relocation.size()) / 8;
         let Some(bytes) = data.get_mut(offset..offset.wrapping_add(size)) else {
+            continue;
+        };
+        let (Some(target), Some(subtracted)) = (target, subtracted) else {
+            lost.set(true);
             continue;
         };
 

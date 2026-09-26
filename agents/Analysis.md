@@ -579,7 +579,11 @@ or debug info that says nothing about the range asked about. Four design points 
   rather than a symbol (`r_extern` clear) keeps the whole target address in the bytes, the
   section's own address included, where ELF and COFF keep an offset into a section at 0; so
   `relocate` adds only the bias there. `__text` states 0 and hides the difference; a second code
-  section (`__StaticInit`, cold text) would have its rows moved by its own address.
+  section (`__StaticInit`, cold text) would have its rows moved by its own address. A relocation
+  whose symbol or section will not resolve cannot just be skipped: the field keeps what the
+  compiler wrote, usually 0, which is some other code's address, and its rows were drawn there.
+  No toolchain writes one, so the object's DWARF is lost whole instead, and counts as one part
+  skipped.
 
 The bias moves exactly what `relocate` moves (`line/dwarf.rs`), and a unit's declared ranges need
 not be among them. A line program's `DW_LNE_set_address` is always relocated in a relocatable

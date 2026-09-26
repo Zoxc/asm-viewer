@@ -497,6 +497,55 @@ fn a_section_that_would_not_read_keeps_its_rows_off_another() {
     assert_eq!(info.rows()[1].range, at(3)..at(6));
 }
 
+/// `data` with every relocation in `section` against the symbol `name` pointed at a symbol
+/// index past the end of the table, so it will not resolve. Each ELF64 `RELA` entry is 24
+/// bytes, its symbol in the high half of the second word.
+fn relocations_unresolved(data: &[u8], section: &str, name: &str) -> Vec<u8> {
+    use object::{Object as _, ObjectSection as _, ObjectSymbol as _};
+    let file = object::File::parse(data).expect("an ELF");
+    let symbol = file
+        .symbols()
+        .find(|symbol| symbol.name() == Ok(name))
+        .expect("the symbol")
+        .index()
+        .0 as u64;
+    let (start, size) = file
+        .section_by_name(section)
+        .and_then(|section| section.file_range())
+        .expect("the relocation section");
+    let mut patched = data.to_vec();
+    let mut hit = false;
+    for entry in (start as usize..(start + size) as usize).step_by(24) {
+        let info = entry + 8;
+        let word = u64::from_le_bytes(patched[info..info + 8].try_into().unwrap());
+        if word >> 32 == symbol {
+            let bad = (0xFFFFu64 << 32) | (word & 0xFFFF_FFFF);
+            patched[info..info + 8].copy_from_slice(&bad.to_le_bytes());
+            hit = true;
+        }
+    }
+    assert!(hit, "no relocation against {name} in {section}");
+    patched
+}
+
+/// A relocation whose symbol will not resolve leaves a wrong value behind: skipped, a field
+/// the compiler wrote as 0 stays 0. So `second`'s sequence landed at `first`'s place, and
+/// `first` answered with `second`'s row. No toolchain writes one, so the object's DWARF is
+/// now lost whole, and counted.
+#[test]
+fn a_relocation_that_will_not_resolve_misplaces_no_row() {
+    let data = relocations_unresolved(
+        &two_sections(UnitRanges::Relocated),
+        ".rela.debug_line",
+        "second",
+    );
+    let object = parse(&data);
+
+    assert!(symbol(&object, "first").line_info(&object).is_none());
+    assert!(symbol(&object, "second").line_info(&object).is_none());
+    assert_eq!(object.debug_info_skipped(), 1);
+}
+
 /// A unit whose declared range spans several sequences, with a symbol beginning in a gap
 /// between two of them: the query starts where no sequence does, and the rows of the later
 /// one it reaches are the answer. `addr2line` read a miss here as "past the last sequence"

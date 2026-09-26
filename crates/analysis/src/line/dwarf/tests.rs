@@ -7,6 +7,7 @@ use object::{
     RelocationEncoding, RelocationFlags, RelocationKind, RelocationTarget, SectionKind,
     SymbolFlags, SymbolKind, SymbolScope,
 };
+use std::cell::Cell;
 
 /// Both widths in both byte orders, the way a relocation's field is read and patched. A
 /// 4-byte field takes the low word of what is written.
@@ -111,6 +112,7 @@ fn a_mach_o_subtractor_pair_writes_a_difference() {
         &section,
         Little,
         &section_biases(&file).biases,
+        &Cell::new(false),
     );
     assert_eq!(read_uint(&data, Little), 4);
 }
@@ -173,7 +175,14 @@ fn a_mach_o_section_relocation_counts_the_section_address_once() {
     let mut data = section.data().expect("the debug section reads").to_vec();
     write_uint(&mut data, Little, init.address() + 2);
     let biases = section_biases(&file).biases;
-    relocate(&mut data, &file, &section, Little, &biases);
+    relocate(
+        &mut data,
+        &file,
+        &section,
+        Little,
+        &biases,
+        &Cell::new(false),
+    );
     let placed = SectionAddress::new(init.address() + 2).placed(biases[&init.index()]);
     assert_eq!(read_uint(&data, Little), placed.get());
 }
@@ -228,7 +237,14 @@ fn a_relocation_against_a_thumb_function_resolves_to_its_code() {
         .expect("the fixture has a debug section");
     let mut data = section.data().expect("the debug section reads").to_vec();
     let biases = section_biases(&file).biases;
-    relocate(&mut data, &file, &section, Little, &biases);
+    relocate(
+        &mut data,
+        &file,
+        &section,
+        Little,
+        &biases,
+        &Cell::new(false),
+    );
     let placed = |name, offset| {
         let section = file.section_by_name(name).expect("the fixture's section");
         SectionAddress::new(offset)
