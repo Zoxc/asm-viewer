@@ -6443,7 +6443,7 @@ fn a_wait_with_no_listing_keeps_the_sentence_that_is_up() {
 
 /// **Only the sentence that names a line is allocated.** Each pane calls `showing` as it
 /// renders, so a pair of panes over a slow analysis asks for the same fixed sentence
-/// twice a repaint: the four fixed ones are borrowed, and the fifth, which spells the
+/// twice a repaint: the five fixed ones are borrowed, and the sixth, which spells the
 /// line that came to nothing, is the one that is built. Fails on a `Showing::Message`
 /// that owns whatever it is handed.
 #[test]
@@ -8056,9 +8056,8 @@ fn a_link_on_the_span_boundaries_leaves_them_alone_and_the_next_link_is_still_cu
 }
 
 /// Links out of order are not what the pane hands over (`Links::of` sorts them), and the
-/// cut reads them in one pass, so an edge behind the one before it is passed over. The
-/// span it fell in is left whole: a link that lights nothing, and never a piece of the
-/// row's text lost.
+/// cut reads them in one pass, so an edge behind the one before it is passed over. No
+/// cut is made there: that link lights nothing, and no piece of the row's text is lost.
 #[test]
 fn links_out_of_order_leave_a_span_uncut_rather_than_losing_it() {
     let head = spans_of(&["a.one().two()"]);
@@ -16822,7 +16821,7 @@ fn every_wash_reads_against_the_pane_under_it() {
             "{theme}: a match is washed in the colour a paired row is"
         );
 
-        // A row that is both picked out and the pair has to be told from one that is only
+        // A row that is both the caret's and the pair has to be told from one that is only
         // the pair: the same green, moved further.
         let pair = step(palette.pair_bg, palette.asm_pane_bg);
         let both = step(palette.pair_selected_bg, palette.asm_pane_bg);
@@ -27781,7 +27780,7 @@ fn a_source_row_opens_in_the_tab_the_file_is_already_in() {
     );
 }
 
-/// A file's menu offers "Open file", which loads it the way the toolbar's Open does --
+/// A file's menu offers "Open file", which loads it the way "Add binaries..." does --
 /// the parser deciding whether it is an object -- and once it is loaded offers "Close
 /// file" instead, so a path is never opened twice.
 #[test]
@@ -31607,10 +31606,9 @@ fn a_chord_is_its_key_under_its_own_modifiers_whatever_the_key_is() {
     assert!(!Chord::Settings.is(&Key::Character(".".into()), ctrl));
 }
 
-/// **A lock is not part of any gesture.** Caps Lock and Num Lock arrive in the same set
-/// as Ctrl and Shift, so a chord compared against the set whole would go unanswered on a
-/// keyboard with either of them on -- and Caps Lock is exactly the state that also makes
-/// `f` an `F`.
+/// **A lock is not part of any gesture.** freya 0.4 never sets the lock bits, but
+/// `Modifiers` has them, and a chord compared against a set holding one would go
+/// unanswered. What Caps Lock does send is the `F` for `f`.
 #[test]
 fn a_lock_held_is_not_part_of_a_chord() {
     let held = Modifiers::CONTROL | Modifiers::CAPS_LOCK | Modifiers::NUM_LOCK;
@@ -39970,7 +39968,7 @@ fn the_toggle_chords_flip_the_filter_boxs_own_toggles() {
 }
 
 /// The find bar's box answers the same three, its toggles being the same three: one
-/// gesture, one meaning, in all four boxes.
+/// gesture, one meaning, in every box.
 #[test]
 fn the_toggle_chords_flip_the_find_bars_toggles_too() {
     let shown = shown_sum_to();

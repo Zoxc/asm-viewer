@@ -108,12 +108,13 @@ the app answers questions about its UI with tests.
 
 ## The protocol, hand-rolled
 
-Nine messages: `initialize`, `initialized`, the four questions about a place --
+Eleven messages: `initialize`, `initialized`, the four questions about a place --
 `textDocument/definition`, `textDocument/declaration`, `textDocument/implementation`,
 `textDocument/references` -- one about a whole file, `textDocument/semanticTokens/full`,
-one about the name under the pointer, `textDocument/hover`, and a reply to whatever the
+one about the name under the pointer, `textDocument/hover`, the two that say which files
+are open, `textDocument/didOpen` and `textDocument/didClose`, and a reply to whatever the
 server asks of us. A protocol crate would bring a type per request in the specification
-and a runtime to drive them, for those nine. `cargo tree -d`
+and a runtime to drive them, for those eleven. `cargo tree -d`
 is unchanged by this step: `serde_json` was already in the tree, and the manifest comment
 on it already covers a protocol rather than a file.
 
@@ -608,9 +609,11 @@ A ticket does not say the server is still the one the app has, so those two answ
 **run-checked at the root** as well. A question asked before a stop is held until an
 answer comes, and a server can write its answer before the stop reaches it; unchecked,
 that answer landed in the project the reader had switched to. One from a server that has
-been stopped is taken as naming nothing, so the asker gives up on its question. The
-answers that carry no ticket are checked through the same `is_run` and dropped -- a file's
-names, and a file the server has just been told about.
+been stopped is taken as naming nothing, so the asker gives up on its question. A file's
+names carry a ticket too but are dropped instead: the question still held is from the old
+run, and `Linked::pending` owes a new one for the run there is now. The one answer that
+carries no ticket, a file the server has just been told about, is checked through the same
+`is_run` and dropped.
 
 Both asks take the run from `current`: one `peek` says whether there is a server and
 which, and a `u64` comes back. A function and not a line in each, because the state holds

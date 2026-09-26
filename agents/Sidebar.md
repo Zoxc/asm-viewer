@@ -99,7 +99,7 @@ the bar** rather than on the rows: a key bubbles from the focused node to its an
 rows are the box's sibling. Over the bar alone, so a key the rows answered is not answered a second
 time on the way up. The three toggles' chords — Alt+C, Alt+W, Alt+R — arrive there the same way,
 `box_keys` declining every chord before the edit, and the find bar answers them on its own rect for
-the same reason: the toggles are one thing in all four boxes, so the three keys are too.
+the same reason: the toggles are one thing in every box, so the three keys are too.
 
 **Pressing an object opens all of its code** as one listing (`Document::Code`, `agents/UI.md`). That
 is the one thing an object has to show that a symbol does not; the file's own facts belong to the

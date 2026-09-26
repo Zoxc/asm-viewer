@@ -18,17 +18,18 @@ use serde_json::{json, Value};
 /// What this app asks of a language server whatever the project: the options it sends at
 /// every handshake, and what a project's own settings are laid over.
 ///
-/// **One line, and it turns something off.** Nothing is turned on: what navigation needs is
-/// what rust-analyzer already does -- build scripts run and proc macros expand unless a
-/// client says otherwise, and a name inside a macro that was not expanded resolves to
-/// nothing -- and saying so again would only be a chance to say it wrongly, which is the
+/// **Two settings, and each turns something off.** Nothing is turned on: what navigation
+/// needs is what rust-analyzer already does -- build scripts run and proc macros expand
+/// unless a client says otherwise, and a name inside a macro that was not expanded resolves
+/// to nothing -- and saying so again would only be a chance to say it wrongly, which is the
 /// rule the capabilities follow too.
 ///
-/// The check is off because the server runs one **on loading the workspace**, and not only
-/// when a document is saved: watched, it opens a `rust-analyzer/flycheck/0` progress token
-/// over a client that has opened no document and saved nothing. This app runs cargo itself
-/// from the Project view and shows what came of it, so leaving it alone is a second build
-/// of the reader's project whose output goes nowhere.
+/// **The first turns the check off**, because the server runs one **on loading the
+/// workspace**, and not only when a document is saved: watched, it opens a
+/// `rust-analyzer/flycheck/0` progress token over a client that has opened no document and
+/// saved nothing. This app runs cargo itself from the Project view and shows what came of
+/// it, so leaving it alone is a second build of the reader's project whose output goes
+/// nowhere.
 ///
 /// **The second turns the server's own diagnostics off**, which it publishes for every
 /// document a client opens -- and this one opens what the reader has in tabs

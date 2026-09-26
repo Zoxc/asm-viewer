@@ -1,8 +1,9 @@
 //! The window that says which stored files would not parse and where they were put.
 //!
 //! A rescue nobody hears about is the same as no rescue, which is why this exists at all:
-//! `rescue.rs` takes the file out of the way of the next write, and this is the only place
-//! the reader is told it happened.
+//! `Store::read` (`src/store.rs`) takes the file out of the way of the next write,
+//! `name_moved` (`ui/session.rs`) hands its new path here, and this is the only place the
+//! reader is told it happened.
 
 use super::*;
 

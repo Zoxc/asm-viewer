@@ -68,7 +68,7 @@ use freya::prelude::*;
 /// nothing, or drew no row twice. Nothing resets a counter: a test takes the count before
 /// and after what it is about.
 ///
-/// At the crate root because four of the modules that count are not under `ui`, and
+/// At the crate root because several of the modules that count are not under `ui`, and
 /// nothing outside the UI may reach into it.
 macro_rules! counter {
     ($(#[$doc:meta])* $vis:vis fn $reader:ident() = $cell:ident) => {

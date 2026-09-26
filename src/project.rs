@@ -142,8 +142,9 @@ fn load_project(store: &Store, path: &Path) -> Result<(Project, Session), Failur
 }
 
 /// Leave the project the app is in and enter the one the file at `path` holds, handing back
-/// both halves for the caller to restore. `None` — and nothing changed at all — when it is
-/// not there or will not parse.
+/// both halves for the caller to restore. The [`Failure`] when it is not there or will not
+/// parse, and then the project being left is still the one open, flushed but otherwise
+/// untouched.
 ///
 /// The order matters. The project being left is flushed **first**, while [`saves::Saves`] still
 /// points at it. The new one is then remembered, and [`saves::Saves::opened`] empties the

@@ -170,11 +170,12 @@ fn elf(file: &object::File<'_>, unread: &mut Unread) -> Vec<UnwindEntry> {
     entries
 }
 
-/// One `RUNTIME_FUNCTION` of an x86-64 PE's exception directory, out of
-/// [`entries`]: the range it states, and whether its `UNWIND_INFO` is **chained**
-/// (`UNW_FLAG_CHAININFO`) — a second range of a function that has a primary entry elsewhere,
-/// a cold part or the piece after a mid-body stack adjustment, which Microsoft calls a
-/// *function fragment* — rather than a function's own.
+/// One `RUNTIME_FUNCTION` of an x86-64 PE's exception directory, or one FDE of an ELF's
+/// `.eh_frame`, out of [`entries`]: the range it states, and whether it is **chained**. Only
+/// a PE's can be: its `UNWIND_INFO` says so (`UNW_FLAG_CHAININFO`) for a second range of a
+/// function that has a primary entry elsewhere, a cold part or the piece after a mid-body
+/// stack adjustment, which Microsoft calls a *function fragment* — rather than a function's
+/// own.
 pub(crate) struct UnwindEntry {
     pub(crate) range: Range<SectionAddress>,
     pub(crate) chained: bool,

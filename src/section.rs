@@ -500,7 +500,6 @@ impl Rows {
         if row >= self.len() {
             return None;
         }
-        // The last start at or before `row`; `starts` has one entry past the stretches.
         // The last stretch starting at or before `row`, which steps over a stretch of no
         // rows; `start` answers for one flat index past the stretches.
         let count = self.layout.code.stretch_count();

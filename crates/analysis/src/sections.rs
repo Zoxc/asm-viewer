@@ -75,8 +75,9 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> Placement {
         // is the size its header says it decompresses to, not the `size()` it takes in the
         // file. A section `section_data` drops takes no more room than an empty one, and a
         // zero-length section still takes an address of its own, so that two of them are two
-        // places. Each slot is then at most `MAX_SECTION_DATA`, so the layout runs out of
-        // address space only for a file stating an address near the top of it.
+        // places. Each slot is then at most `MAX_SECTION_DATA` if compressed and no bigger
+        // than the file if not, so the layout runs out of address space only for a file
+        // stating an address near the top of it.
         // FIXME: warn the reader where the two sizes disagree -- a compressed loadable section,
         // which the ELF spec forbids.
         let length = section
@@ -153,12 +154,13 @@ const MAX_SECTION_DATA: u64 = 1 << 30;
 /// `uncompressed_data()` reserves the size in the compression header *before* it looks at a
 /// compressed byte, so one flipped `SHF_COMPRESSED` bit turns into a multi-gigabyte
 /// allocation and an OOM abort. `compressed_data()` gives the same information without
-/// allocating. Two bounds have to hold, and a section failing either is dropped exactly like
-/// one whose data will not read: a ratio bound (DEFLATE cannot expand by more than 1032:1
-/// nor a zstd frame by more than 32768:1, so a larger declared size is a lie about *these*
-/// bytes), and an absolute one, since the ratio bound still scales with the input. The
-/// declared size then bounds what zlib produces on its own, `decompress()` inflating it into
-/// a vector it never grows; what zstd produces is bounded by [`zstd_data`] instead.
+/// allocating. For a compressed section two bounds have to hold, and one failing either is
+/// dropped exactly like one whose data will not read: a ratio bound (DEFLATE cannot expand
+/// by more than 1032:1 nor a zstd frame by more than 32768:1, so a larger declared size is
+/// a lie about *these* bytes), and an absolute one, since the ratio bound still scales with
+/// the input. The declared size then bounds what zlib produces on its own, `decompress()`
+/// inflating it into a vector it never grows; what zstd produces is bounded by
+/// [`zstd_data`] instead.
 pub(crate) fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Option<Vec<u8>> {
     let compressed = section.compressed_data().ok()?;
     let size = kept_size(&compressed)?;

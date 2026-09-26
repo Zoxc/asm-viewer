@@ -148,7 +148,7 @@ impl Document {
         !matches!(self, Document::Source(_)) && self.file() == path
     }
 
-    /// The file on disk this is a place in: the binary for the two assembly-driven
+    /// The file on disk this is a place in: the binary for the three assembly-driven
     /// kinds, and the source file itself for a file. Spelled the way the document is,
     /// so a relative one stays relative.
     pub fn file(&self) -> &Path {
@@ -199,9 +199,9 @@ impl Document {
 }
 
 impl PartialEq for Document {
-    /// Each variant by its own rule — `Arc` pointer identity for an object and for an
-    /// object's code, the path for a file — and never across the kinds: an object's code and
-    /// the object itself are two documents.
+    /// Each variant by its own rule — `Arc` pointer identity for an object, for an object's
+    /// code and for a symbol with its object, the path for a file — and never across the
+    /// kinds: an object's code and the object itself are two documents.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Document::Object(a), Document::Object(b)) => Arc::ptr_eq(a, b),

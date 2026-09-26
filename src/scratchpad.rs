@@ -354,7 +354,7 @@ pub enum Failure {
 /// What cargo said is [`cargo::Run`] and is not copied here: the pad and the project's own
 /// workspace say the same words about the same build. A build that never happened is not
 /// one of these at all — [`Scratchpad::build_in`] answers `Err(Failure)` for that, which is
-/// exactly "the package was not written".
+/// exactly "the package was not written in full".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Build {
     pub run: cargo::Run,
@@ -701,8 +701,9 @@ impl Scratchpad {
     ///
     /// The package is written first, so what is built is what is on screen.
     ///
-    /// **`Err` is that write refused and nothing else**, so it says the disk still holds
-    /// the version before and nothing was compiled. Everything cargo then answers is an
+    /// **`Err` is that write refused and nothing else**, so nothing was compiled. It does
+    /// not say the disk is untouched: a bad row holds back the manifest and not the source
+    /// ([`Scratchpad::write_to`]). Everything cargo then answers is an
     /// `Ok` build, a cargo that would not start included: those are [`cargo::Run`]'s to
     /// word, in the same terms the project's own workspace is.
     pub fn build_in(&self, directory: &Path) -> Result<Build, Failure> {

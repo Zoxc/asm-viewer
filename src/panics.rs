@@ -399,11 +399,13 @@ fn tell(panic: &Panic, file: Option<&Path>) {
     }
 }
 
-/// How many frames of a backtrace the box is given. A number rather than a scroll bar:
-/// the box is the desktop's own and has none, and one grown past the screen is one whose
-/// buttons cannot be reached. Six is twelve lines, each carrying the file it is in, under
-/// three of the panic itself -- enough to say where it was and short enough that the path
-/// to the rest is still on the screen.
+/// How many frames of a backtrace the box is given. A number rather than a scroll bar: the
+/// box is the desktop's own and has none, and one grown past the screen is one whose
+/// buttons cannot be reached. Six is twelve lines, a name and the file it is in, and two
+/// more for each caller inlined into one. Above them are the panic's header and at most
+/// four lines of its message ([`MAX_MESSAGE_LINES`] and the note after them), and below
+/// them a note on the frames left out. That is enough to say where it was, and short
+/// enough, unless much was inlined, that the path to the rest is still on the screen.
 const MAX_FRAMES: usize = 6;
 
 /// The frames of `backtrace` worth reading, at most `most` of them.

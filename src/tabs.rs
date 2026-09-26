@@ -208,9 +208,9 @@ impl Strip {
         }
     }
 
-    /// Move `tab` so that it sits where the tab now at `position` does, which is what a
-    /// drop on that tab's chip means. Past the end is the end, and the tab on screen does
-    /// not change: a tab dragged is not a tab opened.
+    /// Move `tab` to just before the tab now at `position`, which is what a drop on that
+    /// tab's chip means: the chip is marked on its leading edge. Past the end is the end,
+    /// and the tab on screen does not change: a tab dragged is not a tab opened.
     ///
     /// **A tab the strip does not hold is not put there.** A chip dragged while its
     /// document is closed under it carries an id that stands for nothing, and inserting it

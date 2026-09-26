@@ -5,8 +5,9 @@ use super::*;
 
 /// One bookmark. Live when its place resolves against the objects loaded now, in which case
 /// pressing it is a navigation like a press in the Symbols list; dead when it does not, in
-/// which case it is drawn dimmed and does nothing, and is still there -- a reader's own list
-/// does not shrink behind their back.
+/// which case it is drawn dimmed, a press does nothing, and it is still there -- a reader's
+/// own list does not shrink behind their back. Either kind opens [`remove_menu`] on a
+/// right-click.
 #[derive(Clone, PartialEq)]
 struct BookmarkRow {
     /// Which bookmark this is -- what its menu removes.
@@ -48,8 +49,9 @@ impl Component for BookmarkRow {
         // row keeps its spelling when its binary goes.
         let Names { text, tooltip, .. } = Names::of_saved(&self.bookmark);
 
-        // A dead row has no handlers at all, like a dimmed history button: nothing to go
-        // to, so nothing to light up for. It still draws the pick, which the keys step
+        // A dead row has no press and no hover, like a dimmed history button: nothing to go
+        // to, so nothing to light up for. It keeps its menu, below: a dead bookmark is the
+        // one most likely to be removed. It still draws the pick, which the keys step
         // onto it, or the list's cursor would vanish there. Nothing about the tab on
         // screen picks a row out -- a bookmark is a place and the tab may be anywhere --
         // so a row here lights when the reader picked it and not otherwise.

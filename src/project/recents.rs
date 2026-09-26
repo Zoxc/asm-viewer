@@ -15,8 +15,8 @@ use super::files::Project;
 /// The projects the reader has had open, most recently first: `recents.toml`.
 ///
 /// An *order* and not an index of what exists -- the project files are that -- which is
-/// why nothing here prunes a path whose file has gone: [`recent_projects`] does it at the
-/// point of use, where the repair is free.
+/// why nothing here prunes a path whose file has gone: [`recent_projects`] leaves it out
+/// at the point of use, where that is free.
 ///
 /// A path under the app's own storage is written **relative to it** and every other path
 /// absolutely, so that moving the state directory — a different user, a restored backup —
@@ -77,9 +77,9 @@ pub(super) fn forget(store: &Store, path: &PathBuf) {
 
 /// One row of the recent-projects view: a project that can be switched to, described by
 /// its own file read at the moment the list is asked for, so nothing about a project is
-/// copied beside the order. A project whose file will not parse still gets a row, as the
-/// [`Project::default`] it will behave as once opened — and the file stays where it is
-/// until it is opened, a row being a reading of a project and not a claim on it.
+/// copied beside the order. A project whose file will not parse still gets a row, drawn
+/// as a [`Project::default`]. Opening it fails and says why, and the file stays where it
+/// is ([`super::load_project`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recent {
     /// The project file: what a project is, what it is called by, and what opening this

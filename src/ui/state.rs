@@ -290,8 +290,8 @@ pub(crate) enum Placing {
 ///
 /// One type because an `Entry` key holds the `Arc<Object>` its document points into: a map
 /// that keeps an entry a closed tab left behind holds that binary's bytes for as long as
-/// the app runs. A closer that forgot four of the five compiled and leaked, so the forget
-/// is one call ([`Places::forgetting`]) and not five lines to copy.
+/// the app runs. A closer that forgot one of the maps would compile and leak, so the
+/// forget is one call ([`Places::forgetting`]) and not six lines to copy.
 ///
 /// A place and not a document: two addresses in one object's code are two entries, which
 /// is what makes a step inside that listing come back to the row it was left at as any
@@ -323,7 +323,7 @@ pub(crate) struct Places {
 }
 
 impl Places {
-    /// The five maps, empty: what `app()` provides and what a test harness makes.
+    /// The six maps, empty: what `app()` provides and what a test harness makes.
     pub(crate) fn create() -> Places {
         Places {
             asm_at: State::create(Positions::default()),
@@ -607,8 +607,8 @@ pub(crate) struct Arrangement {
 /// The handles are the root's and are never replaced, so this **compares equal always**:
 /// a row holding one is not re-rendered for it.
 ///
-/// One bundle for both panes. The Source rows read the first three and the instruction
-/// rows all five, and the two menus therefore cannot come to reach for one state two ways.
+/// One bundle for both panes. The Source rows read the first two and the instruction
+/// rows all four, and the two menus therefore cannot come to reach for one state two ways.
 #[derive(Clone, Copy)]
 pub(crate) struct RowStates {
     pub(crate) doors: Doors,

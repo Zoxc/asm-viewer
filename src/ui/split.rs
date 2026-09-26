@@ -258,10 +258,10 @@ impl Component for PaneToggle {
 /// resolves to. The two panes are the same components either way -- neither knows which
 /// side of the split it was given -- so nothing but their order changes.
 ///
-/// **The following pane is the one that can be put away**, by the toggle on either pane's
-/// bar ([`PaneToggle`]), and a source-driven tab on a file in no compiled language opens
-/// with it away already ([`following`]). What is left is the leading pane alone, with no
-/// container and no handle: the app's one split width is untouched, so it comes back as
+/// **The following pane is the one that can be put away**, by the toggle on the leading
+/// pane's bar ([`PaneToggle`]), and a source-driven tab on a file in no compiled language
+/// opens with it away already ([`following`]). What is left is the leading pane alone, with
+/// no container and no handle: the app's one split width is untouched, so it comes back as
 /// the reader left it on the next tab that has two panes.
 ///
 /// Only the *active* tab's content is mounted, but a switch of tab is **not** a remount:

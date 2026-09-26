@@ -324,8 +324,8 @@ struct SymbolRow {
 /// same one and cannot open different places.
 #[derive(Clone, PartialEq)]
 pub(crate) enum SymbolPress {
-    /// The Symbols panel: the symbol opens as a tab of its own, and a right-click offers
-    /// to bookmark it.
+    /// The Symbols panel: the symbol opens in the preview tab, or a tab of its own with
+    /// Ctrl held ([`Reach::outside`]), and a right-click offers to bookmark it.
     Open,
     /// The Locations panel: the symbol opens on the line the answer was about
     /// ([`press_location`]), and the row draws the object it is in, since the same name in

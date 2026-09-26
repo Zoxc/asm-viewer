@@ -67,7 +67,7 @@ pub(crate) fn tab_menu(
 }
 
 /// The menu a Files row over an object that is not loaded opens on a right-click: one
-/// item, opening it the way the toolbar's Open does.
+/// item, opening it the way the Objects panel's "Add binaries..." does.
 pub(crate) fn open_menu(
     objects: State<Vec<Arc<Object>>>,
     loading: State<Loads>,
@@ -255,8 +255,9 @@ fn item_name(text: String, colour: Option<Color>) -> Label {
 /// part of the word.
 ///
 /// `colour` is the dim row's, which is drawn in place of a live one and has to look like
-/// it; a live row inherits the menu's own and is handed `None`. The mark is a step back
-/// from the name either way, being about the row rather than part of what it says.
+/// it; a live row inherits the menu's own and is handed `None`. On a live row the mark is
+/// a step back from the name, being about the row rather than part of what it says; a dim
+/// row draws both in its one colour.
 fn marked_label(text: String, mark: &str, colour: Option<Color>) -> Element {
     rect()
         .horizontal()

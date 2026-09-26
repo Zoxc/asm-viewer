@@ -112,10 +112,11 @@ walked in order, so the only thing it cannot already know is when one is done wi
 and not a channel or an iterator because the crate stays framework-free. A channel would make it
 pick one, and pick bounded or unbounded, which is a backpressure policy belonging to whoever draws
 the result; an iterator would mean self-borrowing the file's bytes across a yield. `emit` answers a
-`ControlFlow`, which is how a walk nobody is waiting for stops where it stands: a closed 331 MB file
-is not parsed to the end into a value that will be dropped. Its one honest limit: a single answer
-cannot say "skip the rest of *this* file but go on to the next", so a multi-file request in which
-one file is closed goes on parsing that file and drops the rest at the caller. `open_files` is that
+`ControlFlow`, which is how a walk nobody is waiting for stops at its next answer: a closed archive
+is not parsed to its last member. An object file's first answer is the whole parse, so a closed one
+is still parsed to the end and dropped. And a single answer cannot say "skip the rest of *this*
+file but go on to the next", so a multi-file request in which one file is closed
+goes on parsing that file and drops the rest at the caller. `open_files` is that
 same callback closing over a `Vec`, for the tests and anything with nowhere to put objects one at a
 time. `open_data_streaming` is the same walk over files already in memory, each with the path it is
 to be called by: the reading is the only thing `open_files_streaming` does that it does not, which
@@ -764,7 +765,8 @@ question walks the list again, `each_row` included. A walk per module would cost
 count the file states, and a module list of a few hundred honest megabytes declares millions: the
 first source question would then hang the analysis worker, which no guard can catch.
 **Two things a PDB has that DWARF-as-read does not**: a checksum per source file (`SourceHash`: MD5
-from clang-cl and rustc, SHA-256 from MSVC since 2022, as the samples' CRT objects show), carried on
+from clang-cl, SHA-256 from rustc and, as the samples' CRT objects show, from MSVC since 2022),
+carried on
 `LineInfo` beside the file name so a reader can tell the file they have from the one the compiler
 read (`SourceDigests::of` takes all three digests of a file's bytes at once, so a file read once
 answers any kind); and file names in the producer's spelling (`C:\...` from MSVC,
@@ -846,8 +848,9 @@ that from happening: `source_index` computes the ranges and `SourceIndex::build`
 not the object, so the visitor has nothing to ask. The rows are not collected first to drop the
 lock instead, which would hold millions of them at once on a large binary. The DWARF backend's `each_row` is one
 `find_location_range(0, u64::MAX)` over the whole address space (safe where `extent` had to decline
-`u64::MAX`: that unchecked `probe + 1` is in `find_units`, and this goes through
-`find_units_range`), with each row attributed to the symbols its addresses fall in. Addresses stay
+`u64::MAX`: that unchecked `probe + 1` is in `ResUnits::find`, and this goes through
+`ResUnits::find_range`), with each row attributed to the symbols its addresses fall in. Addresses
+stay
 **biased** throughout, so the section bias that tells two functions at address 0 apart is applied
 once and never undone. The extent used is `SymbolData::extent` and not the next-symbol estimate: the
 index and `SymbolData::line_info` then cannot disagree about what a symbol covers, which is the
@@ -899,8 +902,8 @@ backend is only ever read, so a caught panic leaves nothing half-written — and
 takes goes through `recovered`, the seam's other half, which takes a poisoned lock rather than
 propagate a poison that says nothing. One lock taken with a plain `unwrap` would make the next
 caught panic a permanent "no line info" for that object, with nothing to say it had. What is *not*
-left to the guard is `find_units`, which asks about `probe + 1` unchecked, so the DWARF backend's
-`extent` declines `u64::MAX` outright rather than catching the panic afterwards; nor is a
+left to the guard is `ResUnits::find`, which asks about `probe + 1` unchecked, so the DWARF
+backend's `extent` declines `u64::MAX` outright rather than catching the panic afterwards; nor is a
 subprogram's own declared length, which the crate hands back as written, so `Symbol::extent` drops
 one that would run off the end of the address space.
 `pdb2` 0.10 has four of the same kind (a module's line data sliced at `start + size` unchecked, a

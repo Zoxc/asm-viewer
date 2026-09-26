@@ -62,9 +62,11 @@ pub const RECENTS_FILE: &str = "recents.toml";
 const MAX_CLAIMS: u32 = 1000;
 
 /// How many ids one of those files is written with. The cap is the **file's** and not the
-/// list's, so a pad the panel is holding is not dropped by someone else being shown, and
-/// what is lost past it is an *order*, never a project and never a pad: both listings put
-/// back what the file did not name.
+/// list's, so a pad the panel is holding is not dropped by someone else being shown. Of the
+/// recent projects and the pads, what is lost past it is an *order*, never a project and
+/// never a pad: both listings put back what the file did not name. An agreement to a
+/// language server has nothing to put it back, so one lost past the cap is asked for again
+/// (`project::trust`).
 ///
 /// Not `pub`, because [`Store::save_order`] is the only way an order file is written and
 /// applies this itself: a caller that had to remember the cap is a caller that can forget

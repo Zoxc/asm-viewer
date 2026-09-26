@@ -12,7 +12,7 @@
 //! search has been replaced returns, the channel's other end fails on its next send, and
 //! the walk breaks where it stands -- which is a second search, a project left, and the
 //! app closing, all through one rule. It is the shape's rule and not this file's: the
-//! binary loader (`take_load`, `ui/documents.rs`) is stopped by the same line.
+//! binary loader (`take_load`, `ui/loading.rs`) is stopped by the same line.
 
 use super::*;
 use crate::search::{self, SearchEvent, SearchHits, SearchQuery};

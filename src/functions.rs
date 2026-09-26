@@ -29,8 +29,9 @@ use tree_sitter_language::LanguageFn;
 pub mod rust;
 
 /// One function definition: what the source calls it, and the lines it spans, 1-based
-/// as DWARF's are. The name is the identifier alone -- `new`, not `Vec::new` -- since
-/// that is all the grammar is asked for and all the heading it goes into needs.
+/// as DWARF's are. The name is as the definition spells it: a Rust function's identifier
+/// alone -- `new`, not `Vec::new` -- and a C++ one's with any qualifier it was written with
+/// -- `Thing<T>::get`, `Thing::~Thing`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Function {
     pub name: String,

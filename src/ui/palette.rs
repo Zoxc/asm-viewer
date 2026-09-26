@@ -19,9 +19,9 @@ pub(crate) struct Palette {
     pub(crate) text_fg: Color,
     pub(crate) header_bg: Color,
     pub(crate) hairline: Color,
-    /// The neutral grey: a row picked out in a list the keyboard is **not** in, the half
-    /// of a panel a dragged tab would land in, and the copy of a tab or a panel header
-    /// that follows the cursor. A list holding the keyboard draws its pick in
+    /// The neutral grey: a row picked out in a list the keyboard is **not** in, the
+    /// header of a panel a dragged panel would land on, and the copy of a tab or a panel
+    /// header that follows the cursor. A list holding the keyboard draws its pick in
     /// `text_select_bg` instead, so the blue is what the next key acts on and the grey is
     /// a place a list is remembering (`ui/picks.rs`).
     pub(crate) selected_bg: Color,
@@ -35,12 +35,12 @@ pub(crate) struct Palette {
     /// The pair: the rows of this pane that are the same place as the run picked out in
     /// the other one -- the instructions a selected source line was compiled from, the
     /// line a selected instruction came from. Nothing lights under the pointer; only a
-    /// selection lights the other side. Translucent, so it composites with the selection
-    /// -- see `blend`.
+    /// selection lights the other side. Translucent, so the selection a row draws over it
+    /// still shows it.
     pub(crate) pair_bg: Color,
-    /// A row that is both: picked out here and the other pane's pair. The same green,
-    /// deeper and less see-through, so the two states read as one and the sweep is not
-    /// lost in the pair. Its own colour rather than one wash over the other, because a
+    /// A row that is both: the caret's row here and the other pane's pair. The same green,
+    /// deeper and less see-through, so the two states read as one and the caret's row is
+    /// not lost in the pair. Its own colour rather than one wash over the other, because a
     /// shadow over so pale a green barely moves it.
     pub(crate) pair_selected_bg: Color,
     /// The rule along the top and the bottom of a run of paired rows: the pair's green a
@@ -100,7 +100,8 @@ pub(crate) struct Palette {
     pub(crate) caret_fg: Color,
     /// The dot at a code row's left edge: a source line that produced code, and an
     /// instruction the debug info places on a source line. Also the mark on the tab the
-    /// keyboard is in (`ui/strip.rs`), the one place it is not a dot.
+    /// keyboard is in and the edge a dragged tab would land at (`ui/strip.rs`), the two
+    /// places it is not a dot.
     ///
     /// A drawing and not text, so it is held to a floor of its own and required to stay
     /// quieter than the number or address beside it: a column of dots read at a glance,
@@ -222,9 +223,10 @@ impl Palette {
         find_bg: Color::from_argb(64, 150, 118, 190),
     };
 
-    /// The same palette at dark-mode lightness: every value is the one in `LIGHT` turned
-    /// through the background, so where a light value is a step *down* from the surface
-    /// it sits on, the dark one is the same step *up*.
+    /// The same palette at dark-mode lightness: every opaque value is the one in `LIGHT`
+    /// turned through the background, so where a light value is a step *down* from the
+    /// surface it sits on, the dark one is the same step *up*. A translucent one is stated
+    /// instead as what it should come out as over the ground it lands on.
     pub(crate) const DARK: Palette = Palette {
         pane_bg: Color::from_rgb(30, 30, 32),
         text_fg: Color::from_rgb(232, 232, 232),
@@ -233,8 +235,8 @@ impl Palette {
         selected_bg: Color::from_rgb(66, 66, 72),
         row_hover_bg: Color::from_rgb(46, 46, 49),
         asm_pane_bg: Color::from_rgb(34, 34, 36),
-        // The three translucent ones, each stated as what it should come out as over the
-        // pane rather than as the light value flipped: `blend` puts 30/30/32 under them.
+        // The pair's two washes come out over `asm_pane_bg`, and the drop preview and the
+        // shadow over `pane_bg`. `pair_edge` is opaque: the pair's green a step deeper.
         pair_bg: Color::from_argb(110, 120, 160, 110),
         pair_selected_bg: Color::from_argb(190, 120, 160, 110),
         pair_edge: Color::from_rgb(104, 140, 96),
@@ -245,7 +247,7 @@ impl Palette {
         toggle_hover_bg: Color::from_rgb(60, 60, 64),
         server_bg: Color::from_rgb(64, 60, 76),
         prompt_bg: Color::from_rgb(38, 38, 33),
-        // Translucent, and stated the same way as the three above: what it comes out as
+        // Translucent, and stated the same way as the washes above: what it comes out as
         // over a tab, which here means lifting the surface rather than darkening it.
         close_hover_bg: Color::from_argb(75, 200, 200, 210),
         link_hover_bg: Color::from_af32rgb(0.25, 255, 255, 255),
@@ -465,8 +467,9 @@ pub(crate) fn interface_theme(appearance: Appearance, ui_size: f32) -> Theme {
     theme
 }
 
-/// `top` composited over `bottom`, both of them translucent. An element has one
-/// background, so a row carrying two washes at once is painted with one composite.
+/// `top` composited over `bottom`, either of them translucent: the rule the renderer
+/// draws a colour over its ground by. [`faded`] and [`dimmed`] are it applied to a
+/// foreground, and the palette tests measure a wash by it against the ground it lands on.
 pub(crate) fn blend(top: Color, bottom: Color) -> Color {
     let (top_alpha, bottom_alpha) = (top.a() as f32 / 255.0, bottom.a() as f32 / 255.0);
     let alpha = top_alpha + bottom_alpha * (1.0 - top_alpha);
@@ -538,8 +541,9 @@ pub(crate) enum Wash {
 }
 
 /// The background of a code row: the pair -- this row is where the other pane's
-/// picked-out run maps to -- the caret's row, or the one over the other. The selection
-/// itself is not a wash: the row draws it under its text (`ui/code_row.rs`).
+/// picked-out run maps to -- the caret's row, or a colour of its own for a row that is
+/// both. The selection itself is not a wash: the row draws it under its text
+/// (`ui/code_row.rs`).
 ///
 /// Nothing here answers to the pointer: a row is lit by a selection, its own pane's or
 /// the other's, and by nothing else.

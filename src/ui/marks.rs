@@ -11,10 +11,12 @@ use super::*;
 #[derive(Clone, PartialEq)]
 pub(crate) struct Picked {
     /// The caret, and the characters picked out: anchored by the press -- at the column
-    /// pressed on the text, at the row's start from the gutter or from outside the panes
-    /// -- and swept from there. Empty until swept, and then it is the selection. The rows
-    /// it touches are the run the two panes point at each other through, so there is no
-    /// second copy of them: `chars.rows()` is what is lit.
+    /// pressed on the text, at the row's start from the gutter -- and swept from there. A
+    /// double or triple press picks out the word or the text at once, and a door from
+    /// outside the panes picks out the columns it names, or puts a caret at the row's start
+    /// where it names none. What is picked out is the selection. The rows it touches are
+    /// the run the two panes point at each other through, so there is no second copy of
+    /// them: `chars.rows()` is what is lit.
     pub(crate) chars: CharSelection,
     /// Whether the button is still down, which is what tells a row entered under the
     /// pointer from the pointer merely passing over it.

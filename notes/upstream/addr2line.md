@@ -23,7 +23,7 @@ as one confident wrong source line across the function. The seam does it for eve
 neither half of the rule is a backend's to get wrong. Pinned by `line/tests.rs`, a unit test and
 not a fixture because no fixture can produce that row in a build with the checks on.
 
-**`Context::find_units` asks its range index about `probe + 1`, unchecked** (`src/unit.rs`),
+**`ResUnits::find` asks its range index about `probe + 1`, unchecked** (`src/unit.rs`),
 so the very last address in the space panics. Declined rather than caught: `Dwarf::extent`
 returns nothing for `u64::MAX` outright.
 

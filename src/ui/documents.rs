@@ -6,10 +6,10 @@
 //! is the rest: which door a click is, and what a close has to let go of.
 //! [`open_document`], [`raise`], [`navigate`], [`close_tab`], [`close_others`] and
 //! [`close_binary`] are the six that open or close a **document** tab or change what one
-//! shows, and every path that opens a document -- [`land`] included -- goes through
-//! [`open_document`]. A page is the one tab outside that: it draws state held at the root
-//! and has no trail, so [`show_page`] puts its chip in the bar and [`close_page`] takes it
-//! out, and neither owes anything else.
+//! shows, and every path that opens a document -- [`open_document`] and [`land`]
+//! included -- goes through [`open_stop`]. A page is the one tab outside that: it draws
+//! state held at the root and has no trail, so [`show_page`] puts its chip in the bar and
+//! [`close_page`] takes it out, and neither owes anything else.
 //!
 //! The doors into a *place* are here too: [`open_source_place`] for a file and a line,
 //! [`show_in_code`] and [`open_as_symbol`] for an address in an object's code. Each builds
@@ -142,7 +142,7 @@ pub(crate) fn open_source_tab(
 }
 
 /// Open `target` the way `reach` says, make the tab it lands in the active one, and
-/// record the visit. The one path by which a document is ever opened.
+/// record the visit: [`open_stop`] for the whole document.
 ///
 /// The tab the document landed in. Every read of the states is bound before any write to
 /// them.
@@ -156,7 +156,8 @@ pub(crate) fn open_document(
 }
 
 /// The same for a place inside a document: what a door into an object's code at an
-/// address opens, so the trail holds the place and not just the listing (`land`).
+/// address opens, so the trail holds the place and not just the listing (`land`). The one
+/// path by which a document is ever opened.
 ///
 /// A stop and not a document is what goes on the trail; everything else here -- the
 /// visit, which tab is preferred, the temporal tab -- is about the document, since a

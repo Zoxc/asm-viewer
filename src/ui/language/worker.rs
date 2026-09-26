@@ -187,7 +187,7 @@ fn asked<T>(
 /// The blocking half, and the only part that talks to a server.
 ///
 /// A closure holding the conversation rather than a plain function, since unlike the other
-/// three workers this one has something to keep between jobs. The lock is never contended
+/// workers this one has something to keep between jobs. The lock is never contended
 /// -- one thread calls this -- and is what lets the seam stay the `Fn` the others are.
 pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + 'static {
     let talking: Mutex<Option<lsp::Server>> = Mutex::new(None);

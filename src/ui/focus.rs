@@ -201,12 +201,13 @@ impl Kept {
 
 /// What a door out of one place into another is given, in one `Copy` bundle: where things
 /// are open, everything kept per place, the record of visits, the runs the two panes have
-/// picked out, and the two halves of a landing left for the arrival.
+/// picked out, the two halves of a landing left for the arrival, and the place those runs
+/// are for.
 ///
 /// Not an incidental grouping. [`documents::land`] is the one path a door takes, and every
-/// door passes it these six -- so a seventh thing a landing needs is a field here and
-/// nothing at a call site. Provided once by `app()` and taken in one [`use_doors`], which
-/// is why a door's handler is the landing it is about and not six lines of preamble.
+/// door passes it these seven -- so an eighth thing a landing needs is a field here and
+/// nothing at a call site. Provided once by `roots()` and taken in one [`use_doors`], which
+/// is why a door's handler is the landing it is about and not seven lines of preamble.
 ///
 /// A bundle does not own its handles: `marked` is the state [`Marked`] hands the panes, and
 /// `open` and `places` the ones [`ProjectStates`] carries. A closer takes [`Places`] on its

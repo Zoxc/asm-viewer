@@ -156,10 +156,10 @@ fn a_walk_stops_when_the_callback_says_to() {
     );
 }
 
-/// The app follows no symlink (`source::fits`), so one is not a project file here: a link
-/// to a source file, a link to a directory and a link with nothing behind it are all
-/// skipped, and the directory is not descended through the link either. What the finder
-/// offers and what a press opens are the same set.
+/// No source file is read through a symlink (`source::showable`), so one is not a project
+/// file here: a link to a source file, a link to a directory and a link with nothing behind
+/// it are all skipped, and the directory is not descended through the link either. What the
+/// finder offers and what a press opens are the same set.
 #[cfg(unix)]
 #[test]
 fn a_symlink_is_not_walked() {

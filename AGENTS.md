@@ -387,7 +387,8 @@ command.
 - `src/ui/entries.rs` — what a document is called and drawn as wherever a list names one:
   the short spelling and the whole one, the glyph, and the key a row is drawn under.
 - `src/ui/loading.rs` — reading binaries onto the objects list: the one path anything is
-  ever added by, the one thread, the batches, and which load an answer belongs to.
+  ever added by, the thread each load is read on, the batches, and which load an answer
+  belongs to.
 - `src/ui/menus.rs` — the menus a right-click opens over a tab, over a file row and over a
   sidebar row, the items more than one menu is built of, and the pieces they are all drawn
   from: a row, what its text says, the mark after it, the line between two groups, and the
@@ -457,7 +458,8 @@ command.
   `ListKeys` -- and `opened`, the one door a row's press goes through, which says whether
   the press took the keyboard with it.
 - `src/ui/place_row.rs` — the row the Search and Locations panels both draw: a file, or one
-  place found in it, and the three things the panels differ in.
+  place found in it, and `Folding`, the one thing the panels differ in: which state a fold
+  is written to.
 - `src/ui/place_target.rs` — the place a diagnostic names, drawn as a target: the one
   component the Scratchpad pane and the Project view both press to get there, with the
   press handed in.

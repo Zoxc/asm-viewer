@@ -348,8 +348,8 @@ pub(crate) enum Glow {
 /// press, the child and the tooltip.
 ///
 /// `live` is whether pressing it would do anything. A dead button takes neither the
-/// pointer handlers nor the wash, which is the whole of how a history chevron with nowhere
-/// to go is drawn disabled; the caller dims its glyph.
+/// pointer handlers nor the wash, which is the whole of how one is drawn disabled; the
+/// caller dims its glyph.
 ///
 /// **The hover state stays the caller's**, [`list_row`]'s reason: there is no `.hover()`
 /// pseudo-state, so a button that lights holds a `use_state` of its own, and a hook may
@@ -992,8 +992,8 @@ pub(crate) fn diagnostic_place(span: &cargo::Span) -> String {
 }
 
 /// The same place with the file cut down to its own name, which is what a file outside the
-/// workspace gets: a registry path is most of a line on its own, and which crate
-/// it is in is the useful half.
+/// workspace gets: a registry path is most of a line on its own. The crate it is in goes
+/// with the rest of the path, so such a label can read only `mod.rs:12:5`.
 pub(crate) fn diagnostic_place_by_name(span: &cargo::Span) -> String {
     place_of(&source::name_of(Path::new(&span.file)), span)
 }

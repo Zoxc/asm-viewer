@@ -63,9 +63,10 @@ pub(crate) fn reveal_row(
     // gives up the margin and not the row: scrolled to `row - margin` regardless, a pane
     // two rows tall showed the two rows *before* the instruction a door had just opened
     // it on. It is also what makes the offset written here satisfy the test above on the
-    // next call, in every viewport -- which is what keeps a caller that is woken by its
-    // own scroll from asking again for ever (`notes/upstream/freya.md`); the slack below
-    // is the other half of that.
+    // next call, in every pane that holds a whole row -- which is what keeps a caller that
+    // is woken by its own scroll from asking again for ever (`notes/upstream/freya.md`);
+    // the slack below is the other half of that. A pane shorter than a row fails the test
+    // on every call, and the offset is written again each time.
     //
     // **And never past the end of the listing**, which `row - margin` is for any row in
     // the last screenful. `lowest` is already inside the extent, so the clamp only ever

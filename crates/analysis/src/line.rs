@@ -359,7 +359,7 @@ pub(super) fn recovered<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// A checksum the debug info records for a source file, so a reader can tell the file they
 /// have from the one the compiler read. Which algorithm is the producer's choice — clang-cl
-/// and rustc write MD5, MSVC since 2022 SHA-256 — so a hash carries its own kind.
+/// writes MD5, rustc and MSVC since 2022 SHA-256 — so a hash carries its own kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SourceHash {
     Md5([u8; 16]),
@@ -705,11 +705,12 @@ impl Object {
         self.debug_info()?.extent(section, address)
     }
 
-    /// How many parts of this object's debug info (a DWARF unit, a PDB module) have been found
-    /// so far that would not read in whole, and were passed over or read only up to the fault.
-    /// Most are read lazily, so this grows with the questions asked; 0 before the first, and
-    /// asking does not load the debug info. A panic building it or answering a question is
-    /// one more.
+    /// How many parts of this object's debug info (a DWARF unit, a PDB module) have been
+    /// found so far that would not read in whole, and were passed over or read only up to
+    /// the fault. Most are read lazily, so this grows with the questions asked, and asking
+    /// does not load the debug info. Before the first it is 0, except for a PE whose `.pdb`
+    /// was opened at the parse: what that found is counted from the parse on. A panic
+    /// building it or answering a question is one more.
     pub fn debug_info_skipped(&self) -> usize {
         let cache = &self.debug_info;
         let panicked = usize::from(cache.panicked.load(Ordering::Relaxed));

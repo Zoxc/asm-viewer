@@ -35,17 +35,17 @@
 //! location relative to the child and the column would be wrong.
 //!
 //! **A row kind may not put on a handler this already sets.** freya keeps an element's
-//! handlers in a map by event name, so `.on_pointer_out(..)` chained onto what [`row`]
-//! returns *replaces* the row's own and nothing says so -- the icon is then never put
-//! back, and the pointer leaves the listing still wearing whatever the row last set. The
-//! row sets `pointer_down`, `pointer_move`, `pointer_out` and `sized`; a kind that wants
-//! one of those has to be given it here.
+//! handlers in a map by event name, so `.on_pointer_out(..)` chained onto what
+//! [`use_code_row`] returns *replaces* the row's own and nothing says so -- the icon is
+//! then never put back, and the pointer leaves the listing still wearing whatever the row
+//! last set. The row sets `pointer_down`, `pointer_move`, `pointer_out` and `sized`; a kind
+//! that wants one of those has to be given it here.
 //!
-//! [`row`] is the drawing and holds nothing itself. What a row keeps is [`RowCells`], which
-//! answers both ways between a column and an x and is the one thing a handler clones; the
-//! marks around the text are [`marks`], and the write a caret past the pane's edge makes is
-//! named there ([`bring_caret_into_view`]) rather than left inside the drawing. Each
-//! handler is built by a function of its own.
+//! [`use_code_row`] is the drawing and holds nothing itself. What a row keeps is
+//! [`RowCells`], which answers both ways between a column and an x and is the one thing a
+//! handler clones; the marks around the text are [`marks`], and the write a caret past the
+//! pane's edge makes is named there ([`bring_caret_into_view`]) rather than left inside the
+//! drawing. Each handler is built by a function of its own.
 
 use std::cell::Cell;
 use std::rc::Weak;
@@ -230,9 +230,10 @@ pub(crate) struct TextLinks {
     /// The colour a lit link's text and the rule under it take.
     pub(crate) lit_fg: Color,
     /// The columns of **every** name the server placed on this row, links and the places
-    /// where one is defined alike: what the pointer is answered about. A superset of
-    /// `columns`, and not fed to [`cut_at`] -- hovering a name changes no span's style, so
-    /// it cuts the row nowhere and cannot widen the listing.
+    /// where one is defined alike: what the pointer is answered about. On a source row a
+    /// superset of `columns`; empty on every other, which has no names to ask a server
+    /// about. Not fed to [`cut_at`] -- hovering a name changes no span's style, so it cuts
+    /// the row nowhere and cannot widen the listing.
     pub(crate) names: Vec<Range<usize>>,
     /// What the pointer moving onto one of those names, or off them all, says. Built per
     /// row, as the rest is: the row knows where a name is drawn, and the pane knows what
@@ -887,7 +888,8 @@ fn box_over(span: Stroke, top: f32, height: f32) -> Rect {
 
 /// The two marks a row draws around its text: the selection's, painted under it, and the
 /// caret's, over it. Both are always drawn -- [`nothing`] where there is no mark -- since
-/// freya matches siblings by position (see the children at the foot of [`row`]).
+/// freya matches siblings by position (see the children at the foot of
+/// [`use_code_row`]).
 ///
 /// Neither is interactive: a mark answers no press and no move.
 fn marks(
@@ -1031,7 +1033,7 @@ fn lit_box(
 /// **One slot holding however many**, rather than a rect each among the row's own
 /// children: freya matches siblings by position, and a count that changes with what is
 /// typed would move the paragraph along and remount it (see the children at the foot of
-/// [`row`]). The slot itself is always there, empty when nothing matched.
+/// [`use_code_row`]). The slot itself is always there, empty when nothing matched.
 fn found(cells: &RowCells, grid: Grid, finds: &[Range<usize>], len: usize) -> Rect {
     let washes: Vec<Element> = finds
         .iter()
@@ -1059,8 +1061,8 @@ fn text_paragraph(
     let columns = links.as_ref().map_or(&[][..], |links| &links.columns[..]);
     paragraph()
         .max_lines(1)
-        // The row's whole height, so the highlight -- which the engine expands to the
-        // paragraph's box -- runs from one row into the next with no gap.
+        // The row's whole height, so the line is centred in the row and a pointer's y
+        // anywhere in the row falls inside the paragraph the hit-tests ask.
         .height(Size::fill())
         .holder(cells.holder.read().clone())
         .on_sized(move |e: Event<SizedEventData>| {
@@ -1255,12 +1257,12 @@ fn on_move(
 /// a cut that came and went with the pointer would widen the listing for good.
 ///
 /// Columns are bytes, and a boundary inside a character is not one: a split there would
-/// cut a `char` in half, so the span is left whole.
+/// cut a `char` in half, so that cut is not made. The span's other cuts still are.
 ///
 /// **`links` must be ascending and must not overlap.** The spans are walked left to right
 /// and so are the edges, once for the whole row rather than once per span, so an edge
-/// behind the one before it is passed over and the span it fell in is left whole -- the
-/// same fallback a cut inside a character takes, and never a lost piece of text. The order
+/// behind the one before it is passed over and no cut is made there -- the same fallback
+/// a cut inside a character takes, and never a lost piece of text. The order
 /// is `Links::of`'s, which sorts a file's names by line and column (`src/links.rs`) and
 /// which `Named::linked` keeps (`src/ui/source_row.rs`); a label in an object's listing is
 /// one run and the whole row (`src/ui/section_view.rs`), and an instruction has at most one
@@ -1310,8 +1312,9 @@ pub(crate) fn cut_at(spans: Vec<Span<'static>>, links: &[Range<usize>]) -> Vec<S
                 text_style_data: span.text_style_data.clone(),
             });
         }
-        // A cut that fell inside a character leaves nothing of the span, so it is kept
-        // whole rather than lost.
+        // Never taken: `at` is always a character's boundary, so the last piece, `at..len`,
+        // is always cut, and an empty span was pushed above. A guard, so that a change
+        // above cannot lose the span's text.
         if at == 0 {
             cut.push(span);
         }

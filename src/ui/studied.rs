@@ -271,8 +271,8 @@ pub(crate) enum Showing<'a> {
     /// The listing and the question it answers: a pane needs both, the question being
     /// what says which tab the listing belongs to.
     Listing(&'a Shown),
-    /// Nothing to draw and a word for why. A `Cow`: four of the five are fixed
-    /// sentences, and the fifth names the line that came to nothing.
+    /// Nothing to draw and a word for why. A `Cow`: five of the six are fixed
+    /// sentences, and the sixth names the line that came to nothing.
     Message(Cow<'static, str>),
     /// A wait too short to name, with no previous listing to leave up.
     Nothing,

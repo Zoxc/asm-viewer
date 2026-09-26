@@ -1,12 +1,13 @@
 //! The bar over the Assembly pane naming what that pane is drawing, and the section it
 //! expands into.
 //!
-//! Two rows -- the demangled name over the mangled original -- because the only other
-//! place a symbol is named is its tab, which is cut to `CHIP_NAME_CHARS` by `short_name`,
-//! and the mangled spelling appeared nowhere at all. Under a disclosure triangle is the
-//! rest of what is known about it, which is what the Info pane used to answer. At the end
-//! of the bar, where this pane is the one the tab is driven from, is [`PaneToggle`]; the
-//! Source pane's own bar carries it under the same rule.
+//! Two rows -- the demangled name over the mangled original -- because the only other place
+//! a symbol is named is its tab, which is the name cut down to `module::fn_name` by
+//! `short_name` and then to `CHIP_NAME_CHARS` by `chars::elide`, and the mangled spelling
+//! appeared nowhere at all. Under a disclosure triangle is the rest of what is known about
+//! it, which is what the Info pane used to answer. At the end of the bar, where this pane
+//! is the one the tab is driven from, is [`PaneToggle`]; the Source pane's own bar carries
+//! it under the same rule.
 
 use super::*;
 

@@ -462,8 +462,10 @@ impl Component for CargoSection {
 
         // The manifest is read on mount and whenever the directory or the profile
         // changes -- the two things that decide what the answer is. A keystroke in the
-        // directory box costs one `read_to_string` of a half-typed path, which fails
-        // cheaply, `files_view`'s own bargain. And again in every project: a switch
+        // directory box costs a job on the build worker: a read and a parse per directory
+        // up to the manifest cargo takes the profile from (`cargo::profile_manifest`),
+        // then a parse of that one. A half-typed path can sit under a real workspace, so
+        // the read may well succeed. And again in every project: a switch
         // empties `Builds` and drops a read still on its way, and the page can stay up
         // across one to a project over the same directory.
         // A box emptied asks nothing, and what the last directory's manifest said goes: it

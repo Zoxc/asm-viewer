@@ -7,7 +7,7 @@
 //! index, built on the first ask and never at parse time, the way [`super::DebugInfoCache`]
 //! builds the debug info itself.
 //!
-//! Two things are decided here and written down rather than left to be discovered:
+//! Three things are decided here and written down rather than left to be discovered:
 //!
 //! * **A file is matched exactly, on the string the backend renders.** That is by construction
 //!   the string [`LineInfo::files`](super::LineInfo::files) spells, so a caller holding a file

@@ -8,9 +8,10 @@ instances (`Palette::LIGHT` and `Palette::DARK`), and `palette()` is how anythin
 is current. No call site names a colour, which is what the indirection is for. The dark values are
 the light ones **carried over**, not designed again: every relationship holds on both sides (the
 header a step off the pane, each code colour keeping its hue and its place in the ordering). The
-only ones that could not be flipped literally are the translucent washes, which `blend` composites
-over the pane: the same alpha over a dark ground is a fraction of the step it was over white, so
-each was judged by what it *comes out as*. Two tests hold that. The first is a contrast floor for
+only ones that could not be flipped literally are the translucent washes, which the renderer
+composites over the pane (`blend` is its rule, for the tests): the same alpha over a dark ground
+is a fraction of the step it was over white, so each was
+judged by what it *comes out as*. Two tests hold that. The first is a contrast floor for
 every foreground on the surface it is really drawn on: 3.0, not WCAG's 4.5, because the light
 palette's address column and its comments are meant to recede and sit between 3 and 3.5. It includes
 the × on a tab, whose surface is its own wash composited over whichever of two grounds the tab is
@@ -255,7 +256,7 @@ because 26 was the *mono* font's number and had never been anything else. No flo
 that would be the same coupling under another name.
 
 **A box to type in is a row and some air**, which is `text_box_height`: a list row and six more,
-wherever the interface font's rows hold a box rather than a line of text -- the two filter bars, the
+wherever the interface font's rows hold a box rather than a line of text -- the filter bars, the
 find bar, the settings page's rows and the scratchpad's dependency rows. The six is air and not fit.
 freya sizes a compact `Input` from its own text and inner margin, 27 against a 24 row at the app's
 own fonts, so the height clears the box on its own; what it buys is the space around it, a strip's

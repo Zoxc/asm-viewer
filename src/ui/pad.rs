@@ -778,10 +778,12 @@ impl PadJob {
 
 /// What it answers with.
 ///
-/// Every answer says which pad it is about, as a job does by carrying the scratchpad or
-/// the id. It has to: an answer can land long after the reader has moved to another
-/// pad, and it belongs to the pad that asked and to no other. The exception is
-/// [`PadAnswer::Deleted`], which is about a pad the app let go of before it asked.
+/// An answer about one pad says which, as a job does by carrying the scratchpad or the
+/// id. It has to: an answer can land long after the reader has moved to another pad, and
+/// it belongs to the pad that asked and to no other. Three name none:
+/// [`PadAnswer::Listed`], which is about every pad; [`PadAnswer::Created`] with an error,
+/// there being no pad; and [`PadAnswer::Deleted`], which is about a pad the app let go of
+/// before it asked.
 pub(crate) enum PadAnswer {
     /// The pads there are, in the order the panel draws them, each with the name out of
     /// its own package — which is what lets the panel draw a pad nothing has opened.

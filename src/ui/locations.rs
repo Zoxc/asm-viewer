@@ -539,10 +539,10 @@ pub(crate) fn name_menu(
     ]
 }
 
-/// The menu a source row or an instruction row opens on a right-click: the line's
-/// locations, -- for a source row inside a function -- the function's instances, and
-/// and `named` where the press was on a name a server can be asked about, the things a
-/// row is asked for that a click does not do. Built per press, as `close_menu` is, closing
+/// The menu a source row or an instruction row opens on a right-click: `named` where the
+/// press was on a name a server can be asked about, then the line's locations, then -- for
+/// a source row inside a function -- the function's instances: the things a row is asked
+/// for that a click does not do. Built per press, as `close_menu` is, closing
 /// over the row's line; the states come in as arguments because this is called from an
 /// event handler, where no hook may run.
 ///

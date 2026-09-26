@@ -89,7 +89,7 @@ fn chip(
     };
 
     // Where a tab being dragged would land: the leading edge of the chip under the
-    // pointer, in the same purple the tab on screen is marked with.
+    // pointer, in the purple the tab on screen is marked with while the keyboard is in it.
     let edge = landing.then(|| {
         Border::new()
             .fill(palette().compiled_fg)

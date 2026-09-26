@@ -199,9 +199,9 @@ impl Project {
     }
 
     /// Read one, or [`Reason`] if it is not there or will not parse. The plain read, and
-    /// the only one: it is what draws a row for a project that is **not open**
-    /// ([`super::recent_projects`]), and listing a project must not move its file aside.
-    /// [`super::load_project`], which opens one, goes through [`Store::read`].
+    /// the only one: it draws a row for a project that is **not open**
+    /// ([`super::recent_projects`]) and opens one ([`super::load_project`]), and neither
+    /// may move the file aside. Only the session beside it goes through [`Store::read`].
     ///
     /// The **bytes** and not a string, so that a file which is not text is told apart from
     /// one the system would not hand over: they fail as one `io::Error` otherwise, and
@@ -251,10 +251,9 @@ pub struct Failure {
 /// shown, so each is a whole one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reason {
-    /// There is nothing at that path.
+    /// There is nothing at that path, or a link there points at nothing.
     Missing,
-    /// The system would not hand the file over: no permission, a directory, a broken
-    /// link.
+    /// The system would not hand the file over: no permission, or not a file at all.
     Unreadable(String),
     /// Not text at all, so nothing can be said about where it goes wrong.
     NotText,
@@ -772,11 +771,12 @@ pub(super) fn session_beside(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-// `pub(super)` so the rest of the module's tests build on the fixtures declared here.
 /// No part of a row, which a saved entry leaves out.
 fn is_zero(into: &u16) -> bool {
     *into == 0
 }
 
+// `pub(crate)` so the rest of the module's tests, and the crate's through `project`, build
+// on the fixtures declared here.
 #[cfg(test)]
 pub(crate) mod tests;

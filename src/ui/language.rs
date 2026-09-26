@@ -577,8 +577,10 @@ pub(crate) struct Talking(pub(crate) State<Language>);
 /// Whether an answer naming `run` is about the server the app still has. One whose run
 /// has moved on answers a question nobody has any more, and is dropped.
 ///
-/// An answer carrying a [`Ticket`] is taken as naming nothing instead, so whoever still
-/// holds its question gives up on it.
+/// A hover or an answer to an [`LspJob::Ask`] is taken as naming nothing instead, so
+/// whoever still holds its question gives up on it. A file's names are dropped like the
+/// rest: a question held from the old run is not one [`Linked::pending`] waits on, so a
+/// new one is asked of the run there is now.
 ///
 /// A function so the read ends with it: every caller writes the state this was read from,
 /// and a guard held across that write panics.

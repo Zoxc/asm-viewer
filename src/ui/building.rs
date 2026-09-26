@@ -5,7 +5,7 @@
 //! (`src/ui/pad.rs`): the work is blocking so it goes to a thread of its own, and it is
 //! **one** thread so that the project's directory has a single writer — the debug-lines
 //! edit cannot land inside the build that is reading the same manifest. It is the one
-//! worker of the four that supersedes nothing.
+//! worker of that shape that supersedes nothing.
 //!
 //! The state is a root context and not the Project tab's own, because a tab that is not on
 //! screen is unmounted: a build has to survive the reader looking at something else while

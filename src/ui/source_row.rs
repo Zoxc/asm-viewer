@@ -19,7 +19,7 @@ use super::*;
 /// and everything a row's names and its menu reach for.
 ///
 /// Built once per render of the list and handed to every row as one `Rc`, so a row clones
-/// a refcount and not six values. **The states are consumed where the list renders**,
+/// a refcount and not nine values. **The states are consumed where the list renders**,
 /// since a handler may not run a hook and every one of these is read from a handler: the
 /// menu, the press that follows a link, the pointer moving onto a name.
 pub(crate) struct Common {

@@ -4,9 +4,10 @@
 use super::*;
 
 /// The four modifiers a gesture is spelt in: the platform's command key -- Ctrl, or Cmd
-/// on a Mac -- Shift and Alt. A lock is none of them, and is masked off here: Caps Lock
-/// and Num Lock arrive in the same set as the four, so a chord compared against the set
-/// whole would go unanswered on a keyboard with either of them on.
+/// on a Mac -- Shift and Alt. A lock is none of them, and is masked off here. freya 0.4
+/// sends only the four, but `Modifiers` has bits for Caps Lock and Num Lock, and a chord
+/// compared against a set holding either would go unanswered. What Caps Lock does to a
+/// chord is the letter's case, which [`Stroke::is`] takes either way.
 pub(crate) fn held(modifiers: Modifiers) -> Modifiers {
     modifiers & (Modifiers::CONTROL | Modifiers::META | Modifiers::SHIFT | Modifiers::ALT)
 }

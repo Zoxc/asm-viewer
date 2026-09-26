@@ -1,7 +1,7 @@
 //! The row each list has picked out, and which of two colours it is drawn in.
 //!
 //! A lit row used to be one fact: the row **is** what the tab on screen shows. Four lists
-//! lit a row that way -- Objects, Symbols, History, Locations -- the other four lit none,
+//! lit a row that way -- Objects, Symbols, History, Locations -- the other three lit none,
 //! and there was no way to point at a row without opening what it names. **Alt+press picks
 //! a row out and opens nothing**, the same Alt that says a press on a link is not a door
 //! this time (`ui/marks.rs`), and that needs a selection the list owns: nothing about the
@@ -26,8 +26,8 @@
 //! list's [`Picking`] carries to every row.
 //!
 //! **The pick is the list's cursor**, which is what makes a list something the keyboard can
-//! be used in: Up and Down move it ([`Picking::stepped`]), Home, End and the two page keys
-//! move it further ([`Picking::jumped`]), the list scrolling to keep it in view, Left and
+//! be used in: Up, Down and the two page keys move it ([`Picking::stepped`]), Home and End
+//! put it at an end ([`Picking::jumped`]), the list scrolling to keep it in view, Left and
 //! Right fold the row it is on ([`Picking::folded`]), Enter opens it the way pressing its
 //! row would ([`Picking::entered`]), and Escape hands the keyboard back to the tab on
 //! screen ([`Picking::to_the_tab`]). What each list answers with is its [`ListKeys`],
@@ -145,7 +145,7 @@ pub(crate) fn chosen(selected: bool, focused: bool) -> Chosen {
 }
 
 /// What acting on a row did, which is what says where the keyboard goes: a row that opened
-/// a tab hands it over when it was Enter that opened it, and one that folded a group or
+/// a tab hands it over, whether a press or Enter opened it, and one that folded a group or
 /// opened nothing keeps it, there being nothing new to read and nowhere for it to go.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Pressed {
@@ -277,12 +277,12 @@ impl ListKeys {
     }
 
     /// The keys over a flat list: `pick` says what a row is and `open` what pressing one
-    /// does, each asked of the row itself. Which list the three closures index is settled
-    /// here, and so is what they answer past its end.
+    /// does, each asked of the row itself. Which list the closures index is settled here,
+    /// and so is what they answer past its end.
     ///
-    /// One [`Rc`] of the rows, shared by all three: the arrows ask what a row is, Enter
-    /// asks what pressing one does, and Left and Right ask which way it folds, and all
-    /// three are the list the panel is drawing rather than one worked out again.
+    /// One [`Rc`] of the rows, shared by both: the arrows ask what a row is and Enter asks
+    /// what pressing one does, and both are the list the panel is drawing rather than one
+    /// worked out again. Left and Right do nothing here.
     pub(crate) fn over<L: Stepped + 'static>(
         rows: L,
         pick: impl Fn(&L::Row) -> Pick + 'static,
@@ -442,8 +442,8 @@ impl Picking {
         Some(at)
     }
 
-    /// Home, End and the two page keys: the pick put on `at`, clamped to the list, and
-    /// where it landed for the list to scroll to.
+    /// Home and End: the pick put on `at`, clamped to the list, and where it landed for the
+    /// list to scroll to.
     ///
     /// [`Picking::stepped`]'s counterpart for the keys that name a row rather than a
     /// distance: nothing is read of the pick that was there, so neither key cares whether

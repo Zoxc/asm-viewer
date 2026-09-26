@@ -230,9 +230,9 @@ impl iced_x86::FormatterOutput for Formatted {
     /// plain `Number`. Record where it lands, the way [`write_symbol`](Self::write_symbol)
     /// records a substituted name: it is the span the UI makes clickable.
     ///
-    /// The *first* such span, since a far branch writes its selector and its offset both
-    /// this way; the decode loop keeps the mark only for a row whose operand names an
-    /// address of its own.
+    /// The *first* such span, though the formatter writes at most one: a far branch writes
+    /// only its offset this way, and its selector as a `SelectorValue`. The decode loop
+    /// keeps the mark only for a row whose operand names an address of its own.
     fn write_number(
         &mut self,
         _instruction: &iced_x86::Instruction,

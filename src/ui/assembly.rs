@@ -993,8 +993,8 @@ pub(crate) struct InstructionRow {
     /// row. Worked out by the list too, so a row re-renders on its own wash changing and
     /// not on every row a drag passes over.
     pub(crate) wash: Wash,
-    /// The columns of this row inside the pane's character selection, worked out by the
-    /// list for the reason `selected` is (`RowChars`).
+    /// The columns of this row inside the pane's character selection, worked out in
+    /// [`InstructionRow::at`] for the reason `wash` is (`RowChars`).
     pub(crate) chars: RowChars,
     /// What the find bar is looking for, compiled once per render of the list and shared
     /// by every row of it; `None` where no bar is open (`find_bar.rs`).

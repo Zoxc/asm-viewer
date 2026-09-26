@@ -7,11 +7,10 @@ fn at(address: u64) -> SectionAddress {
     SectionAddress::new(address)
 }
 
-/// The three spellings, exactly as they are written into `project.toml` and the session
-/// file. A bookmark on one of these resolves by its name alone once the binary has been
-/// rebuilt, so a changed spelling loses it silently.
+/// The three spellings, exactly as a reader reads them. None is saved: a
+/// bookmark keeps which name it is and the address, so a changed spelling loses nothing.
 #[test]
-fn the_three_names_are_spelled_as_they_are_saved() {
+fn the_three_names_are_spelled_as_they_are_read() {
     assert_eq!(MadeUp::EntryPoint.to_string(), "<entry point>");
     assert_eq!(
         MadeUp::Function(at(0x140001000)).to_string(),

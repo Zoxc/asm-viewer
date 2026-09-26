@@ -264,14 +264,10 @@ impl Find {
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Finds {
     bars: HashMap<Where, Find>,
-    /// Where a write for a bar that has gone goes.
-    ///
-    /// **A bar can close while its box is still taking events.** freya emits every event
-    /// of one press against the tree it measured before any of them ran, so the press
-    /// that closes a bar is followed, in that same batch, by the box's own global press
-    /// writing through a `Writable` mapped through this table by a key that has gone. The
-    /// index has to answer for it, and it answers here -- into a bar nothing draws, and
-    /// which cannot reopen one, an entry and not a flag being what says a bar is open.
+    /// What [`Finds::get`] answers for a bar that is not open: an empty one, which nothing
+    /// draws and which cannot open one, an entry and not a flag being what says a bar is
+    /// open. [`Finds::get_mut`] falls back on it too, so its callers need not unwrap; each
+    /// of them writes only to a bar it has found open, so nothing is ever written here.
     gone: Find,
 }
 
@@ -652,8 +648,8 @@ impl Component for FindBar {
             .width(Size::fill())
             .background(palette().header_bg)
             .border(top_hairline())
-            // The three chords the toggles are pressed by, the same three in all four
-            // boxes. On the bar and not in the box's own hook: `box_keys` declines every
+            // The three chords the toggles are pressed by, the same three in every
+            // box. On the bar and not in the box's own hook: `box_keys` declines every
             // chord before it, so a chord arrives here by bubbling out of the box, and
             // this rect is the ancestor it bubbles to (`ui/filter_bar.rs`).
             .on_key_down(move |e: Event<KeyboardEventData>| {

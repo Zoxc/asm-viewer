@@ -3,8 +3,9 @@
 //!
 //! [`source_side`] is the one place either pane decides which file is up, so the pane and
 //! the effect that drops its picked-out rows cannot disagree about which listing is being
-//! shown. Only the symbol's **own** file is ever drawn, never the rest of
-//! `LineInfo::files`.
+//! shown. It draws one file at a time: for an object or a symbol, the symbol's own file,
+//! unless the run picked out in the pane is in another file `LineInfo::files` names; for
+//! an object's code, the file of the instruction picked out.
 //!
 //! A row and everything it draws is `source_row.rs`, the bar over the pane
 //! `source_bar.rs`.
@@ -53,11 +54,10 @@ impl PartialEq for SourceList {
 /// on a guess.
 ///
 /// A run of the pane's own is a run of the file it is showing, which [`Owing::row`]
-/// answers. The other pane's run is answered here by the line its first placed
-/// instruction came from, which `places` reads off the listing: nothing to scroll to when
-/// that is a file this pane is not showing -- an inlined header's line 42 is not line 42
-/// of the file on screen -- nor when the line is past the end of a file that has moved on
-/// since it was compiled.
+/// answers. The other pane's run is answered here by the first of its places, as
+/// `places` reads them off the listing, that is in the file on screen: nothing to scroll
+/// to when none is -- an inlined header's line 42 is not line 42 of the file on screen --
+/// nor when the line is past the end of a file that has moved on since it was compiled.
 fn owed_file_row(
     owing: &Owing,
     file: &Arc<Path>,

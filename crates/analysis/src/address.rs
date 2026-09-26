@@ -18,9 +18,10 @@ use std::fmt;
 /// An address in one section's own terms: what a file states for its sections and its
 /// symbols, what a symbol's listing draws, and what the bytes of a section are sliced by.
 ///
-/// In a linked image these are the real addresses. In a relocatable object every code
-/// section starts at 0, so one of these alone does not say which code it is: that is
-/// [`PlacedAddress`]'s job, and [`Section::place`](crate::Section::place) is the way across.
+/// In a linked image these are the real addresses. In a relocatable object code sections
+/// mostly start at 0 and may share addresses, so one of these alone does not say which code
+/// it is: that is [`PlacedAddress`]'s job, and [`Section::place`](crate::Section::place) is
+/// the way across.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SectionAddress(u64);
 
@@ -168,11 +169,12 @@ impl SectionAddress {
     /// This address where **nothing placed it**: [`placed`](Self::placed) by [`Bias::NONE`],
     /// which is the same number in the other space.
     ///
-    /// Two cases, and they are the whole of it: a file with no layout, which is every file
-    /// that is not a relocatable object, since `section_biases` gives out biases for those
-    /// alone; and a symbol in no section, which is in no listing to be placed in. Named, so
-    /// that a caller says which of those it is standing on rather than passing a bias it
-    /// does not have.
+    /// Three cases, and they are the whole of it: a file with no layout, which is every
+    /// file that is not a relocatable object, since `section_biases` gives out biases for
+    /// those alone; a symbol in no section, which is in no listing to be placed in; and the
+    /// rows handed to [`LineInfo::new`](crate::LineInfo::new), which are the caller's own
+    /// numbers, whatever the object. Named, so that a caller says which of those it is
+    /// standing on rather than passing a bias it does not have.
     pub(crate) fn unplaced(self) -> PlacedAddress {
         self.placed(Bias::NONE)
     }

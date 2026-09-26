@@ -135,8 +135,9 @@ pub enum LoadMessage {
     /// as `format` says: most often LLVM bitcode, which link-time optimization writes in
     /// place of an object.
     UnsupportedMembers { format: Unsupported, count: usize },
-    /// `count` of an archive's members are not object files this reader can read: an
-    /// archive inside the archive, or bytes of no known kind.
+    /// `count` of an archive's members are not object files this reader can read: bytes of
+    /// no known kind, or of a kind it reads that would not parse. An archive inside the
+    /// archive is [`UnsupportedMembers`](Self::UnsupportedMembers).
     UnreadableMembers { count: usize },
     /// An archive that holds no object file at all.
     EmptyArchive,

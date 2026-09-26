@@ -1,12 +1,12 @@
 //! Reading binaries onto the objects list: the placeholder a file is in the list as from
-//! the moment it is asked for, the one worker thread, the batches its answers are drained
-//! in, and which load each answer belongs to.
+//! the moment it is asked for, the worker thread each load is read on, the batches its
+//! answers are drained in, and which load each answer belongs to.
 //!
 //! [`open_binaries`] is **the one path by which anything is ever added to `objects`**. The
-//! toolbar's Open, a session restore and a build's reopening all go through it or its two
-//! halves, so they cannot differ about what opening a file means. Nothing here opens or closes a tab: the
-//! opposite number is `close_binary` (`documents.rs`), which cancels the load as its last
-//! act.
+//! Objects panel's "Add binaries...", a Files row's "Open file", a session restore and a
+//! build's reopening all go through it or its two halves, so they cannot differ about what
+//! opening a file means. Nothing here opens or closes a tab: the opposite number is
+//! `close_binary` (`documents.rs`), which cancels the load as its last act.
 //!
 //! [`Loading`] sits here and not in `state.rs`, a context living with the mechanism that
 //! fills it.
@@ -86,9 +86,9 @@ pub(crate) async fn read_binaries(
     paths: Vec<PathBuf>,
 ) {
     // Unbounded: the worker should run flat out. What stops it is the receiver going,
-    // which is `take_load` deciding that nothing more from this load is wanted -- and is
-    // what keeps a closed 331 MB file from being parsed to the end into a value that will
-    // be dropped.
+    // which is `take_load` deciding that nothing more from this load is wanted. The worker
+    // learns that only when a send fails, so a closed archive stops a member or two later,
+    // and a closed object file is parsed to the end, its first answer, and dropped.
     let events = stream("the binary reader", None, move |emit| {
         open_files_streaming(paths, emit)
     });
@@ -103,7 +103,9 @@ pub(crate) async fn read_binaries(
 /// load *and* the path, since a file closed and reopened mid-parse is two loads.
 ///
 /// Returning is what stops the worker: it drops the receiver, the next `send_blocking`
-/// fails, and the walk breaks where it stands.
+/// fails, and the walk breaks where it stands. A close sends nothing here, so it is
+/// noticed only when the worker's next answer wakes this: an object file is always parsed
+/// to the end.
 pub(crate) async fn take_load(
     mut objects: State<Vec<Arc<Object>>>,
     mut loading: State<Loads>,

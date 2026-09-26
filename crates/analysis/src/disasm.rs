@@ -52,8 +52,7 @@ pub(crate) struct Code<'a> {
     /// The symbol's own bytes, from its first to its last.
     pub bytes: &'a [u8],
 
-    /// The address `bytes[0]` sits at. In a relocatable object this is an offset into the
-    /// section and typically 0; nothing here depends on it being either.
+    /// The address `bytes[0]` sits at: the symbol's own, in its section's terms.
     pub address: SectionAddress,
 
     /// The section the bytes came from, for its relocations. [`None`] for a symbol with no
@@ -244,9 +243,10 @@ pub enum Operand {
     /// listing that is not one symbol's — a whole section's — cannot say up front whether
     /// the target has a row, only where it is, and finds the row when it decodes there.
     /// Nothing is judged here: a branch out of the symbol, into the middle of an
-    /// instruction, or `jmp $` all keep their address, and the four kinds
-    /// [`Assembly::edges`] drops keep their span. A caller that wants to *follow* one pairs
-    /// this with [`Assembly::edge_from`], which is what says the target has a row.
+    /// instruction, or `jmp $` all keep their address and their span: three of the four
+    /// kinds [`Assembly::edges`] drops, the fourth being a relocated one. A caller that
+    /// wants to *follow* one pairs this with [`Assembly::edge_from`], which is what says
+    /// the target has a row.
     Branch {
         address: SectionAddress,
 

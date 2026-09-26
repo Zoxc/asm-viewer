@@ -23,9 +23,9 @@ use super::*;
 ///
 /// `objects` and `recent` travel with the job because a worker thread can read no UI
 /// state. They are **not** the question: two asks that differ only in what was open are
-/// the same question asked twice, which is why [`Ask`] and not this is what supersession
-/// compares. What was open decides only whether a source line's answer still holds
-/// ([`Analyzed::asked`]).
+/// the same question asked twice, which is why an answer is kept by comparing its [`Ask`]
+/// and not this ([`Analyzed::take`]). What was open decides only whether a source line's
+/// answer still holds ([`Analyzed::asked`]).
 pub(crate) enum Question {
     Study(Symbol),
     Resolve {
@@ -219,7 +219,7 @@ impl Asked {
 /// Requests supersede: the queue is drained to its newest entry of each kind
 /// ([`newest`]), so what the reader clicked past is dropped before it is started.
 ///
-/// **One worker and not two**, now that there are two kinds of question: `DebugInfo::index`
+/// **One worker for all four kinds of question**, and not one each: `DebugInfo::index`
 /// is a `OnceLock` and the source index's build holds the same backend mutex `line_info`
 /// and `extent` take, so a second thread asking a source question would block in
 /// `get_or_init` rather than race usefully -- and two producers writing one [`Analyzed`]

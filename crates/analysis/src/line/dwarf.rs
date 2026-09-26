@@ -158,7 +158,7 @@ impl LineBackend for Dwarf {
     /// The extent of the `DW_TAG_subprogram` beginning at `probe`, or [`None`] when no unit
     /// covers the address or the subprogram that does begins elsewhere.
     fn extent(&self, probe: PlacedAddress) -> Option<u64> {
-        // `addr2line`'s `Context::find_units` asks its range index about `probe + 1` with a
+        // `addr2line`'s `ResUnits::find` asks its range index about `probe + 1` with a
         // plain addition, so the very last address in the space panics. Declined here rather
         // than left to the guard: this one is ours to see coming.
         if probe == PlacedAddress::MAX {
@@ -193,8 +193,8 @@ impl LineBackend for Dwarf {
         let context = recovered(&self.context);
 
         // The whole address space in one pass. Safe where `extent` had to decline `u64::MAX`:
-        // that unchecked `probe + 1` is in `find_units`, and this goes through
-        // `find_units_range`, which takes the bound as given.
+        // that unchecked `probe + 1` is in `ResUnits::find`, and this goes through
+        // `ResUnits::find_range`, which takes the bound as given.
         for (range, location) in location_ranges(&context, PlacedAddress::ZERO..PlacedAddress::MAX)
         {
             // A row naming no file or no line points at nothing a reader could ask for.

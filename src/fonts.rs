@@ -497,8 +497,8 @@ mod windows {
     }
 }
 
-/// The desktop's answer for one of the two fonts, asked once per process: a lookup is one
-/// or two subprocesses, and the settings page re-[`resolve`]s both fonts on every change.
+/// The desktop's answer for one of the two fonts, asked once per process: a lookup is up
+/// to four subprocesses, and the settings page re-[`resolve`]s both fonts on every change.
 ///
 /// One `OnceLock` per font rather than one for the pair, because [`font`] declines to ask
 /// about a font both of whose halves the reader has chosen, and a shared cell would make

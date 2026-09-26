@@ -2,15 +2,15 @@
 //! [`STALE_SOURCE`], the line drawn under it where that file is not the one the binary was
 //! built from.
 //!
-//! **A companion's name is a door**: pressing it opens that file as a source-driven tab,
-//! as pressing a source file's row in the Files view does, and until the source search
-//! lands those are the two ways into one. Both go through [`open_source_tab`], which names
-//! the document by the spelling an open tab already has for the file: what the bar carries
-//! is the debug info's path, which is rarely the reader's own spelling of it. A
-//! **subject** is that tab already, so its name is a name and nothing to press. Either way the bar says which file is up, which the
-//! tab's own chip only has room for the last part of. At the end of the bar, where this
-//! pane is the one the tab is driven from, is [`PaneToggle`]; the Assembly pane's own bar
-//! carries it under the same rule.
+//! **A companion's name is a door**: pressing it opens that file as a source-driven tab, as
+//! pressing a source file's row in the Files view does. Both go through
+//! [`open_source_tab`], which names the document by the spelling an open tab already has
+//! for the file: what the bar carries is the debug info's path, which is rarely the
+//! reader's own spelling of it. A **subject** is that tab already, so its name is a name
+//! and nothing to press. Either way the bar says which file is up, which the tab's own chip
+//! only has room for the last part of. At the end of the bar, where this pane is the one
+//! the tab is driven from, is [`PaneToggle`]; the Assembly pane's own bar carries it under
+//! the same rule.
 
 use super::*;
 

@@ -586,7 +586,7 @@ leaves this list when it is. That is a move made on request, like everything els
   directory with `ignore` and do not follow one, and opened from a Files view row, which
   reads the directory itself and gated the press on `source::showable` -- so one file was
   invisible in two places and openable in a third. It is skipped everywhere now:
-  `source::fits` asks `symlink_metadata`, which answers about the path and not what it
+  `source::showable` asks `symlink_metadata`, which answers about the path and not what it
   points at, and the Files view drops a symlink from a level it reads. The project's own
   root is still resolved, so a project reached through a symlinked directory is read whole.
 

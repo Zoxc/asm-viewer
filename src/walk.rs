@@ -29,9 +29,9 @@ fn walker(root: &Path) -> Walk {
         // without this a project directory that is not one has its `target/` walked whole.
         .require_git(false)
         // Written out rather than left to the default, being the app's rule and not the
-        // crate's: no symlink is followed anywhere (`source::fits`), so what is offered
-        // here is what a press on it would open. The root itself is still resolved, so a
-        // project reached through a symlinked directory is walked whole.
+        // crate's: no source file is read through a symlink (`source::showable`), so what
+        // is offered here is what a press on it would open. The root itself is still
+        // resolved, so a project reached through a symlinked directory is walked whole.
         .follow_links(false)
         // The bound the source pane reads by: a file it would refuse to show is a file no
         // hit in it could open, and one the finder could not open either.
@@ -93,8 +93,9 @@ pub enum WalkEvent {
 pub fn files(root: &Path) -> impl Iterator<Item = DirEntry> {
     walker(root).flatten().filter(|entry| {
         // The entry's own kind, the walk following no symlink, so a symlink fails this
-        // as it fails `source::showable`. An entry whose kind is unknown is one `ignore`
-        // could not stat, and is skipped too.
+        // as it fails `source::showable`. The kind is unknown only for stdin, which a walk
+        // never yields; an entry `ignore` could not read is an `Err`, which `flatten`
+        // drops.
         entry.file_type().is_some_and(|kind| kind.is_file())
     })
 }

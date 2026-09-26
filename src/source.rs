@@ -18,8 +18,8 @@ use crate::counter;
 /// guess at what source looks like: a debug-info string that happens to name a disk image
 /// must not be loaded to find that out.
 ///
-/// Also the cap on the other text files a project's tree holds and the app reads: the
-/// project file, a manifest and `.vscode/settings.json` ([`read_text_in`]).
+/// Also the cap on the other text files a project's tree holds and the app reads: a
+/// manifest and `.vscode/settings.json` ([`read_text_in`]), and the project file.
 pub const MAX_SIZE: u64 = 16 * 1024 * 1024;
 
 /// What a path is called without its directory, and the whole path where it has no name --
@@ -110,8 +110,8 @@ pub fn read_text_in(path: &Path) -> io::Result<String> {
 /// a UI thread.
 ///
 /// **`symlink_metadata` and not `metadata`**: this answers about the path itself, so a
-/// symlink is not a file here whatever it points at. **The app follows none anywhere**,
-/// and this is where that is written. The walk of a project's directory (`crate::walk`)
+/// symlink is not a file here whatever it points at. **No source file is read through
+/// one**, and this is where that is written. The walk of a project's directory (`crate::walk`)
 /// and the Files view's read of one level (`crate::files`) list no symlink to match, so a
 /// file is offered by all three or by none. Not following also costs one `lstat` on a
 /// broken link or a loop, where following would chase the loop to the kernel's limit for

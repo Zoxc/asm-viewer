@@ -4,11 +4,11 @@
 //! name in a file **is**, which is what says which of them are links at all.
 //!
 //! Hand-rolled over `serde_json` rather than a protocol crate. What is spoken here is
-//! eight messages wide -- the handshake's two, those five, and a reply to whatever the
-//! server asks of us -- and a crate for it would bring a type for every request in the
-//! specification and an async runtime's worth of machinery to drive them (`AGENTS.md`'s
-//! pinning rules; `serde_json` is already in the tree and the manifest already blesses it
-//! for a protocol rather than a file).
+//! eleven messages wide -- the handshake's two, those five, a hover, the two that say which
+//! files are open, and a reply to whatever the server asks of us -- and a crate for it
+//! would bring a type for every request in the specification and an async runtime's worth
+//! of machinery to drive them (`AGENTS.md`'s pinning rules; `serde_json` is already in the
+//! tree and the manifest already blesses it for a protocol rather than a file).
 //!
 //! **One request is in flight at a time**, so there is no table of outstanding ids: a
 //! request writes its message and waits for the answer to that id. Two callers wanting
@@ -572,7 +572,7 @@ impl std::ops::DerefMut for Server {
     }
 }
 
-/// How a program that ended before the handshake is named beside its last words, and
+/// How a program that ended before the handshake is named when it said nothing, and
 /// [`None`] where it did not end by itself: still going when the wait ran out, or taken by
 /// [`Handle::stop`], which this app asked for.
 fn ended_by_itself(ended: Option<Ended>) -> Option<String> {
@@ -1027,7 +1027,7 @@ pub(crate) struct Lines {
 struct Text {
     text: String,
     /// The byte range of each line, cut as [`str::lines`] cuts them -- the `\n` gone, and
-    /// a `\r` before it gone with it.
+    /// a `\r` before it gone with it -- except that a `\r` ending the file goes too.
     rows: Vec<Range<usize>>,
 }
 
@@ -1230,9 +1230,10 @@ impl Progress {
 
 /// What to answer a request the server made of us, as a result or as an error.
 ///
-/// A client that declared no capabilities should be asked nothing, so every arm here is a
-/// server going beyond what it was told: the two that have a harmless empty answer get it,
-/// and the rest are told the method is not there rather than being left waiting.
+/// The one request this client invited is `window/workDoneProgress/create`, which declaring
+/// progress costs ([`Talk::initialize`]); every other is a server going beyond what it was
+/// told. The four that have a harmless empty answer get it, and the rest are told the method
+/// is not there rather than being left waiting.
 fn answer_to(method: &str, message: &Value) -> Result<Value, Value> {
     match method {
         // One setting object per item asked about, each of them "nothing to override".

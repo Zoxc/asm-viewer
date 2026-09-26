@@ -65,8 +65,9 @@ pub struct Lanes {
     /// The instructions a separator row is drawn above, ascending: every row a branch
     /// lands on except the symbol's first. See [`Lanes::listing_rows`].
     separators: Vec<usize>,
-    /// How many lanes the gutter is drawn with: the deepest nesting this symbol reaches,
-    /// capped at [`MAX_LANES`], and 0 for a symbol whose gutter is not drawn at all.
+    /// How many lanes the gutter is drawn with: as many as the greedy assignment used, which
+    /// is at least the deepest nesting this symbol reaches and can be more, capped at
+    /// [`MAX_LANES`], and 0 for a symbol whose gutter is not drawn at all.
     pub(crate) width: usize,
 }
 

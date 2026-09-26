@@ -2,9 +2,9 @@
 //!
 //! The two ask different questions and hold their answers in different states, but what
 //! comes back is the same shape -- places under the file each is in (`src/grouped.rs`) --
-//! and so is the drawing of it. One component for both, with [`Folding`] naming the two
-//! things they differ in: which state a fold is written to, and which panel's pick the row
-//! is drawn against (`ui/picks.rs`).
+//! and so is the drawing of it. One component for both, with [`Folding`] naming the one
+//! thing they differ in: which state a fold is written to. The pick a row is drawn against
+//! is its pane's, handed down in [`ListStates`] (`ui/picks.rs`).
 
 use super::*;
 use crate::grouped::{Row, Rows};
@@ -60,8 +60,7 @@ impl Place for references::Reference {
     }
 }
 
-/// Which panel's answer a row belongs to: the state its fold is written to, and which
-/// panel's pick it is drawn against.
+/// Which panel's answer a row belongs to: the state its fold is written to.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Folding {
     /// The Search panel's hits.

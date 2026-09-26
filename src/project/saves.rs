@@ -63,9 +63,9 @@ pub(super) struct Saves {
     /// was entered. Held so that [`super::record`] and [`super::flush`] — a timer and a close hook,
     /// neither of them in the component tree — have one without being handed one.
     store: Option<Store>,
-    /// The project file everything is written into, or `None` until one has been reopened
-    /// or created. Otherwise claimed on the first write that has anything to say, so a run
-    /// where nothing was ever opened leaves no file behind.
+    /// The project file everything is written into, or `None` while no project is open.
+    /// Only [`Saves::opened`] and [`Saves::moved_to`] set it, and nothing is written
+    /// without it, so a run where nothing was ever opened leaves no file behind.
     open: Option<PathBuf>,
     /// Which project this is. Stamped onto both halves of every write, since a session
     /// carrying another id is one the next load throws away.

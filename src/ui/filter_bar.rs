@@ -1,9 +1,9 @@
 //! The bar over a sidebar list, its three toggles, and the pane the list is drawn in.
 //!
-//! One component with three uses, whose `Filter` is a `use_state` in the tab that owns the
-//! list rather than a root context: a filter is a view of a list, never part of the
-//! session. What a filter leaves of a list is `filter::Filtered`; only the symbol lists
-//! earn a memo over it, Objects and History filtering where their rows are built.
+//! One component for every list with a filter, whose `Filter` is a `use_state` in the tab
+//! that owns the list rather than a root context: a filter is a view of a list, never part
+//! of the session. What a filter leaves of a list is `filter::Filtered`; only the symbol
+//! lists earn a memo over it, Objects and History filtering where their rows are built.
 
 use super::*;
 
@@ -44,9 +44,9 @@ impl Toggle {
         }
     }
 
-    /// The chord that flips it from the box beside it. The toggles are one thing in all
-    /// four boxes -- the three filter bars and the find bar -- so the three keys are too,
-    /// and each is answered on the bar the box is in and nowhere else.
+    /// The chord that flips it from the box beside it. The toggles are one thing in every
+    /// box -- each filter bar and the find bar -- so the three keys are too, and each is
+    /// answered on the bar the box is in and nowhere else.
     fn chord(self) -> Chord {
         match self {
             Toggle::Case => Chord::MatchCase,

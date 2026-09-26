@@ -32,8 +32,7 @@ pub(crate) fn tab_row_height() -> f32 {
 
 /// Height of a row drawn in the **fixed-width** font -- the instruction and source rows,
 /// the editor's own lines, a run's output -- and the `item_size` of the views over those.
-/// Two heights and not one because no row mixes the two fonts. This is also the height
-/// `row_at`/`row_offset` convert against.
+/// Two heights and not one because no row mixes the two fonts.
 pub(crate) fn code_row_height() -> f32 {
     row_height_for(fonts().mono.size())
 }
@@ -55,7 +54,7 @@ pub(crate) fn link_box_height() -> f32 {
 }
 
 /// How tall anything holding a box to type in is: a **list** row and the air around it.
-/// The two filter bars, the find bar, the settings page's rows and the scratchpad's
+/// The filter bars, the find bar, the settings page's rows and the scratchpad's
 /// dependency rows, every one of them drawn in the interface font.
 ///
 /// The six is air and not fit. freya sizes a compact `Input` from its own text and inner
@@ -191,7 +190,7 @@ pub(crate) const GLYPH_GAP: f32 = 6.0;
 
 /// The gap between what a menu row says and the mark after it: the arrow on a row that
 /// opens a submenu, and the key beside an item that has one (`marked_label`,
-/// `src/ui/strip.rs`).
+/// `src/ui/menus.rs`).
 ///
 /// Wide enough that the mark does not read as the last word of the name, and no wider: a
 /// menu is as wide as its widest row, so the gap is paid for by every row in it.
@@ -277,7 +276,7 @@ pub(crate) fn source_line_number_width() -> f32 {
 
 /// How wide the Scratchpad view's list of pads is.
 ///
-/// A fixed width and not a `ResizableContainer`, which is what the two splits in this app
+/// A fixed width and not a `ResizableContainer`, which is what the three splits in this app
 /// that a reader can drag are: a tab that is not the one on screen is unmounted, and a
 /// `ResizablePanel` forgets its size on unmount — so a draggable width
 /// here would need a number kept at the root, the way a `Split` is, for something

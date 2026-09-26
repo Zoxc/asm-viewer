@@ -331,7 +331,7 @@ impl Cutting {
 /// [`languages::Language::grammar`] answers, in freya's type.
 ///
 /// The wrapping is the whole of it. Which grammar a file gets is a per-language fact and
-/// is decided in `source.rs` with the rest of them; `EditorLanguage` is the editor's, so
+/// is decided in `languages.rs` with the rest of them; `EditorLanguage` is the editor's, so
 /// putting one together is the one part that has to be up here.
 pub(crate) fn language(path: &Path) -> Option<EditorLanguage> {
     let (grammar, query) = languages::Language::of(path)?.grammar()?;

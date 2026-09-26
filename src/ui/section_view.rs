@@ -10,7 +10,8 @@
 //! applies it against in the same run so that a chunk landing above the viewport never
 //! draws one frame in the wrong place. The other works out the **window** -- the stretches
 //! within a buffer of screens of the viewport that are not held, nearest the reader first
-//! -- and asks for it through `Window`, which the analysis worker's sender reads.
+//! -- and asks for it by writing a `CodeAsk` into `Sectioned::window` (`ui/reading.rs`),
+//! which `use_code_asks` sends on to the analysis worker.
 
 use super::*;
 use crate::counter;
@@ -104,8 +105,8 @@ impl PartialEq for SectionRows {
             // view alone, as Left, Right, Home and End doing nothing.
             && self.chars == other.chars
             && self.marking == other.marking
-        // `asking` and `links` compare equal always -- handles the root never replaces
-        // -- so they are left out.
+        // `asking` compares equal always -- handles the root never replaces -- so it is
+        // left out.
     }
 }
 
@@ -165,7 +166,7 @@ struct TextOf {
     text: String,
     role: Role,
     /// The symbol a label names, which a **Ctrl**-press on the label opens as a tab of
-    /// its own; `None` for the other two.
+    /// its own; `None` for the other three.
     opens: Option<Arc<SymbolData>>,
 }
 

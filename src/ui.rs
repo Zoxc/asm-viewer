@@ -265,7 +265,7 @@ impl Component for NavButton {
 
         // A button with nowhere to go keeps its tooltip and loses everything else: no
         // wash, no press, and the chevron dimmed. `bar_button` drops the first two; the
-        // colour is this button's own, being the only disabled drawing in the app.
+        // colour is the caller's, as every dead control dims its own drawing.
         let colour = match live {
             true => palette().icon_fg,
             false => dimmed(palette().icon_fg, palette().pane_bg),
@@ -294,8 +294,9 @@ impl Component for Toolbar {
             .horizontal()
             .width(Size::fill())
             .interactive(!sweeping)
-            // `Content::Flex` so the gap below is measured last, out of what the two controls
-            // left over, rather than claiming the bar and pushing them off its right edge.
+            // `Content::Flex` so the gap below is measured last, out of what the two groups of
+            // controls left over, rather than claiming the bar and pushing them off its right
+            // edge.
             .content(Content::Flex)
             .cross_align(Alignment::Center)
             .border(bottom_hairline())
@@ -312,9 +313,9 @@ impl Component for Toolbar {
                     // opening a menu.
                     .child(ProjectChip),
             )
-            // The bar's controls sit at its two ends, so the pair the reader reaches for
-            // without looking stays under the same corner however many controls Open grows
-            // neighbours.
+            // The bar's controls sit at its two ends, so the history pair the reader reaches
+            // for without looking stays in the right-hand corner however many controls the
+            // left end grows.
             .child(rect().width(Size::flex(1.0)))
             .child(
                 rect()
@@ -586,7 +587,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     // Whether a sweep is under way, out of that state and not read off it: see [`Sweeping`].
     provide(Sweeping(Memo::create(move || sweeping_in(&marked.read()))));
     // What a door is given: the three states it shares with the rest of the app, and the
-    // two halves of a landing, which it owns.
+    // four it owns -- the record of visits and the three a landing is kept in.
     let doors = provide(Doors {
         open,
         places,
@@ -825,8 +826,10 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
     use_save_on_change(states);
     use_land(doors, active, sectioned, keyboard);
     use_periodic_save();
-    // After the save effect on purpose: its empty baseline must be in place before the
-    // restore writes anything, so the restored session is seen as an ordinary change.
+    // Its place among the hooks does not matter: the restore runs here, in this render,
+    // and every effect's first run comes after it. What keeps the restore from reading as a
+    // change is the baselines `Saves::opened` sets as the project is opened
+    // (`enter_project`).
     use_restore_on_startup(states, opening);
 
     use_reading_of(active, objects, sectioned);
