@@ -43,6 +43,7 @@ pub fn functions(text: &str) -> Vec<Function> {
                 open.push(Open {
                     found: found.len() - 1,
                     grouped_at: scanner.grouped,
+                    depth_at: scanner.depth,
                     body_depth: None,
                 });
             }
@@ -101,6 +102,8 @@ struct Open {
     found: usize,
     /// How many `(`, `[` or `<` were open at the `fn` keyword.
     grouped_at: usize,
+    /// How many brackets of any kind were open at the `fn` keyword.
+    depth_at: usize,
     /// How deep the body's own brace put the scan, once the body has begun.
     body_depth: Option<usize>,
 }
@@ -124,10 +127,10 @@ impl Open {
         self.body_depth == scanner.depth.checked_add(1)
     }
 
-    /// A signature whose grouping has closed under it never had a body and never will:
-    /// `fn` inside a macro invocation's parentheses.
+    /// A signature whose bracket has closed under it never had a body and never will:
+    /// `fn` inside a macro invocation's parentheses or braces.
     fn stranded(&self, scanner: &Scanner) -> bool {
-        self.body_depth.is_none() && scanner.grouped < self.grouped_at
+        self.body_depth.is_none() && scanner.depth < self.depth_at
     }
 
     /// A signature that ends before its body began is a declaration -- a trait's, or an

@@ -422,17 +422,16 @@ fn b() {
 /// sat on the stack it hid the enclosing function's closing brace.
 #[test]
 fn a_signature_with_no_body_takes_nothing_else_with_it() {
-    // The grouping it was seen at closes -- a `fn` inside a macro's parentheses -- so it
-    // goes there, and the brace after it is the enclosing function's again.
-    let text = "\
-fn a() {
-    m!(fn b)
-}
-fn c() {
-    1
-}
-";
-    assert_eq!(named(&rust::functions(text)), [("a", 1, 3), ("c", 4, 6)]);
+    // The bracket it was seen in closes -- a `fn` inside a macro's parentheses or braces
+    // -- so it goes there, and the brace after it is the enclosing function's again.
+    for call in ["m!(fn b)", "m! { fn b }"] {
+        let text = format!("fn a() {{\n    {call}\n}}\nfn c() {{\n    1\n}}\n");
+        assert_eq!(
+            named(&rust::functions(&text)),
+            [("a", 1, 3), ("c", 4, 6)],
+            "{call}"
+        );
+    }
 
     // One left at the end of the text -- a file saved mid-edit -- takes only itself.
     let text = "\
@@ -453,20 +452,18 @@ fn c() {}
 }
 
 /// Where the brackets do not balance, a body ends at the close that takes the scan back
-/// out of the depth its brace opened at, whichever bracket that is. Here a `fn` inside a
-/// macro's parentheses hides the brace that would have ended the body, and the `)` that
-/// finally drops it is what ends it instead.
+/// out of the depth its brace opened at, whichever bracket that is. Here an unclosed `(`
+/// takes the brace that would have ended the body, and the `)` after it ends it instead.
 #[test]
 fn an_unbalanced_close_ends_an_open_body_where_it_stands() {
     let text = "\
 fn a() {
-    m!( fn b
-}
+    m!( b
 }
 )
 fn c() {}
 ";
-    assert_eq!(named(&rust::functions(text)), [("a", 1, 5), ("c", 6, 6)]);
+    assert_eq!(named(&rust::functions(text)), [("a", 1, 4), ("c", 5, 5)]);
 }
 
 /// Nothing in the text can make the scanner index past it: every shape of unfinished
