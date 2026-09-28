@@ -40612,6 +40612,35 @@ fn the_chord_again_scrolls_the_list_back_to_its_first_row() {
     assert_eq!(finder_selected(&test), first);
 }
 
+/// An empty box lists the visits, which no walk changes, so a walk still going is not
+/// what the panel says over one.
+#[test]
+fn an_empty_box_says_no_files_were_opened_while_the_walk_goes_on() {
+    let walks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "walked.rs"));
+        // The first walk ends and the second never does.
+        if walks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            let _ = emit(WalkEvent::Finished);
+        }
+    });
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, |_| !finder.peek().walking);
+    close_finder(finder);
+    settle(&mut test);
+
+    press_finder_chord(&states, finder, keys, dock);
+    settle(&mut test);
+
+    assert!(finder.peek().walking);
+    let said = labels(&test);
+    assert!(
+        said.iter()
+            .any(|label| label == "No files opened yet. Type to find one."),
+        "{said:?}"
+    );
+}
+
 /// The overlay is drawn as nothing at all until the chord, and the walk's files are what
 /// the box then picks out. Fails on a finder that draws its list before it is opened.
 #[test]

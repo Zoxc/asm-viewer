@@ -606,10 +606,11 @@ impl Component for FinderPanel {
 
         let body: Element = match (&state.root, rows) {
             (None, _) => note("No project directory. Set one in the Project view."),
-            (Some(_), 0) if state.walking => note("Reading the project's directory\u{2026}"),
+            // Before the walk's arm: what an empty box lists is not the walk's.
             (Some(_), 0) if state.typed.trim().is_empty() => {
                 note("No files opened yet. Type to find one.")
             }
+            (Some(_), 0) if state.walking => note("Reading the project's directory\u{2026}"),
             // The worker is a frame behind the box. Nothing is said about a query it has
             // not answered: *No files match* under a query that does match is worse than
             // a panel with only its box in it for the frame it takes.
