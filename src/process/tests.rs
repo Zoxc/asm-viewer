@@ -94,6 +94,18 @@ fn what_is_not_a_character_is_still_delivered() {
     assert_eq!(text, ["a\u{fffd}b", "\u{fffd}"]);
 }
 
+/// A line that ends inside a character with no cut in it is one row: only a cut is
+/// carried, and the end of the pipe is not one.
+#[test]
+fn a_line_ending_inside_a_character_is_one_row() {
+    let written: &[u8] = b"abc\xe2\x82";
+    let mut lines = Vec::new();
+    stream_lines(Cursor::new(written), Stream::Out, |line| lines.push(line));
+
+    let text: Vec<&str> = lines.iter().map(|line| &*line.text).collect();
+    assert_eq!(text, ["abc\u{fffd}"]);
+}
+
 /// The ordinary case, including the two things a naive `read_line` gets wrong: a Windows
 /// line ending left in the text, and a last line with no terminator being dropped.
 #[test]

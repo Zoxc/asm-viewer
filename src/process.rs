@@ -632,11 +632,16 @@ pub fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnM
             Ok(_) => {}
         }
         let ended = buffer.last() == Some(&b'\n');
+        // Only a read that filled the room was cut. One that stopped short of it without a
+        // newline stopped at the end of the pipe, where a character left unfinished stays so.
+        let cut_here = !ended && buffer.len() as u64 == MAX_LINE;
 
         // `error_len() == None` is exactly "an incomplete sequence at the end", so bytes
         // that are genuinely invalid still go through lossily below.
         carry = match std::str::from_utf8(&buffer) {
-            Err(error) if error.error_len().is_none() => buffer.split_off(error.valid_up_to()),
+            Err(error) if cut_here && error.error_len().is_none() => {
+                buffer.split_off(error.valid_up_to())
+            }
             _ => Vec::new(),
         };
         // The read was that character's first bytes and nothing else: no row yet.

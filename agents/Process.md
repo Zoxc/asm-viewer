@@ -161,7 +161,7 @@ about whatever asked for the program. **Two bounds, and each is a different fail
 wherever it lands, and a multi-byte character straddling it would be a replacement character on
 each of the two rows with the character itself on neither, so what is left of one is carried to the
 front of the next read. Only
-an incomplete sequence at the end is carried -- bytes that are genuinely invalid go through lossily,
+an incomplete sequence at the end of a cut row is carried -- bytes that are genuinely invalid go through lossily,
 as what a program writes is not this app's to reject. `MAX_OUTPUT_LINES` (5000) is what is kept,
 oldest first out, with `RunOutput::dropped` so the view can say the story is missing its beginning;
 it is a line cap and not a byte cap, because the view is a list of rows and a byte budget would make
