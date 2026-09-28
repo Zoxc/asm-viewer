@@ -27331,6 +27331,38 @@ fn a_caps_lock_that_acts_as_ctrl_is_learnt_from_its_release() {
     assert!(!*ctrl.peek());
 }
 
+/// **A Caps Lock tapped under a Ctrl the keyboard lost track of teaches nothing.** One
+/// flag stands for both Control keys, so letting go of one of two clears it while the
+/// other is held. Fails on learning from that tap: an ordinary Caps Lock is Ctrl from then
+/// on, for the rest of the run.
+#[test]
+fn a_caps_lock_under_the_other_ctrl_is_not_learnt() {
+    let (mut test, (keys, ctrl)) = TestingRunner::new(
+        bare_harness,
+        (100., 100.).into(),
+        |runner| {
+            let keys = runner.provide_root_context(provide_modifiers);
+            (keys, keys.ctrl)
+        },
+        1.,
+    );
+    let caps = Key::Named(NamedKey::CapsLock);
+    let control = Key::Named(NamedKey::Control);
+    test.sync_and_update();
+
+    // Left Ctrl down, Right Ctrl down and up: Left Ctrl is still held.
+    keys.down(&control, Modifiers::empty());
+    keys.down(&control, Modifiers::CONTROL);
+    keys.up(&control, Modifiers::CONTROL);
+    keys.down(&caps, Modifiers::CONTROL);
+    keys.up(&caps, Modifiers::CONTROL);
+    assert!(*ctrl.peek(), "the Caps Lock let go of the Ctrl still held");
+    keys.up(&control, Modifiers::CONTROL);
+    assert!(!*ctrl.peek());
+    keys.down(&caps, Modifiers::empty());
+    assert!(!*ctrl.peek(), "an ordinary Caps Lock was learnt as Ctrl");
+}
+
 /// The Bookmarks panel and nothing else, with the context-menu viewer a right-click on a
 /// row needs, over the project's states.
 fn bookmarks_harness() -> impl IntoElement {

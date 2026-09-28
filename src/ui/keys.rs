@@ -53,7 +53,10 @@ pub(crate) struct ModifierKeys {
     /// Whether this keyboard's Caps Lock has shown itself to be a Ctrl.
     caps_is_ctrl: State<bool>,
     /// Whether a key *named* Control is down, which is what tells a Caps Lock released
-    /// under a real Ctrl from one that is the Ctrl.
+    /// under a real Ctrl from one that is the Ctrl. One flag for both Control keys, so
+    /// letting go of one clears it while the other is held, and none is seen held as the
+    /// window takes the focus. A Caps Lock going down over a mask with Ctrl in it sets it
+    /// again: one that is the Ctrl goes down over a mask without.
     control_held: State<bool>,
 }
 
@@ -77,10 +80,11 @@ impl ModifierKeys {
             *key == Key::Named(NamedKey::Shift) || modifiers.contains(Modifiers::SHIFT),
         );
         let control = *key == Key::Named(NamedKey::Control);
-        if control {
+        let caps = *key == Key::Named(NamedKey::CapsLock);
+        if control || (caps && modifiers.contains(Modifiers::CONTROL)) {
             self.control_held.set_if_modified(true);
         }
-        let caps = *key == Key::Named(NamedKey::CapsLock) && *self.caps_is_ctrl.peek();
+        let caps = caps && *self.caps_is_ctrl.peek();
         self.ctrl
             .set_if_modified(control || caps || modifiers.contains(Modifiers::CONTROL));
         // Alt is read by its own name and its own bit alone: no desktop makes another key
