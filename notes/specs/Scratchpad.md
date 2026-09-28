@@ -7,7 +7,7 @@ There are many scratchpads, apart from any project, each saved in a directory of
 scratchpad has a name the user can change; it may be empty or the same as another's, and an
 unnamed one is shown as `<pad-3>`. The Scratchpad view's side panel lists them, and the one
 last opened opens first. A new scratchpad is made at once. Each has its own editor state and
-its own run, so switching pads stops nothing. Scratchpads cannot be deleted.
+its own run, so switching pads stops nothing.
 
 ## Keys
 
