@@ -45,14 +45,17 @@ impl Filter {
         if !self.regex {
             return Ok(wrap(&regex::escape(&self.pattern), self.whole_word, false));
         }
+        let parsed = regex_syntax::ast::parse::Parser::new().parse(&self.pattern);
         if !self.whole_word {
-            return Ok(self.pattern.clone());
+            // `grep-regex` wraps every pattern in a group of its own, so the verbose rule
+            // holds here too. A pattern that will not parse is left for the builder to
+            // refuse.
+            let verbose = parsed.is_ok_and(|ast| verbose_at_end(&ast, false));
+            return Ok(wrap(&self.pattern, false, verbose));
         }
         // Parsed alone first, since the wrapper would mend some broken patterns into
         // something else: `a)|(b` closes its group and opens one of its own.
-        let ast = regex_syntax::ast::parse::Parser::new()
-            .parse(&self.pattern)
-            .map_err(|error| message(&error))?;
+        let ast = parsed.map_err(|error| message(&error))?;
         Ok(wrap(&self.pattern, true, verbose_at_end(&ast, false)))
     }
 
@@ -329,11 +332,13 @@ impl<T> Filtered<T> {
 /// only.
 ///
 /// `verbose` is whether the expression ends in verbose mode, where a trailing `#` comment
-/// runs to the end of the line and would swallow the `)\b`: the group is then closed on a
-/// line of its own. Anywhere else the newline would be a character to match.
+/// runs to the end of the line and would swallow the `)\b`, or the `)` of the group
+/// `grep-regex` puts every pattern in: the expression then ends on a line of its own.
+/// Anywhere else the newline would be a character to match.
 fn wrap(expression: &str, word: bool, verbose: bool) -> String {
     match (word, verbose) {
-        (false, _) => expression.to_owned(),
+        (false, false) => expression.to_owned(),
+        (false, true) => format!("{expression}\n"),
         (true, false) => format!(r"\b(?:{expression})\b"),
         (true, true) => format!("\\b(?:{expression}\n)\\b"),
     }

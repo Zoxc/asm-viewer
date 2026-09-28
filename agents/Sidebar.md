@@ -13,7 +13,9 @@ non-capturing group is load-bearing), and escaping on the way in for the third. 
 faster answer: 3 ms against `str::contains`'s 3.7 ms over 151k names. Under Word a regex is parsed alone
 before it is wrapped: a `)` in it can close the wrapper's group, and `a)|(b` compiled as a pattern
 the reader never wrote. Where the pattern ends in verbose mode, which `regex-syntax`'s tree of it
-says, the group is closed on a line of its own, or a trailing `#` comment swallowed the `)\b`. A pattern that does not
+says, the group is closed on a line of its own, or a trailing `#` comment swallowed the `)\b`.
+Without Word the pattern gets the same newline, since `grep-regex` puts every pattern in a group of
+its own and the comment swallowed that group's `)`. A pattern that does not
 compile is `Matcher::Invalid`, a third answer that matches nothing *and* prints the reason, because
 matching everything hides a half-typed `(`. **A panel compiles its pattern once**: one
 `use_list_marking` memo per panel, which narrows the list, marks the rows and hands the bar the

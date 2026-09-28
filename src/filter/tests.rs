@@ -130,6 +130,23 @@ fn whole_word_leaves_a_trailing_comment_a_comment() {
     assert!(hits(&word("(?x:a)b"), "ab"));
 }
 
+/// Without Word the pattern goes to `grep-regex` as it is, and that crate puts it in a group
+/// of its own, so a trailing comment swallowed that group's `)` and the search found nothing.
+#[test]
+fn a_trailing_comment_is_a_comment_to_the_search() {
+    use grep_matcher::Matcher as _;
+
+    let commented = Filter {
+        regex: true,
+        ..plain("(?x) fn  # a note")
+    };
+    assert!(hits(&commented, "a fn b"));
+    let grep = commented.grep_matcher().expect("the pattern builds");
+    assert!(grep
+        .is_match(b"a fn b")
+        .expect("grep-regex reports no errors"));
+}
+
 /// A regex carrying its own case flag overrides the toggle for the part it covers, which
 /// is what setting the flag on the builder buys over a `(?i)` prefix.
 #[test]
