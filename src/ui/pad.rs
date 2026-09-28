@@ -520,7 +520,13 @@ pub(crate) struct PadState {
 /// reads `Pads`, so a batch written there drew all of them again. A pad is in here from its
 /// first run until it is deleted.
 #[derive(Default)]
-pub(crate) struct Runs(HashMap<PadId, PadRun>);
+pub(crate) struct Runs {
+    pads: HashMap<PadId, PadRun>,
+    /// The number the last run was given, in any pad. Counted across pads and never
+    /// reset, since a delete gives a pad's id back to the next pad made: a count per pad
+    /// would start again at one, and the deleted pad's run would own the new one's events.
+    last: u64,
+}
 
 /// One pad's program.
 #[derive(Clone, Default)]
@@ -631,7 +637,7 @@ impl PadState {
 
 impl Runs {
     pub(crate) fn get(&self, pad: &PadId) -> Option<&PadRun> {
-        self.0.get(pad)
+        self.pads.get(pad)
     }
 
     /// Whether `pad`'s program is on its way up or already going.
@@ -639,16 +645,19 @@ impl Runs {
         self.get(pad).is_some_and(PadRun::is_running)
     }
 
-    /// Start `pad`'s next run: numbered one on from the last, `Starting`, and with nothing
-    /// written yet. Answers the number.
+    /// Start `pad`'s next run: numbered one on from the last in any pad, `Starting`, and
+    /// with nothing written yet. Answers the number.
     fn start(&mut self, pad: &PadId) -> u64 {
-        let state = self.0.entry(pad.clone()).or_default();
-        *state = PadRun {
-            run: state.run + 1,
-            state: RunState::Starting,
-            output: Arc::default(),
-        };
-        state.run
+        self.last += 1;
+        self.pads.insert(
+            pad.clone(),
+            PadRun {
+                run: self.last,
+                state: RunState::Starting,
+                output: Arc::default(),
+            },
+        );
+        self.last
     }
 
     /// Whether `run` is the run `pad` is on, so an event of it is wanted.
@@ -659,7 +668,7 @@ impl Runs {
     /// One event of `pad`'s program, taken only if it is of the run the pad is on: a run
     /// the reader has left has no output and no ending here.
     fn took(&mut self, pad: &PadId, run: u64, event: RunEvent) {
-        let Some(state) = self.0.get_mut(pad).filter(|state| state.run == run) else {
+        let Some(state) = self.pads.get_mut(pad).filter(|state| state.run == run) else {
             return;
         };
         match event {
@@ -675,7 +684,7 @@ impl Runs {
     /// would leave a process running that nothing could ever name again.
     fn started(&mut self, pad: &PadId, run: u64, started: Result<process::Handle, Failure>) {
         let state = self
-            .0
+            .pads
             .get_mut(pad)
             .filter(|state| state.run == run && matches!(state.state, RunState::Starting));
         match (started, state) {
@@ -688,9 +697,10 @@ impl Runs {
         }
     }
 
-    /// Let go of a deleted pad's run, so nothing still on its way for it lands anywhere.
+    /// Let go of a deleted pad's run, so nothing still on its way for it lands anywhere:
+    /// not even in a pad made later under the same id, whose runs are numbered past it.
     fn forget(&mut self, pad: &PadId) {
-        self.0.remove(pad);
+        self.pads.remove(pad);
     }
 }
 
@@ -1518,7 +1528,7 @@ fn stop_run_of(mut runs: State<Runs>, name: &PadId) {
         Some(RunState::Going(running)) => running.stop(),
         Some(RunState::Starting) => {
             let mut held = runs.write();
-            if let Some(state) = held.0.get_mut(name) {
+            if let Some(state) = held.pads.get_mut(name) {
                 state.state = RunState::Over(Ended::Stopped);
             }
         }

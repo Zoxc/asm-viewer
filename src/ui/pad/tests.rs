@@ -212,6 +212,17 @@ fn a_program_that_would_not_start_is_said_only_for_the_run_that_asked() {
     assert!(matches!(state(&runs), RunState::Over(_)));
 }
 
+/// A delete gives a pad's id back to the next pad made, so a run in that one is numbered
+/// past the deleted pad's, whose events may still be on their way.
+#[test]
+fn a_pad_made_under_a_deleted_pads_id_takes_none_of_its_runs() {
+    let mut runs = Runs::default();
+    let old = runs.start(&id("pad-1"));
+    runs.forget(&id("pad-1"));
+    runs.start(&id("pad-1"));
+    assert!(!runs.wants(&id("pad-1"), old));
+}
+
 /// A build writes the package on its way, so it is what says whether the disk has caught
 /// up with the screen. `Err` is that write refused and nothing else, whatever refused it:
 /// a bad dependency row, a directory that would not take the file, nowhere to write at

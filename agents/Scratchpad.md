@@ -618,7 +618,8 @@ and `RunOutput` keeps that copy small: full blocks of lines behind `Arc`s and a 
 copy is a pointer per block and the tail (`agents/Process.md`). The guard is taken only when the
 batch holds something for a pad still on the run it names, a write notifying whether or not it
 changed anything. A delete takes the pad's entry out, so what is still on its way for it lands
-nowhere.
+nowhere. Nor in the next pad New makes under the same id: run numbers are counted across pads
+and never start again, where a count per pad went with the entry and began at one.
 
 **The list follows the newest line, and the reader takes it back by scrolling away.** Arriving lines
 keep the pane pinned to the bottom while the reader is at the bottom; a wheel away from there
