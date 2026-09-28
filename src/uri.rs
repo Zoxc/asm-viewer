@@ -81,8 +81,11 @@ pub fn path_of(uri: &str) -> Option<PathBuf> {
     while let Some(byte) = characters.next() {
         match byte {
             b'%' => {
-                let (high, low) = (characters.next()?, characters.next()?);
-                let digits = [high, low];
+                let digits = [characters.next()?, characters.next()?];
+                // Two hex digits and nothing else: `from_str_radix` takes a sign too.
+                if !digits.iter().all(u8::is_ascii_hexdigit) {
+                    return None;
+                }
                 let text = std::str::from_utf8(&digits).ok()?;
                 bytes.push(u8::from_str_radix(text, 16).ok()?);
             }

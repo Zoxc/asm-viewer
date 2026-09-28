@@ -57,6 +57,13 @@ fn a_lower_case_drive_comes_back_upper_case() {
     }
 }
 
+/// An escape is two hex digits, in either case. `%+1` is no escape, and not the byte 1.
+#[test]
+fn an_escape_is_two_hex_digits() {
+    assert_eq!(path_of("file:///a%2Fb%2fc"), Some(PathBuf::from("/a/b/c")));
+    assert_eq!(path_of("file:///a%+1"), None);
+}
+
 #[test]
 fn a_colon_after_a_unix_directory_name_is_no_drive() {
     let uri = uri_of(Path::new("/a:b/x.rs"));
