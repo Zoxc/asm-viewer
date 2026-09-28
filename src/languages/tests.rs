@@ -16,6 +16,7 @@ fn a_language_is_the_extension_and_nothing_else() {
     assert!(of("start.s") == Some(Language::Assembly));
     assert!(of("start.S") == Some(Language::Assembly));
     assert!(of("view.m") == Some(Language::ObjC));
+    assert!(of("view.mm") == Some(Language::ObjCpp));
     assert!(of("kernel.cu") == Some(Language::Cuda));
     assert!(of("solve.f90") == Some(Language::Fortran));
 
@@ -59,7 +60,7 @@ fn only_a_named_compiled_language_is_compiled() {
     assert!(!compiled(Path::new("notes.md")));
 }
 
-/// The narrow half of the policy above: five of the twenty are coloured, and every other
+/// The narrow half of the policy above: five of the twenty-one are coloured, and every other
 /// one is answered plainly rather than left out of the match.
 #[test]
 fn only_five_languages_have_a_grammar() {
@@ -75,6 +76,7 @@ fn only_five_languages_have_a_grammar() {
 
     for plain in [
         Language::ObjC,
+        Language::ObjCpp,
         Language::Assembly,
         Language::Go,
         Language::Zig,

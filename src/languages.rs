@@ -30,6 +30,7 @@ pub enum Language {
     C,
     Cpp,
     ObjC,
+    ObjCpp,
     Assembly,
     Go,
     Zig,
@@ -61,6 +62,7 @@ impl Language {
             Language::C => "c",
             Language::Cpp => "cpp",
             Language::ObjC => "objective-c",
+            Language::ObjCpp => "objective-cpp",
             Language::Assembly => "asm",
             Language::Go => "go",
             Language::Zig => "zig",
@@ -97,7 +99,8 @@ impl Language {
             // `.m` is Objective-C here and not MATLAB: what reaches this app is a file a
             // debugger or a Mach-O's line info named, and MATLAB compiles to nothing a
             // symbol table lists.
-            "m" | "mm" => Language::ObjC,
+            "m" => Language::ObjC,
+            "mm" => Language::ObjCpp,
             "s" | "S" | "asm" => Language::Assembly,
             "go" => Language::Go,
             "zig" => Language::Zig,
@@ -133,6 +136,7 @@ impl Language {
             | Language::C
             | Language::Cpp
             | Language::ObjC
+            | Language::ObjCpp
             | Language::Assembly
             | Language::Go
             | Language::Zig
@@ -191,6 +195,7 @@ impl Language {
             ),
             // Named for what they compile to and not for how they are drawn.
             Language::ObjC
+            | Language::ObjCpp
             | Language::Assembly
             | Language::Go
             | Language::Zig
