@@ -1868,6 +1868,65 @@ fn washes_under_the_pointer(test: &mut TestingRunner, at: (f64, f64)) -> bool {
     washed
 }
 
+/// **A button that goes dead under the pointer does not light when it is live again.**
+/// Back pressed at the start of the trail dies under the pointer, which then leaves it;
+/// Forward brings it back to life. Fails on a dead button that drops its pointer handlers:
+/// it never saw the pointer leave, and lights with the pointer nowhere near it.
+#[test]
+fn a_button_dead_under_the_pointer_does_not_light_when_live_again() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, states) = TestingRunner::new(
+        nav_harness,
+        (200., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+    let documents: Vec<Document> = symbols
+        .iter()
+        .take(2)
+        .map(|symbol| Document::Symbol(symbol.clone()))
+        .collect();
+    open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::NewTab,
+    );
+    open_document(
+        states.open,
+        states.visits,
+        documents[1].clone(),
+        Reach::InPlace,
+    );
+    settle(&mut test);
+    let side = toggle_size();
+    let columns = nav_button_columns(&test);
+    let at = |x: f32| ((x + side / 2.0) as f64, (side / 2.0) as f64);
+    let (back, forward) = (at(columns[0]), at(columns[1]));
+    let lit = |test: &TestingRunner| {
+        test.find(|_, element| {
+            (element.style().background == Fill::Color(Palette::LIGHT.toggle_hover_bg))
+                .then_some(())
+        })
+        .is_some()
+    };
+
+    press_at(&mut test, back);
+    settle(&mut test);
+    assert_eq!(cursor_of(&states), Some(1));
+    test.move_cursor((150.0, 90.0));
+    test.sync_and_update();
+    press_at(&mut test, forward);
+    test.move_cursor((forward.0, 90.0));
+    settle(&mut test);
+    assert_eq!(cursor_of(&states), Some(0));
+    assert!(!lit(&test), "Back lit with the pointer nowhere near it");
+}
+
 fn press_at(test: &mut TestingRunner, at: (f64, f64)) {
     test.move_cursor(at);
     test.press_cursor(at);

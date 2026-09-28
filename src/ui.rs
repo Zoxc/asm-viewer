@@ -266,8 +266,8 @@ impl Component for NavButton {
         };
 
         // A button with nowhere to go keeps its tooltip and loses everything else: no
-        // wash, no press, and the chevron dimmed. `bar_button` drops the first two; the
-        // colour is the caller's, as every dead control dims its own drawing.
+        // wash, no press, and the chevron dimmed. `bar_button` drops the wash; the press
+        // and the colour are the caller's, as every dead control dims its own drawing.
         let colour = match live {
             true => palette().icon_fg,
             false => dimmed(palette().icon_fg, palette().pane_bg),

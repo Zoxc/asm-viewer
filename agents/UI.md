@@ -542,9 +542,11 @@ than hidden**, the first disabled drawing in this app: hiding it would slide the
 pointer, and a reader who has been nowhere yet would never learn the pair is there. Disabled is the
 whole of the drawing (no hover wash, no press handler, and the chevron in
 `dimmed(icon_fg, pane_bg)`) while the tooltip stays, naming the direction where `Names` gives it
-nothing to name. The first two of those are `bar_button`'s own: it takes whether a press would do
-anything and drops the wash and the handlers with it, so the button is dimmed the way every bar
-button would be, and only the chevron's colour is this pair's. Where a step lands is the trail's own -- `History::behind` and
+nothing to name. The first of those is `bar_button`'s own: it takes whether a press would do
+anything and drops the wash with it, so the button is dimmed the way every bar button would be,
+and only the chevron's colour is this pair's. It keeps its pointer handlers while dead, so a
+button that goes dead under the pointer still sees the pointer leave, and does not light when it
+is live again. Where a step lands is the trail's own -- `History::behind` and
 `History::ahead`, which is what `back` and `forward` move by and the only place the question is
 answered -- and `Nav::destination` asks it rather than deriving it again from the cursor, so a live
 button and a step that does something cannot disagree.

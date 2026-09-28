@@ -347,9 +347,8 @@ pub(crate) enum Glow {
 /// [`BAR_BUTTON_RADIUS`], its glyph centred, lit under the pointer. The caller adds the
 /// press, the child and the tooltip.
 ///
-/// `live` is whether pressing it would do anything. A dead button takes neither the
-/// pointer handlers nor the wash, which is the whole of how one is drawn disabled; the
-/// caller dims its glyph.
+/// `live` is whether pressing it would do anything. A dead button draws no wash, which is
+/// the whole of how one is drawn disabled; the caller dims its glyph.
 ///
 /// **The hover state stays the caller's**, [`list_row`]'s reason: there is no `.hover()`
 /// pseudo-state, so a button that lights holds a `use_state` of its own, and a hook may
@@ -377,8 +376,11 @@ pub(crate) fn bar_pill(hovering: State<bool>, live: bool, glow: Glow) -> Rect {
         .padding(Gaps::new_symmetric(0.0, BAR_PILL_PAD))
 }
 
-/// What the two share: the corner, the wash, and the two pointer handlers -- attached only
-/// where a press would do something, so a dead button does not light.
+/// What the two share: the corner, the wash, and the two pointer handlers.
+///
+/// **The handlers stay on a dead button**, only the wash going. A button goes dead under
+/// the pointer (Back pressed at the start of the trail), and without them the pointer
+/// left it unseen: live again, it lit with no pointer on it.
 fn bar_control(mut hovering: State<bool>, live: bool, glow: Glow) -> Rect {
     let background = match glow {
         Glow::On => palette().toggle_on_bg,
@@ -389,11 +391,8 @@ fn bar_control(mut hovering: State<bool>, live: bool, glow: Glow) -> Rect {
     rect()
         .corner_radius(BAR_BUTTON_RADIUS)
         .background(background)
-        .maybe(live, |button| {
-            button
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
-        })
+        .on_pointer_over(move |_| hovering.set_if_modified(true))
+        .on_pointer_out(move |_| hovering.set_if_modified(false))
 }
 
 /// The rest of a text the row had only room for part of, **mounted only where the text
