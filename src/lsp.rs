@@ -18,8 +18,9 @@
 //! What the server says when nothing was asked is the other half. A reader thread owns the
 //! server's output: an answer goes to whoever is waiting for it, a request is replied to,
 //! and a notification is acted on -- which is how the app knows the server is busy reading
-//! the project, since that arrives as `$/progress` and at no other time. Both threads
-//! write to the server, so its input is behind a lock; the reader has to write because
+//! the project, since that arrives as `$/progress` and at no other time. Two threads
+//! write to the server, so its input is behind a lock: the worker, and one the reader hands
+//! its replies to so that it never waits on the lock itself. Replies are needed because
 //! declaring an interest in progress is what makes rust-analyzer ask this app to make a
 //! progress token.
 //!
@@ -617,11 +618,14 @@ pub(crate) type ReadText = fn(&Path) -> Option<String>;
 /// Generic over the two streams so it can be held against a fake server over a pipe, which
 /// is what the tests do; the real one is over the process's own two.
 pub struct Talk<W> {
-    /// Behind a lock because the reader writes too: a request from the server is answered
-    /// on its thread, whether or not this one is in the middle of asking something. An
-    /// `Option` because the reader holds it as well, so this is what closes the server's
-    /// input when the conversation is dropped.
+    /// Behind a lock because the reader's replies are written too: a request from the
+    /// server is answered on a thread of its own, whether or not this one is in the middle
+    /// of asking something. An `Option` because that thread holds it as well, so `None` is
+    /// what closes the server's input when the conversation is dropped.
     to: Arc<Mutex<Option<W>>>,
+    /// The thread the reader's replies are written on, which is also what closes `to` on a
+    /// drop: after every reply handed to it, so none is cut off. `None` is the close.
+    replies: std::sync::mpsc::Sender<Option<Value>>,
     /// The answers the reader has picked out of what the server said. A closed channel is
     /// a reader that has stopped, which is a conversation that is over.
     answers: std::sync::mpsc::Receiver<Result<Value, Failure>>,
@@ -657,9 +661,10 @@ impl<W: Write + Send + 'static> Talk<W> {
     ) -> Self {
         let to = Arc::new(Mutex::new(Some(to)));
         let (answered, answers) = std::sync::mpsc::channel();
-        read_from(from, to.clone(), answered, told);
+        let replies = read_from(from, to.clone(), answered, told);
         Talk {
             to,
+            replies,
             answers,
             id: 0,
             legend: Legend::default(),
@@ -1107,17 +1112,46 @@ fn write_to(to: &Mutex<Option<impl Write>>, body: &Value) -> Result<(), Failure>
 /// Read everything the server says, on a thread of its own, until it stops saying
 /// anything.
 ///
-/// An answer goes to whoever asked; a request is replied to here, since the server may ask
+/// An answer goes to whoever asked; a request is replied to, since the server may ask
 /// while nothing is being asked of it; and a notification is what `told` is for. The
 /// thread ends when the server's output does, and the closed channel is what tells a
-/// waiting request that the conversation is over.
+/// waiting request that the conversation is over. What comes back is the way to the
+/// thread the replies are written on.
+///
+/// **A reply is written on a thread of its own**, never on this one. The worker may be
+/// part way through a write the server has stopped reading, because it is blocked writing
+/// its own output -- rust-analyzer does not read while its output is full. Waiting on the
+/// lock here would stop the one thing that drains that output, and both sides would wait
+/// for ever.
 fn read_from<W: Write + Send + 'static>(
     from: impl BufRead + Send + 'static,
     to: Arc<Mutex<Option<W>>>,
     answered: std::sync::mpsc::Sender<Result<Value, Failure>>,
     mut told: impl FnMut(Note) + Send + 'static,
-) {
+) -> std::sync::mpsc::Sender<Option<Value>> {
     let closed = answered.clone();
+    let (replies, to_reply) = std::sync::mpsc::channel::<Option<Value>>();
+    let replying = std::thread::Builder::new()
+        .name("the language server's replies".to_owned())
+        .spawn(move || {
+            for reply in to_reply {
+                let Some(body) = reply else {
+                    *to.lock().unwrap_or_else(|held| held.into_inner()) = None;
+                    return;
+                };
+                if write_to(&to, &body).is_err() {
+                    return;
+                }
+            }
+        });
+    if let Err(error) = replying {
+        log::warn!("the language server could not be answered: {error}");
+        // A request of the server's left unanswered is a server that may wait for ever,
+        // so the conversation is over before it began, as it is below.
+        let _ = closed.send(Err(Failure::Broken(error.to_string())));
+        return replies;
+    }
+    let reading_replies = replies.clone();
     let reading =
         process::read_on_thread("the language server's answers", from, move |mut from| {
             let mut progress = Progress::default();
@@ -1140,7 +1174,8 @@ fn read_from<W: Write + Send + 'static>(
                     Some(method) => match message.get("id") {
                         Some(asked) => {
                             let answer = answer_to(&method, &message);
-                            if write_to(&to, &reply(asked.clone(), answer)).is_err() {
+                            let reply = reply(asked.clone(), answer);
+                            if reading_replies.send(Some(reply)).is_err() {
                                 return;
                             }
                         }
@@ -1162,6 +1197,7 @@ fn read_from<W: Write + Send + 'static>(
         // asks first finds a closed channel rather than a wait with no end to it.
         let _ = closed.send(Err(Failure::Broken(error.to_string())));
     }
+    replies
 }
 
 /// What the reader thread keeps between notifications: the progress tokens the server has
@@ -1493,8 +1529,13 @@ impl<W> Drop for Talk<W> {
     /// Close the server's input. It is how a server is told there is nothing more coming
     /// -- a language server reads its input to the end and then leaves -- and it is also
     /// what lets the reader thread go, since its own read ends when the server does.
+    ///
+    /// Closed by the thread the replies are written on, after the ones it holds, and here
+    /// only where that thread has gone.
     fn drop(&mut self) {
-        *self.to.lock().unwrap_or_else(|held| held.into_inner()) = None;
+        if self.replies.send(None).is_err() {
+            *self.to.lock().unwrap_or_else(|held| held.into_inner()) = None;
+        }
     }
 }
 

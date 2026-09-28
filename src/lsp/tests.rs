@@ -1640,3 +1640,51 @@ fn a_link_lands_on_the_name_and_not_the_start_of_the_item() {
         }]
     );
 }
+
+/// A request the server makes while the worker is part way through a write is replied to
+/// without stopping the reader. The server here does what rust-analyzer does: it stops
+/// reading its input while it writes more output than a pipe holds, and that output is
+/// drained only by the reader. A reader that waited on the worker's write to reply left
+/// both sides waiting for ever.
+#[test]
+fn a_reply_does_not_wait_on_the_worker_s_write() {
+    let (mut server_reads, client_writes) = std::io::pipe().expect("a pipe");
+    let (client_reads, mut server_writes) = std::io::pipe().expect("a pipe");
+    let mut talk = Talk::over(
+        client_writes,
+        BufReader::new(client_reads),
+        |_| {},
+        |_| None,
+    );
+    talk.opens = true;
+    let server = std::thread::spawn(move || {
+        // The start of the didOpen, then a request and more output than a pipe holds.
+        let mut start = [0u8; 100];
+        server_reads.read_exact(&mut start).expect("the start");
+        let create = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "window/workDoneProgress/create",
+            "params": { "token": "t" },
+        });
+        write_message(&mut server_writes, &create).expect("a request");
+        let report = json!({
+            "jsonrpc": "2.0", "method": "$/progress",
+            "params": { "token": "t", "value": { "kind": "report", "message": "x".repeat(1000) } },
+        });
+        for _ in 0..1000 {
+            write_message(&mut server_writes, &report).expect("a report");
+        }
+        // Only now is the rest of the input read.
+        let _ = io::copy(&mut server_reads, &mut io::sink());
+    });
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let text = "a".repeat(1 << 20);
+        let _ = done.send(talk.opened(Path::new("/p/src/main.rs"), "rust", &text));
+    });
+
+    let opened = finished
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the didOpen was never written: the conversation is deadlocked");
+    assert!(opened.is_ok(), "{opened:?}");
+    server.join().expect("the server");
+}

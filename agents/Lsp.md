@@ -164,10 +164,14 @@ until its own answer came back -- and that was enough right up to the moment the
 to know the server was *busy*, which arrives as `$/progress` while nothing is being asked
 and at no other time. So the reader is the only thing that reads: an answer goes to
 whoever is waiting for it over a channel, a request is replied to on the spot, and a
-notification is acted on. Both threads write, so the server's input is behind a lock -- the
-reader has to write because asking for progress is what makes rust-analyzer ask this app to
-make a progress token. Dropping the conversation takes that input away and closes it, which
-is how a server is told there is nothing more coming and what lets the reader thread go.
+notification is acted on. The reader has to reply because asking for progress is what makes
+rust-analyzer ask this app to make a progress token, and the server's input is behind a lock
+because the worker writes too. **The reader never writes itself**: it hands each reply to a
+thread of its own. A `didOpen` of a big file can block part way, and rust-analyzer stops
+reading its input while its output is full. A reader waiting on the lock then drained nothing,
+and both sides waited for ever. Dropping the conversation closes that input, which is how a
+server is told there is nothing more coming and what lets the reader thread go. The reply
+thread does the closing, after any reply it still holds, so none is cut off.
 
 `Talk` is generic over its two streams, so the whole conversation is tested against a fake
 server over `std::io::pipe()` and only starting one needs a program. That is also why
