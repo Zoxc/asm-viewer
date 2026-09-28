@@ -538,7 +538,7 @@ pub(crate) struct PadRun {
     /// forked, so there is nothing to compare against. Stopping one program and starting
     /// another is one keypress, and untagged the first one's last lines and its `Ended`
     /// would land in the second's output.
-    run: u64,
+    pub(crate) run: u64,
     pub(crate) state: RunState,
     /// What the running program has written. Behind an `Arc` because the pane draws the
     /// lines by that pointer: a batch of arriving lines is one `Arc::make_mut`.

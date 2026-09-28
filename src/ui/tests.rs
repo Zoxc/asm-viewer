@@ -21582,6 +21582,88 @@ fn the_output_pane_follows_the_newest_line_until_the_reader_scrolls_away() {
     );
 }
 
+/// A pad's output pane under the scratchpad wiring, which is what its runs are started by.
+fn pad_output_harness() -> impl IntoElement {
+    scratchpad_wiring();
+    let shown = use_consume::<Pad>().0.read().shown().clone();
+
+    rect()
+        .expanded()
+        .content(Content::Flex)
+        .child(PadOutput { pad: shown })
+}
+
+/// A new run arrives following, whatever the reader did to the run before it in the same
+/// pad. Its output is a new list in a pane that stays mounted, so the pane is keyed on the
+/// run: kept, it went on not following from where the reader had scrolled.
+#[test]
+fn a_new_run_in_the_same_pad_is_followed() {
+    #[allow(clippy::type_complexity)]
+    let emitters: Arc<Mutex<Vec<Box<dyn FnMut(RunEvent) + Send>>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let handed = emitters.clone();
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(pad_output_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::Open {
+                scratchpad,
+                holding,
+            } => PadAnswer::Opened {
+                holding,
+                scratchpad,
+                program: None,
+            },
+            PadJob::Run { pad, emit, .. } => {
+                handed.lock().expect("the emitters").push(emit);
+                PadAnswer::Saved { pad, failure: None }
+            }
+            PadJob::Remember(_) => PadAnswer::Remembered,
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::New | PadJob::Delete(_) | PadJob::Build(_) => {
+                unreachable!("this test only runs")
+            }
+        });
+    let pad = roots.pad;
+    pump(&mut test, |_| pad.peek().state().opened());
+    already_built(pad, fixture_artifact());
+    test.sync_and_update();
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+
+    let mut run = |test: &mut TestingRunner, lines: usize| {
+        request_run(pad, &jobs);
+        pump(test, |_| !emitters.lock().expect("the emitters").is_empty());
+        let mut emit = emitters.lock().expect("the emitters").remove(0);
+        for index in 0..lines {
+            emit(run_line(&format!("line {index}")));
+            pump(test, |_| shown_run(pad, &jobs).output.len() == index + 1);
+            for _ in 0..4 {
+                test.sync_and_update();
+            }
+        }
+    };
+
+    run(&mut test, 40);
+    test.scroll((100., 120.), (0., 300.));
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    let away = drawn_lines(&test);
+    assert!(
+        !away.contains(&"line 39".to_owned()),
+        "nothing scrolled: {away:?}"
+    );
+
+    run(&mut test, 60);
+    let drawn = drawn_lines(&test);
+    assert!(
+        drawn.contains(&"line 59".to_owned()),
+        "the new run is not followed: {drawn:?}"
+    );
+}
+
 /// Output allocated where the output the pane last saw was is still new output, and the
 /// pane follows it.
 ///

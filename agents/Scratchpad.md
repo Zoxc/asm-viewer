@@ -641,8 +641,10 @@ makes is that the newest row is drawn *at all* rather than drawn entire, because
 a whole number of pixels where a list of rows is not, and a view clamped hard against its end stands
 a fraction of a pixel short.
 
-The pane is a component of its own, **keyed on the pad**, so that the scroll and the follow belong
-to that pad's output instead of being one position dragged between pads by a switch. What the key
+The pane is a component of its own, **keyed on the pad and the run**, so that the scroll and the
+follow belong to that run's output instead of being one position dragged between pads by a switch,
+or kept into the next run, which would then follow nothing once it was longer than the reader had
+scrolled up. What the key
 costs is that a pad comes back following again, having been remounted. The follow is what a pane
 arrives armed with rather than something carried across a switch, and it is the pad being looked at
 whose scrolling is worth keeping.

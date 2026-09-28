@@ -448,12 +448,12 @@ fn use_follow_tail(
 /// until it has been scrolled to vertically. A virtual list has no other answer, having
 /// never measured the rows it did not draw.
 ///
-/// A component of its own for the sake of [`use_follow_tail`]: **keyed on the pad** where
-/// it is built, so the scroll and the follow are that pad's output's and not one position
-/// dragged between them by a switch. What a switch costs is that a pad comes back
-/// following again, having been remounted -- the follow is what a pane arrives armed with
-/// rather than something carried across a switch, and the pad being looked at is the one
-/// whose scrolling is worth keeping.
+/// A component of its own for the sake of [`use_follow_tail`]: **keyed on the pad and the
+/// run** where it is built, so the scroll and the follow are that run's output's and not
+/// one position dragged between pads by a switch or kept into the next run. What a switch
+/// costs is that a pad comes back following again, having been remounted -- the follow is
+/// what a pane arrives armed with rather than something carried across a switch, and the
+/// pad being looked at is the one whose scrolling is worth keeping.
 #[derive(Clone)]
 pub(crate) struct OutputPane {
     pub(crate) lines: Arc<RunOutput>,
@@ -546,24 +546,26 @@ impl Component for OutputPane {
 /// **The one piece that reads a pad's output**, so a batch of lines draws this and the pane
 /// under it and nothing else on the page.
 #[derive(Clone, PartialEq)]
-struct PadOutput {
-    pad: PadId,
+pub(crate) struct PadOutput {
+    pub(crate) pad: PadId,
 }
 
 impl Component for PadOutput {
     fn render(&self) -> impl IntoElement {
         let runs = use_consume::<PadJobs>().runs;
-        let ran = runs
-            .read()
-            .get(&self.pad)
-            .and_then(|run| run.verdict().map(|verdict| (verdict, run.output.clone())));
+        let ran = runs.read().get(&self.pad).and_then(|run| {
+            run.verdict()
+                .map(|verdict| (verdict, run.output.clone(), run.run))
+        });
         match ran {
-            Some((verdict, lines)) => OutputPane {
+            // Keyed on the run too, so a new run in the same pad arrives following
+            // rather than where the reader left the last one.
+            Some((verdict, lines, run)) => OutputPane {
                 lines,
                 verdict,
                 key: DiffKey::None,
             }
-            .key(self.pad.as_str().to_owned())
+            .key(format!("{}/{run}", self.pad.as_str()))
             .into_element(),
             // A bare rect measures nothing and takes no share of the column.
             None => rect().into_element(),
