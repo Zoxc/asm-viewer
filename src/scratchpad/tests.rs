@@ -808,3 +808,14 @@ fn a_deleted_pad_is_not_written_by_the_close() {
     super::flush_where(|owed| owed.starts_with(&*directory));
     assert!(!directory.join(SOURCE_FILE).exists());
 }
+
+/// The source may hold a NUL, so a field ended by one could run into the rows after it.
+#[test]
+fn a_nul_in_the_source_does_not_stand_in_for_a_row() {
+    let mut asking = scratchpad();
+    asking.source = "fn main() {} // x".to_owned();
+    asking.add_dependency("serde", "1");
+    let mut holding = scratchpad();
+    holding.source = "fn main() {} // x\0serde\01".to_owned();
+    assert_ne!(asking.digest(), holding.digest());
+}

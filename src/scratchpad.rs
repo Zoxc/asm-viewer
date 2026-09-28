@@ -544,8 +544,9 @@ impl Scratchpad {
     /// A digest of what is there and not a counter of changes, so a reader who types a
     /// character and takes it back is building the same program and is told so. The bytes
     /// hashed are the source and then each row's two halves, trimmed as the manifest writes
-    /// them, every one of them ended by a byte that cannot appear in what it follows, so no
-    /// two different lists hash the same by running together.
+    /// them, each ended by a NUL, so no two different lists hash the same by running
+    /// together. A NUL inside one, which rustc takes in a comment, goes in as `0xff`,
+    /// which UTF-8 never holds.
     ///
     /// **The rows go in sorted by name**, as the manifest writes them. The order the reader
     /// added them in compiles nothing, and the package reads them back sorted, so hashed in
@@ -559,13 +560,14 @@ impl Scratchpad {
             .collect();
         rows.sort_unstable();
         let mut bytes = Vec::with_capacity(self.source.len() + 1);
-        bytes.extend_from_slice(self.source.as_bytes());
-        bytes.push(0);
+        let mut field = |text: &str| {
+            bytes.extend(text.bytes().map(|byte| if byte == 0 { 0xff } else { byte }));
+            bytes.push(0);
+        };
+        field(&self.source);
         for (name, version) in rows {
-            bytes.extend_from_slice(name.as_bytes());
-            bytes.push(0);
-            bytes.extend_from_slice(version.as_bytes());
-            bytes.push(0);
+            field(name);
+            field(version);
         }
         analysis::FileDigest::of(&bytes).to_string()
     }
