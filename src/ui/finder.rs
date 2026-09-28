@@ -28,6 +28,7 @@ use super::*;
 use crate::fuzzy;
 use crate::walk::{found_under, Found, WalkEvent};
 use std::sync::atomic::{self, AtomicU64};
+use std::sync::mpsc;
 use std::time::Instant;
 
 /// The finder's state, shared through context.
@@ -276,14 +277,33 @@ impl Held {
 }
 
 /// The worker: told of a walk and of the box, answering with the rows to draw.
-fn rank_files(told: async_channel::Receiver<Told>, answers: async_channel::Sender<Answered>) {
+fn rank_files(told: mpsc::Receiver<Told>, answers: async_channel::Sender<Answered>) {
     let mut held = Held::default();
     let mut answered: Option<Instant> = None;
+    // Whether files held back by the throttle are still to be answered. A walk that
+    // stalls sends nothing to wake the worker, so it waits out the refresh instead.
+    let mut owed = false;
 
-    while let Ok(first) = told.recv_blocking() {
+    loop {
+        let first = if owed {
+            let left = answered.map_or(Duration::ZERO, |at| {
+                WALK_REFRESH.saturating_sub(at.elapsed())
+            });
+            match told.recv_timeout(left) {
+                Ok(first) => Some(first),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        } else {
+            match told.recv() {
+                Ok(first) => Some(first),
+                Err(_) => return,
+            }
+        };
+        // The refresh is up, and what it held back is owed now.
+        let mut change = first.map_or(Change::Now, |first| held.take(first));
         // Drained to the end of what is waiting, so a burst of a walk is one ranking and
         // not one per file: `take_hits`' own rule, a batch per wake.
-        let mut change = held.take(first);
         while let Ok(next) = told.try_recv() {
             change = change.max(held.take(next));
         }
@@ -291,8 +311,10 @@ fn rank_files(told: async_channel::Receiver<Told>, answers: async_channel::Sende
             continue;
         }
         if change == Change::Files && answered.is_some_and(|at| at.elapsed() < WALK_REFRESH) {
+            owed = true;
             continue;
         }
+        owed = false;
         answered = Some(Instant::now());
         if answers.send_blocking(held.answer()).is_err() {
             // The app is closing.
@@ -317,7 +339,7 @@ pub(crate) fn use_finder_with(
     // freeze this exists to prevent; what stops a walk nobody is waiting for is `current`
     // rather than a full channel.
     let (tells, current) = use_hook(|| {
-        let (tells, told) = async_channel::unbounded::<Told>();
+        let (tells, told) = mpsc::channel::<Told>();
         let (sends, answers) = async_channel::unbounded::<Answered>();
         // A `std::thread` and not a task: this walks a directory and ranks a project's
         // worth of paths, and freya's executor is the UI thread.
@@ -344,7 +366,7 @@ pub(crate) fn use_finder_with(
                 // stops where it stands.
                 current.store(id, atomic::Ordering::Relaxed);
                 if tells
-                    .send_blocking(Told::Walking {
+                    .send(Told::Walking {
                         id,
                         root: root.clone(),
                     })
@@ -366,7 +388,7 @@ pub(crate) fn use_finder_with(
                             WalkEvent::File(file) => Told::Found { id, file },
                             WalkEvent::Finished => Told::Walked { id },
                         };
-                        if tells.send_blocking(told).is_err() {
+                        if tells.send(told).is_err() {
                             return ControlFlow::Break(());
                         }
                         // This walk has been replaced, and nobody is waiting for the rest of
@@ -389,7 +411,7 @@ pub(crate) fn use_finder_with(
         },
         unmarked,
         move |(id, query)| {
-            let _ = tells.send_blocking(Told::Asked { id, query });
+            let _ = tells.send(Told::Asked { id, query });
         },
     );
 }

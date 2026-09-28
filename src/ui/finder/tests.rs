@@ -90,3 +90,32 @@ fn a_file_the_first_walk_finds_changes_the_answer_only_to_a_query() {
     });
     assert!(found_by(&mut held, 1, "mod.rs") == Change::Files);
 }
+
+#[test]
+fn files_the_throttle_held_back_are_answered_when_the_walk_stalls() {
+    let (tells, told) = mpsc::channel::<Told>();
+    let (sends, answers) = async_channel::unbounded::<Answered>();
+    std::thread::spawn(move || rank_files(told, sends));
+    let root = PathBuf::from("/project");
+    tells.send(Told::Walking { id: 1, root }).unwrap();
+    tells
+        .send(Told::Asked {
+            id: 1,
+            query: "m".to_owned(),
+        })
+        .unwrap();
+    // The answer to the box, which starts the throttle.
+    answers.recv_blocking().unwrap();
+    tells
+        .send(Told::Found {
+            id: 1,
+            file: found("main.rs"),
+        })
+        .unwrap();
+    // Nothing else is sent: the walk has stalled.
+    let answered = std::thread::spawn(move || answers.recv_blocking());
+    std::thread::sleep(WALK_REFRESH * 5);
+    assert!(answered.is_finished(), "the file is still not answered");
+    assert_eq!(answered.join().unwrap().unwrap().rows.len(), 1);
+    drop(tells);
+}
