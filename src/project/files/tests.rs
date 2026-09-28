@@ -694,3 +694,13 @@ fn a_project_file_that_is_a_fifo_is_unreadable_at_once() {
     let read = crate::temporary::promptly(move || Project::load_from(&path));
     assert!(matches!(read, Err(Reason::Unreadable(_))), "{read:?}");
 }
+
+/// A width that is no number reads as absent: `nan` is not equal to itself, so a session
+/// holding one was a change on every record, and was written back each time.
+#[test]
+fn a_width_that_is_no_number_is_absent() {
+    let session: Session = toml::from_str("[ui]\nsidebar = nan\nsplit = inf\n").expect("parses");
+    let ui = session.ui.clone().expect("the section");
+    assert_eq!((ui.sidebar, ui.split), (None, None));
+    assert_eq!(session, session.clone());
+}

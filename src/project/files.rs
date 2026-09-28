@@ -360,14 +360,28 @@ enum Spelling {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SavedUi {
     /// How wide the sidebar was, in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "finite",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub sidebar: Option<f32>,
     /// How wide the **leading** side of a document was, as a percentage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "finite",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub split: Option<f32>,
     /// The sidebar's panels and the groups they were in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dock: Option<SavedDock>,
+}
+
+/// A width read as absent unless it is a number: a `nan` sizes nothing, and is not equal
+/// to itself, so a session holding one would read as changed on every record.
+fn finite<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<f32>, D::Error> {
+    Ok(Option::<f32>::deserialize(deserializer)?.filter(|width| width.is_finite()))
 }
 
 /// One node of the sidebar's arrangement: a row or column of others, or a group of panels.
