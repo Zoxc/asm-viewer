@@ -127,6 +127,48 @@ fn a_put_whose_session_write_failed_owes_it_and_keeps_the_old_one() {
     );
 }
 
+/// A put whose session write fails owes the session, but not over a newer one still pending
+/// because the flush before it failed too: that one is what the next flush writes.
+#[test]
+fn a_put_whose_session_write_failed_keeps_the_newer_pending_session() {
+    let _saves = using_saves();
+    let base = directory();
+    let store = Store::at(&base);
+    let from = start_new(&store).expect("a project is started");
+    let binaries = ["/tmp/a.o".into()];
+    record(
+        &Details::default(),
+        &binaries,
+        false,
+        &[],
+        session_with(Some("a.o")),
+    );
+    record(
+        &Details::default(),
+        &binaries,
+        false,
+        &[],
+        session_with(Some("b.o")),
+    );
+
+    // The old place's session cannot be written, so the flush inside the put leaves the
+    // newer session pending; nor can the new place's.
+    fs::remove_file(session_beside(&from)).expect("the old session");
+    fs::create_dir(session_beside(&from)).expect("a directory in the way");
+    let to = base.join(format!("kernel.{PROJECT_EXTENSION}"));
+    fs::create_dir(session_beside(&to)).expect("a directory in the way");
+    assert!(put_in(&store, &to, Put::Move), "the project was written");
+
+    fs::remove_dir(session_beside(&to)).expect("the directory taken away");
+    flush();
+    let (_, session) = load_project(&store, &to).expect("the project reads back");
+    assert_eq!(
+        session.active,
+        Some(saved_object("b.o")),
+        "the flush wrote the older session"
+    );
+}
+
 /// Saving a project into the file it is already in, under either spelling, leaves both
 /// files there: a move takes away the two it came from, and here those are the two it wrote.
 #[test]

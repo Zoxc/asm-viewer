@@ -232,7 +232,8 @@ pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
         return false;
     }
     // A failed session write does not fail the put: the project is already where the
-    // reader asked. The session is owed instead, and a move keeps the old copy of it.
+    // reader asked. The session is owed instead, unless a newer one is pending, and a
+    // move keeps the old copy of it.
     let session_written = write_or_warn(&session_beside(path), |path| session.save_to(store, path));
 
     // A move onto the file the project is already in has nothing to leave behind, and the
@@ -254,7 +255,7 @@ pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
     remember(store, path);
     saves.moved_to(path.to_path_buf(), id);
     if !session_written {
-        saves.owes_session(session);
+        saves.owes_stored_session(session);
     }
     log::debug!("the project is now {}", path.display());
     true

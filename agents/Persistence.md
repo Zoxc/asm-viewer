@@ -225,7 +225,8 @@ as the spellings, so `projects/../projects/3.avproj` is the same file too. `Save
 else -- only *where* the project is has changed, so every other baseline still describes what
 the app is holding. A session write that fails does not fail the put, the project being already
 where the reader asked; the session is then owed, as a failed flush's is, and a move keeps the old
-session file rather than take away the only copy on disk.
+session file rather than take away the only copy on disk. It is not owed over a newer session
+still pending, which a failed flush before the put leaves: the next flush writes that one.
 
 **What travels comes out of one accessor**, `Saves::to_put`: the file the project is in now,
 and the two files as they stand under the id the put gives them. `put_in` stayed in

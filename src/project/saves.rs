@@ -377,6 +377,12 @@ impl Saves {
     pub(super) fn owes_session(&mut self, session: Session) {
         self.pending = Some(session);
     }
+
+    /// [`Saves::owes_session`] for the session the file held, which [`super::put_in`]
+    /// carries: a session still pending is newer, and stays the one owed.
+    pub(super) fn owes_stored_session(&mut self, session: Session) {
+        self.pending.get_or_insert(session);
+    }
 }
 
 /// What a [`Saves::record`] decided to write, and what it takes to note that it landed.
