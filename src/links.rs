@@ -120,24 +120,30 @@ pub fn followed(on_line: &[Link]) -> impl Iterator<Item = &Range<usize>> + '_ {
 /// `builtinType`, `builtinAttribute` and `unresolvedReference`.
 ///
 /// Longer than the standard list because a server may say more than the standard: the
-/// first twelve are the specification's own and the rest are rust-analyzer's, and a name a
+/// first seventeen are the specification's own and the rest are rust-analyzer's, and a name a
 /// server does not have simply never arrives. **A local is here too** -- a `let` binding, a
 /// parameter, a lifetime -- since the server places those as readily as it places an item,
 /// and following one goes to where it was bound.
-const NAMES: [&str; 27] = [
+const NAMES: [&str; 29] = [
     // The specification's own.
     "function",
     "method",
     "macro",
+    "class",
     "struct",
     "enum",
     "interface",
     "typeParameter",
     "enumMember",
     "property",
+    "event",
     "namespace",
     "type",
     "decorator",
+    // And its locals, which go to where the name was bound.
+    "variable",
+    "parameter",
+    "label",
     // rust-analyzer's additions.
     "procMacro",
     "union",
@@ -147,14 +153,11 @@ const NAMES: [&str; 27] = [
     "derive",
     "deriveHelper",
     "toolModule",
-    // Locals, which go to where the name was bound.
-    "variable",
-    "parameter",
+    // And its locals.
     "constParameter",
     "selfKeyword",
     "selfTypeKeyword",
     "lifetime",
-    "label",
 ];
 
 /// What following `token` asks, and `None` where there is nothing to follow. Asked only

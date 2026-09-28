@@ -2,8 +2,9 @@ use super::*;
 
 /// The token types these tests name, in an arbitrary order: nothing may depend on an
 /// index, only on a name.
-const TYPES: [&str; 10] = [
+const TYPES: [&str; 11] = [
     "comment",
+    "class",
     "method",
     "builtinType",
     "struct",
@@ -85,6 +86,8 @@ fn a_name_the_server_placed_is_a_link() {
     assert_eq!(says("property", &["public"]), definition);
     assert_eq!(says("interface", &["public"]), definition);
     assert_eq!(says("typeAlias", &[]), definition);
+    // Standard, and every C++ class to clangd, though rust-analyzer never sends it.
+    assert_eq!(says("class", &[]), definition);
 }
 
 /// The reader asked for locals as links: the server places a `let` binding as readily as
