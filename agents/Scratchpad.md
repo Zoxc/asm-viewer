@@ -76,7 +76,7 @@ The pads it does not name
 are there because this is the list a reader picks a pad from, so a pad that fell off the end of
 `MAX_ORDER` or was made outside the app has to be reachable; `recent_projects` puts back the
 unsaved projects for the same reason. The manifest and no more: a name is all a row shows, so
-listing N pads reads N small files and not the N sources with them. A pad is remembered when it is **opened**, and only if there is
+listing N pads reads N small files and not the N sources with them. A pad is remembered when it is **shown**, and only if there is
 a directory for it, which keeps the "nothing is written until there is something to say" rule: the
 pad a first run holds is in memory until something is typed into it.
 
@@ -424,8 +424,8 @@ of the page reads `Pads`, so each write draws all of them again, and a keystroke
 the mirror's, the save's and the save's answer. It is one now, the answer writing only where it
 changes `PadState::unsaved`. A pad already read is shown
 from what is held and is never read a second time. **The question's rule is `Pads::show`'s**: it
-draws the pad and answers the one to ask the worker for, which is `None` for a pad whose disk has
-been read, so the four doors in -- the listing, a pad just made, a delete coming back to the next
+draws the pad and answers the one to ask the worker for: an open, or, for a pad whose disk has
+been read, a `Remember` that moves it to the front of the order on disk, so the four doors in -- the listing, a pad just made, a delete coming back to the next
 pad, and the reader's own switch -- are one shape and none of them can forget the check. The
 listing used to ask unconditionally, and was right only because it is the first question the app
 puts and nothing can be open when it answers.

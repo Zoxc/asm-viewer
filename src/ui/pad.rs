@@ -229,19 +229,23 @@ impl Pads {
     /// it to the front of the order the panel draws — the same `touch` the file goes
     /// through on the worker, so the two cannot say different things.
     ///
-    /// **Answers the [`PadJob::Open`] to ask the worker for**, and [`None`] for a pad whose
-    /// disk has already been read. Every door into a pad goes through here, so the rule
+    /// **Answers the [`PadJob::Open`] to ask the worker for**, and for a pad whose disk has
+    /// already been read, the [`PadJob::Remember`] that moves it on the disk too, or
+    /// [`None`] where nothing moved. Every door into a pad goes through here, so the rule
     /// that a pad already read is never read again is written once rather than remembered
     /// by each of them ([`PadState::opened`]).
     fn show(&mut self, pad: PadId) -> Option<PadJob> {
         self.held(&pad);
-        self.order.touch(pad.clone());
+        let moved = self.order.touch(pad.clone());
         self.shown = pad;
         let state = self.state();
-        (!state.opened()).then(|| PadJob::Open {
-            scratchpad: state.scratchpad.clone(),
-            holding: state.holding,
-        })
+        if !state.opened() {
+            return Some(PadJob::Open {
+                scratchpad: state.scratchpad.clone(),
+                holding: state.holding,
+            });
+        }
+        moved.then(|| PadJob::Remember(self.shown.clone()))
     }
 
     /// The pads the disk has, as the worker read them. Answers with the pad to open,
@@ -255,8 +259,8 @@ impl Pads {
     /// is seeded and nothing is written until there is something to say.
     ///
     /// The order is not written back before it has been read. Nothing here guards that:
-    /// the only writer is `scratchpad::remember`, on the worker inside the `PadJob::Open`
-    /// this answer sends. [`PadState::opened`]'s rule one level up.
+    /// the only writer is `scratchpad::remember`, on the worker, and the first job to call
+    /// it is one this answer sends. [`PadState::opened`]'s rule one level up.
     fn listed(&mut self, listing: &[PadListing]) -> Option<PadJob> {
         if !listing.is_empty() {
             self.order = PadOrder::of(listing);
@@ -743,6 +747,9 @@ pub(crate) enum PadJob {
         scratchpad: Scratchpad,
         holding: u64,
     },
+    /// Put a pad already open at the front of the order on disk: shown again, it is the
+    /// one a restart comes back to.
+    Remember(PadId),
     Save(Scratchpad),
     Build(Scratchpad),
     /// Start the program the pad shows. It goes to the worker because it *forks* and
@@ -768,7 +775,7 @@ impl PadJob {
     pub(crate) fn pad(&self) -> Option<&PadId> {
         match self {
             PadJob::List | PadJob::New => None,
-            PadJob::Delete(pad) | PadJob::Run { pad, .. } => Some(pad),
+            PadJob::Delete(pad) | PadJob::Remember(pad) | PadJob::Run { pad, .. } => Some(pad),
             PadJob::Open { scratchpad, .. }
             | PadJob::Save(scratchpad)
             | PadJob::Build(scratchpad) => Some(scratchpad.id()),
@@ -793,6 +800,8 @@ pub(crate) enum PadAnswer {
     /// Why the package is still on the disk, or `None` when it is gone. Nothing waits for
     /// this: the app let the pad go when the reader said to.
     Deleted(Option<Failure>),
+    /// The order on disk was written, or could not be: nothing waits for this either.
+    Remembered,
     Opened {
         scratchpad: Scratchpad,
         /// The program the package says the last build made, read back off the disk.
@@ -893,7 +902,7 @@ pub(crate) fn pad_work(store: Option<&Store>, job: PadJob) -> PadAnswer {
                 let pad = scratchpad.id().clone();
                 match scratchpad.opened_in(&directory) {
                     Ok(opened) => {
-                        // Opening a pad is what puts it at the front of the order, so the
+                        // Showing a pad is what puts it at the front of the order, so the
                         // pad a restart comes back to is the one the reader was last in --
                         // and `touch` answering whether anything moved is what keeps a
                         // startup that reopens the pad already at the front from writing a
@@ -929,6 +938,12 @@ pub(crate) fn pad_work(store: Option<&Store>, job: PadJob) -> PadAnswer {
                 holding,
             },
         },
+        PadJob::Remember(pad) => {
+            if let Some(store) = store {
+                crate::scratchpad::remember(store, &pad);
+            }
+            PadAnswer::Remembered
+        }
         PadJob::Save(scratchpad) => PadAnswer::Saved {
             pad: scratchpad.id().clone(),
             failure: match &store {
@@ -1068,6 +1083,7 @@ pub(crate) fn use_scratchpad_with(
             PadAnswer::Deleted(failure) => {
                 pad.write().deleted(failure);
             }
+            PadAnswer::Remembered => {}
             PadAnswer::Opened {
                 scratchpad,
                 program,

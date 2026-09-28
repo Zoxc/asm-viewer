@@ -17773,6 +17773,7 @@ enum Asked {
     List,
     New,
     Delete(String),
+    Remember(String),
     Open(String),
     Save(String),
     Build(String),
@@ -17914,6 +17915,7 @@ fn mount_scratchpad<E: IntoElement + 'static>(
             PadJob::List => Asked::List,
             PadJob::New => Asked::New,
             PadJob::Delete(name) => Asked::Delete(name.as_str().to_owned()),
+            PadJob::Remember(name) => Asked::Remember(name.as_str().to_owned()),
             PadJob::Open { scratchpad, .. } => Asked::Open(scratchpad.id().as_str().to_owned()),
             PadJob::Save(scratchpad) => Asked::Save(scratchpad.source.clone()),
             PadJob::Build(scratchpad) => Asked::Build(scratchpad.source.clone()),
@@ -18043,6 +18045,7 @@ fn the_front_of_the_order_is_the_pad_that_opens() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("second"), pad_listing("first")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18101,6 +18104,7 @@ fn a_listing_longer_than_the_order_file_is_drawn_whole() {
             PadJob::List => PadAnswer::Listed(listed.clone()),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18148,6 +18152,7 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18204,10 +18209,14 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
 
     assert_eq!(pad.peek().shown(), &one);
     assert_eq!(shown_rope(text, pad), "// one\n");
+    // But it is back at the front of the order, on the disk as well as on screen, or a
+    // restart would open the pad that was left.
+    let asked = asked_until(&mut test, &asks, |job| matches!(job, Asked::Remember(_)));
     assert!(
-        !matches!(asks.try_recv(), Ok(Asked::Open(_))),
+        !asked.iter().any(|job| matches!(job, Asked::Open(_))),
         "the pad was read again on the way back"
     );
+    assert_eq!(asked.last(), Some(&Asked::Remember("one".to_owned())));
 }
 
 /// A pad read twice is opened once, and the second answer is dropped.
@@ -18229,6 +18238,7 @@ fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18336,6 +18346,7 @@ fn the_panel_draws_names_and_never_ids() {
             },
             PadJob::New => unreachable!("this test never makes one"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
@@ -18377,6 +18388,7 @@ fn a_new_pad_is_written_and_shown_at_once() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("pad")]),
             PadJob::New => PadAnswer::Created(Ok(answering.clone())),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18440,6 +18452,7 @@ fn a_new_pad_writes_the_pad_it_replaces_first() {
                 PadAnswer::Created(Ok(made.clone()))
             }
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18489,6 +18502,7 @@ fn a_refusal_is_kept_and_the_next_one_replaces_it() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one")]),
             PadJob::New => PadAnswer::Created(Err(Failure::Write("no room".to_owned()))),
             PadJob::Delete(_) => PadAnswer::Deleted(Some(Failure::Delete("busy".to_owned()))),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18550,6 +18564,7 @@ fn renaming_a_pad_is_a_save_and_moves_nothing() {
             },
             PadJob::New => unreachable!("this test never makes one"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
@@ -18593,6 +18608,7 @@ fn a_delete_is_asked_for_before_anything_goes() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("a pad was deleted without being asked about"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18736,6 +18752,7 @@ fn confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => PadAnswer::Deleted(None),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18811,6 +18828,7 @@ fn coming_back_to_a_pad_already_read_draws_its_own_buffer() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("no pad is deleted here"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -18865,6 +18883,7 @@ fn deleting_a_pad_that_is_not_shown_leaves_the_editor_standing() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => PadAnswer::Deleted(None),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -19110,6 +19129,7 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open { holding, .. } => PadAnswer::Opened {
                 holding,
                 scratchpad: answering.clone(),
@@ -19154,6 +19174,7 @@ fn a_pad_that_will_not_load_is_left_unopened_and_never_written() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -19199,6 +19220,7 @@ fn a_pad_that_will_not_load_is_not_built_over_either() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -19241,6 +19263,7 @@ fn a_pad_not_read_yet_takes_no_edits() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -19288,6 +19311,7 @@ fn the_mirror_copies_the_editor_only_where_it_has_changed() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -19341,6 +19365,7 @@ fn an_edit_is_written_and_a_bad_row_is_counted() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -19412,6 +19437,7 @@ fn a_bad_row_is_marked_from_what_is_typed_and_not_from_a_refusal() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -19467,6 +19493,7 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -20156,6 +20183,7 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => PadAnswer::Deleted(None),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -20360,6 +20388,7 @@ fn mount_rows(rows: &[&str], focus: &str) -> (TestingRunner, State<Pads>, Vec<Ro
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -20538,6 +20567,7 @@ fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -20629,6 +20659,7 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -20712,6 +20743,7 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -20825,6 +20857,7 @@ fn a_run_that_cannot_start_says_why() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -20875,6 +20908,7 @@ fn a_request_copies_no_more_of_the_pad_than_it_sends() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -20962,6 +20996,7 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -21058,6 +21093,7 @@ fn a_runs_lines_draw_no_other_piece_of_the_page() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -21114,6 +21150,7 @@ fn a_keystroke_draws_the_page_once() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -21171,6 +21208,7 @@ fn a_run_asked_for_during_a_build_starts_nothing() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -21233,6 +21271,7 @@ fn the_pads_build_chord_is_refused_while_a_build_is_on() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -21313,6 +21352,7 @@ fn the_pads_run_and_new_chords_press_its_buttons() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => PadAnswer::Created(Ok(answering.clone())),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -21375,6 +21415,7 @@ fn the_program_a_pad_shows_is_the_one_it_runs() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             // A pad built in an earlier run, opened on its program.
             PadJob::Open {
                 scratchpad,
@@ -21615,6 +21656,7 @@ fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
@@ -40787,6 +40829,7 @@ fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Remember(_) => PadAnswer::Remembered,
             PadJob::Open {
                 scratchpad,
                 holding,
