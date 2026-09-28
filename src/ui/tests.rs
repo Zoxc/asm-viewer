@@ -3658,6 +3658,59 @@ fn a_restore_does_not_land_in_the_project_after_it() {
     );
 }
 
+/// The source file [`page_beside_harness`]'s session was left on.
+const LEFT_ON: &str = "/src/main.rs";
+
+/// A restore of a project with a binary, whose session has the Settings page open and was
+/// left on a source tab. In a hook, the restore's task needing a scope to be spawned from.
+fn page_beside_harness() -> impl IntoElement {
+    let states = use_project_states();
+    use_hook(move || {
+        let project = Project {
+            binaries: vec![Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("crates/analysis/tests/fixtures/line_fixture.o")],
+            ..Project::default()
+        };
+        let session: Session = toml::from_str(&format!(
+            "[active.Source]\npath = \"{LEFT_ON}\"\n\n[[tabs]]\npage = \"settings\"\n\n[[tabs]]\n\n[[tabs.entries]]\n[tabs.entries.document.Source]\npath = \"{LEFT_ON}\"\n"
+        ))
+        .expect("a session naming a page and a source tab");
+        restore_project(states, project, session);
+    });
+    rect().expanded()
+}
+
+/// **A page is not shown through the load of a session left on a document.** Each page
+/// was put back before the load and shown as it went in, so Settings stayed on screen
+/// until the load ended and the view jumped to the document.
+#[test]
+fn a_restored_page_is_not_shown_while_the_documents_load() {
+    let (mut test, states) = TestingRunner::new(
+        page_beside_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    assert_ne!(
+        states.open.strip.peek().active(),
+        Some(Tab::Page(Page::Settings)),
+        "the page was shown while the documents loaded"
+    );
+
+    for _ in 0..200 {
+        settle(&mut test);
+        if !open_documents(states.open).is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let file = Document::Source(Arc::from(Path::new(LEFT_ON)));
+    assert!(states.open.active() == Some(file), "not on the file");
+    let strip = states.open.strip.peek();
+    assert_eq!(strip.tabs().len(), 2);
+    assert_eq!(strip.tabs()[0], Tab::Page(Page::Settings));
+}
+
 /// **A directory chosen for a project the reader has since left goes nowhere.** The
 /// folder dialog is not modal to the window, so the reader can go to another project while
 /// it is up, and its answer replaced that project's directory.

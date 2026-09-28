@@ -309,8 +309,9 @@ fn enter_project(states: ProjectStates, file: PathBuf, project: Project, session
 /// project comes here through [`enter_project`], so none can drift from another. Every
 /// step degrades silently, and a project with nothing saved restores nothing.
 ///
-/// The **pages go back first and synchronously**: one resolves against no object, so a
-/// session whose only tab was Settings has nothing to wait for.
+/// The **pages go back first and synchronously** when one was on screen: a page resolves
+/// against no object, so a session whose only tab was Settings has nothing to wait for.
+/// Otherwise they go back with the documents.
 ///
 /// The documents follow, through [`restore_documents`]: after the load where there are
 /// binaries, and **at once where there are none**. What waits for a load is resolving a
@@ -347,17 +348,17 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         ..
     } = states;
 
-    // The pages, at the places they had in the bar, and the one that was on screen.
-    // Before the documents, whose own count of places steps over theirs.
-    {
+    // The pages, at the places they had in the bar, when one of them was on screen.
+    // Before the documents, whose own count of places steps over theirs. A session left
+    // on a document puts its pages back with the documents instead: each tab is shown as
+    // it goes in, so a page put back now would be on screen until the load ends.
+    if let Some(shown) = session.shown_page() {
         let mut strip = open.strip;
         let mut strip = strip.write();
         for (position, page) in session.pages() {
             strip.insert(Tab::Page(page), position);
         }
-        if let Some(page) = session.shown_page() {
-            strip.raise(Tab::Page(page));
-        }
+        strip.raise(Tab::Page(shown));
     }
 
     // Nothing to load, so nothing to wait for.
@@ -422,20 +423,22 @@ fn restore_documents(states: ProjectStates, session: &Session) {
     // and records nothing over it.
     visits.set(restored.visits);
     // Where in the bar the next tab goes. Counted over what survived rather than read off
-    // the saved list, so the tabs that resolved keep their order around the pages already
-    // put back.
+    // the saved list, so the tabs that resolved keep their order around the pages.
     let mut position = 0;
     for tab in restored.tabs {
-        let RestoredTab::Document {
-            temporal,
-            trail,
-            entries,
-        } = tab
-        else {
-            // A page is in the bar already, put there first; what it owes the count is
-            // its place.
-            position += 1;
-            continue;
+        let (temporal, trail, entries) = match tab {
+            RestoredTab::Document {
+                temporal,
+                trail,
+                entries,
+            } => (temporal, trail, entries),
+            // A page may be in the bar already, put there first, and then stays put.
+            RestoredTab::Page(page) => {
+                let mut strip = open.strip;
+                strip.write().insert(Tab::Page(page), position);
+                position += 1;
+                continue;
+            }
         };
         // The trail whole, with the maps filled before the chip goes in the bar.
         // Reopening a tab is not visiting it. Put at the place it had rather than beside

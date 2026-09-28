@@ -606,10 +606,12 @@ list would drop the tabs whose object had not landed yet. A project left during 
 nothing: leaving ends the load, and the session waiting on it is not the open project's. The test
 is `Loads::left`, a load `clear` stopped, and not whether the load is still running, since closing
 its files ends it too; nor which project file is open, since leaving one and opening it again starts
-a restore of its own. The **pages go back before any of that
+a restore of its own. When the session was left on a page, the **pages go back before any of that
 and synchronously**, at the places they had in the bar and with the one that was on screen raised:
 a page resolves against no object, so a session whose only tab was Settings has nothing to wait
-for. The documents follow, in `restore_documents`: after the load where there are binaries, and
+for. A session left on a document puts its pages back with the documents instead, since each tab
+is shown as it goes in the bar and a page put back first would be on screen until the load ended.
+The documents follow, in `restore_documents`: after the load where there are binaries, and
 **at once where there are none**. A source place resolves against no object as a page does, so a
 project with no binaries -- one opened by its directory and read in the Files view, or one whose
 binaries have all been deleted -- still comes back with the files the reader had open. Whatever the
@@ -619,11 +621,11 @@ objects list holds, the tabs naming an object that is not there are dropped and 
 against them -- and resolves all three under it, so a tab and the active document cannot be read
 against two different answers about which binaries have changed, and a caller cannot take one and
 forget the others. `Session::pages`
-and `shown_page` stay outside it, being the pages' half and going back first either way.
+and `shown_page` stay outside it, being the pages' half, which may go back first.
 `restore_documents` sets the visits, then for each restored tab opens its trail whole
 (`Docs::open_trail`, temporal flag and all), calls `place_entries` and puts the tab in the bar at
 the place it had -- counted over what survived, so the tabs that resolved keep their order around
-the pages already there -- and then raises the tab already showing the active document, or, for
+the pages, each put in the bar here unless it is there already -- and then raises the tab already showing the active document, or, for
 one that degraded, opens it with `Reach::NewTab`. It raises rather than opens because opening a
 place a tab already shows promotes that tab, and the tab on screen is often the temporal one. A
 session left on a page has no active document, and that page is raised again instead: every tab put
