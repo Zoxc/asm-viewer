@@ -37904,6 +37904,34 @@ fn the_files_box_suggests_an_extension() {
     assert!(drawn.iter().any(|text| text == "rs"), "{drawn:?}");
 }
 
+/// **The Files box says which files a program is told about** where it names none: the
+/// app's own program, typed out or not, gets Rust files, and any other every file whose
+/// language the app knows.
+#[test]
+fn the_files_box_says_which_files_the_program_is_told_about() {
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
+    });
+    let mut proj = roots.states.proj;
+    proj.write().language_server = OpenProject::default_server().to_owned();
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|text| text == "rs"), "{drawn:?}");
+
+    proj.write().language_server = "clangd".to_owned();
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "every file the app knows"),
+        "{drawn:?}"
+    );
+}
+
 /// The Project view says whether the reader has agreed to a server reading this directory,
 /// and is the way back: taking it back forgets the answer and stops the server it was
 /// given for, since a reader who did not mean to let a program read their project has said

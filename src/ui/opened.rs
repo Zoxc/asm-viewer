@@ -109,9 +109,9 @@ impl Opened {
 /// Which files those are is the **project's** to say, the app knowing the program and not
 /// what it serves: the extensions named in the Project view, in the reader's own spelling,
 /// as they were when the server started ([`Serving`]).
-/// Where they named none it is the program's own answer -- the one program this app knows
-/// by name is Rust's, and a project that named its own gets asked about whatever it opens,
-/// that being the reader's business.
+/// Where they named none it is the program's own answer: the one program this app knows
+/// by name is Rust's, and it is told about Rust files; any other is told about every file
+/// whose language the app knows.
 ///
 /// The identifier is [`languages::Language::spoken`] where the app knows the language, and
 /// the extension itself where the reader named one it does not: the specification says to

@@ -81,11 +81,11 @@ impl OpenProject {
         languages::Language::Rust.server().unwrap_or_default()
     }
 
-    /// Whether the reader named a server of their own rather than leaving the app's. What
-    /// the Files box asks: a project that named its own server is asked about whatever it
-    /// opens, that being the reader's business.
-    pub(crate) fn names_server(&self) -> bool {
-        given(&self.language_server).is_some()
+    /// Whether the program to read this project with is the app's own, typed out or not.
+    /// What the Files box asks: where it names no files, the app's own program is told
+    /// about Rust files, and any other about every file whose language the app knows.
+    pub(crate) fn serves_default(&self) -> bool {
+        self.server() == OpenProject::default_server()
     }
 
     /// What a server started now would be started as: the program, and the extensions
@@ -700,11 +700,11 @@ impl Component for LanguageSection {
                 proj.into_writable()
                     .map(|open| &open.language_files, |open| &mut open.language_files),
             )
-            .placeholder(match open.names_server() {
-                true => "every file opened",
+            .placeholder(match open.serves_default() {
                 // What the box takes is an extension, not what a server calls the
                 // language.
-                false => "rs",
+                true => "rs",
+                false => "every file the app knows",
             })
             .width(Size::fill())
             .on_pre_key_down(plain_keys()),
