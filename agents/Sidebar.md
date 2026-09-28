@@ -621,7 +621,9 @@ with no cargo on the machine.
 **Artifacts are what cargo named, and the workspace's own are found by `manifest_path`.** cargo
 reports a `compiler-artifact` for every crate in the graph -- 449 of them for this app's own
 workspace, of which two are its own -- so the list is filtered to the artifacts whose manifest is
-under the directory being built, matched by path component. cargo is handed a working directory
+under the directory being built, matched by path component. A build script is dropped too, the
+workspace's own included: cargo lists it as an artifact, but it is a tool cargo ran and not
+something the build made. cargo is handed a working directory
 rather than a path, and derives every manifest path from its own `env::current_dir()`, so the
 directory is first spelled the way cargo will spell it -- and the two platforms spell it
 differently. On Unix that is `getcwd(2)`, which the kernel answers with symlinks resolved and `..`

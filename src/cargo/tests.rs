@@ -185,6 +185,24 @@ fn a_dependencys_artifact_is_not_this_workspaces() {
     assert_eq!(artifacts, Vec::new());
 }
 
+/// A package with a `build.rs` has cargo report the script as an artifact of the
+/// workspace's own, under the package's manifest.
+#[test]
+fn a_build_script_is_not_an_artifact() {
+    let stdout = concat!(
+        r#"{"reason":"compiler-artifact","manifest_path":"/work/app/Cargo.toml","#,
+        r#""target":{"name":"build-script-build","kind":["custom-build"]},"executable":null,"#,
+        r#""filenames":["/work/app/target/debug/build/app-1/build_script_build-1"]}"#,
+        "\n",
+    );
+
+    let Run::Built { artifacts, .. } = outcome(stdout, "", true, &workspace()) else {
+        panic!("a build");
+    };
+
+    assert_eq!(artifacts, Vec::new());
+}
+
 /// A verbatim directory still reaches the comparison: a reader can type one into the
 /// project box, and `path::absolute` hands it back as given. `Path` reads the prefix of
 /// `\\?\C:\work\app` as `VerbatimDisk` and cargo's `C:\work\app\Cargo.toml` as `Disk`, so

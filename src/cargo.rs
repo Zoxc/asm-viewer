@@ -587,7 +587,9 @@ struct TargetMessage {
 impl ArtifactMessage {
     /// What of this message is worth listing, which is usually nothing: cargo reports an
     /// artifact for **every** crate in the graph, dependencies and build scripts included
-    /// -- 449 of them for this app's own workspace, of which two are its own.
+    /// -- 449 of them for this app's own workspace, of which two are its own. A build
+    /// script is left out even when it is the workspace's own: it is cargo's tool, run
+    /// during the build, and not something the build produced.
     ///
     /// A target's own file is its `executable` where it has one, and its `filenames`
     /// otherwise, which is what puts a library's `.rlib` in the list -- an archive this app
@@ -597,7 +599,9 @@ impl ArtifactMessage {
     /// `.dSYM` directory, for the same reason. The one place here a file is judged by its
     /// name.
     fn built(self, directory: &Path) -> Vec<Artifact> {
-        if !inside(&self.manifest_path, directory) {
+        if !inside(&self.manifest_path, directory)
+            || self.target.kind.iter().any(|kind| kind == "custom-build")
+        {
             return Vec::new();
         }
 
