@@ -493,7 +493,9 @@ The result is `merged` over `wanted()`, **leaf by leaf and not per name**: a fil
 not know as written; here an unresolved `${...}` reaching the server is a path that silently
 does not exist, so every other one is an error. So is a file that is not an object of JSON,
 and a name given both a value and a table (`cargo` beside `cargo.features`) -- which of the
-two was meant is not this app's to pick.
+two was meant is not this app's to pick. And so is `${workspaceFolder}` over a directory
+that is not UTF-8: a JSON string cannot hold its name, and the lossy spelling is another
+path.
 
 The file is read as **JSONC**, as VS Code reads it and as the files in the wild are
 written: the tree this is all for opens with nine lines of `//`. `serde_json` takes neither

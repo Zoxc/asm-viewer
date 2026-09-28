@@ -115,6 +115,22 @@ fn a_variable_this_cannot_resolve_is_a_failure() {
     assert_eq!(settings.options()["x"], json!("${workspaceFolder"));
 }
 
+/// A directory that is not UTF-8 cannot be put into a setting at all, and saying so beats
+/// sending a path spelled with a replacement character, which is not there. Only where the
+/// file asks for it: a project whose settings never name the folder reads as ever.
+#[cfg(unix)]
+#[test]
+fn a_directory_that_is_not_utf8_is_not_spelled_into_a_setting() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let directory = Path::new(std::ffi::OsStr::from_bytes(b"/home/u/caf\xe9/p"));
+    let text = r#"{ "rust-analyzer.procMacro.server": "${workspaceFolder}/build/srv" }"#;
+    assert_eq!(settings_from(text, directory), Err(Unreadable::Unspelled));
+
+    let text = r#"{ "rust-analyzer.cargo.features": ["a"] }"#;
+    assert!(settings_from(text, directory).is_ok());
+}
+
 /// JSONC and not JSON5. The parser's own defaults go on to take a name without quotes, a
 /// single-quoted string, a hex number, a leading plus and a comma left out, and no editor
 /// reading this file takes any of them: a file this app read and the reader's editor would

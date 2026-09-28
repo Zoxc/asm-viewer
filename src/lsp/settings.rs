@@ -110,6 +110,9 @@ pub enum Unreadable {
     Both(String),
     /// A `${...}` that is not `${workspaceFolder}`.
     Variable(String),
+    /// `${workspaceFolder}` in a project whose directory is not UTF-8, which no JSON string
+    /// can spell.
+    Unspelled,
     /// A name spelled in more parts than [`DEEPEST`].
     Deep(String),
 }
@@ -127,6 +130,10 @@ impl fmt::Display for Unreadable {
             Unreadable::Variable(name) => {
                 write!(formatter, "${{{name}}} is not a variable this can resolve")
             }
+            Unreadable::Unspelled => write!(
+                formatter,
+                "${{workspaceFolder}} stands for a directory whose name is not UTF-8"
+            ),
             Unreadable::Deep(name) => write!(formatter, "{PREFIX}{name} has too many parts"),
         }
     }
@@ -321,7 +328,9 @@ fn substituted(value: &Value, directory: &Path) -> Result<Value, Unreadable> {
 /// `${workspaceFolder}` becomes the project's directory and **every other variable is a
 /// failure**. VS Code leaves a name it does not know as it was written, which here would
 /// be a path reaching the server that silently does not exist; saying so is the better of
-/// the two. A `${` that is never closed is not a variable and is left alone.
+/// the two. So is a directory that is not UTF-8: spelled with a replacement character it is
+/// another path, and one that is not there. A `${` that is never closed is not a variable
+/// and is left alone.
 fn resolved(text: &str, directory: &Path) -> Result<String, Unreadable> {
     let mut out = String::new();
     let mut rest = text;
@@ -333,8 +342,9 @@ fn resolved(text: &str, directory: &Path) -> Result<String, Unreadable> {
         if variable != FOLDER {
             return Err(Unreadable::Variable(rest[at + 2..end].to_owned()));
         }
+        let folder = directory.to_str().ok_or(Unreadable::Unspelled)?;
         out.push_str(&rest[..at]);
-        out.push_str(&directory.to_string_lossy());
+        out.push_str(folder);
         rest = &rest[end + 1..];
     }
     out.push_str(rest);
