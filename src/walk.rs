@@ -15,7 +15,9 @@
 //! where it stands.
 
 use ignore::{DirEntry, Walk, WalkBuilder};
-use std::{cmp::Ordering, ops::ControlFlow, path::Path, path::PathBuf};
+use std::{
+    cmp::Ordering, collections::HashMap, ops::ControlFlow, path::Path, path::PathBuf, sync::Mutex,
+};
 
 use crate::source;
 
@@ -36,7 +38,10 @@ fn walker(root: &Path) -> Walk {
         // The bound the source pane reads by: a file it would refuse to show is a file no
         // hit in it could open, and one the finder could not open either.
         .max_filesize(Some(crate::source::MAX_SIZE))
-        .sort_by_file_path(order)
+        .sort_by_file_path({
+            let kinds = Mutex::new(Kinds::default());
+            move |a, b| order(&kinds, a, b)
+        })
         .build()
 }
 
@@ -169,18 +174,46 @@ pub fn by_name(a: &str, b: &str) -> Ordering {
 /// than left to the walker: a hit in a directory's own files arrives before the walk
 /// descends, and the list only ever grows at its end.
 ///
-/// The comparator is handed paths and not entries, so the kind costs a `symlink_metadata`
-/// per comparison. A path that cannot be stat'ed sorts as a file, which is where a walker
-/// that cannot list it does the least.
-fn order(a: &Path, b: &Path) -> Ordering {
-    let directory = |path: &Path| {
-        path.symlink_metadata()
-            .map(|data| data.is_dir())
-            .unwrap_or(false)
-    };
-    directory(a)
-        .cmp(&directory(b))
+/// The comparator is handed paths and not entries, so the kind is a `symlink_metadata`,
+/// read once per entry through `kinds`. A path that cannot be stat'ed sorts as a file,
+/// which is where a walker that cannot list it does the least.
+fn order(kinds: &Mutex<Kinds>, a: &Path, b: &Path) -> Ordering {
+    let mut kinds = kinds.lock().unwrap_or_else(|held| held.into_inner());
+    kinds
+        .directory(a)
+        .cmp(&kinds.directory(b))
         .then_with(|| by_name(&source::borrowed_name(a), &source::borrowed_name(b)))
+}
+
+/// Whether each entry of the directory being sorted is a directory, as first read.
+///
+/// A sort panics when its comparator answers the same pair two ways, and a stat per
+/// comparison does that for an entry removed, or made a directory, part way through the
+/// sort. So each entry is read once. A walker sorts one directory at a time, so what is
+/// kept is let go when the entries it is asked about are under another.
+#[derive(Default)]
+struct Kinds {
+    parent: PathBuf,
+    directories: HashMap<PathBuf, bool>,
+}
+
+impl Kinds {
+    fn directory(&mut self, path: &Path) -> bool {
+        let parent = path.parent().unwrap_or(path);
+        if parent != self.parent {
+            self.parent = parent.to_path_buf();
+            self.directories.clear();
+        }
+        if let Some(&directory) = self.directories.get(path) {
+            return directory;
+        }
+        let directory = path
+            .symlink_metadata()
+            .map(|data| data.is_dir())
+            .unwrap_or(false);
+        self.directories.insert(path.to_path_buf(), directory);
+        directory
+    }
 }
 
 #[cfg(test)]

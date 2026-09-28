@@ -331,8 +331,10 @@ where nothing typed and a pattern it refuses are both no search.
 rules, the binary detection and the line-at-a-time reading come from rather than being written here.
 Seven decisions are the app's. `require_git(false)`, since a project directory is usually not a git
 working tree and the crate's default would then walk `target/` whole. The sort puts a directory's
-own files before the directories under it, which costs a `symlink_metadata` per comparison and buys
-the one thing a reader watching a list grow needs: it only ever grows at its end. The name half is
+own files before the directories under it, which costs a `symlink_metadata` per entry and buys
+the one thing a reader watching a list grow needs: it only ever grows at its end. The kind is read
+once per entry and kept for that directory's sort. It was read per comparison, and an entry removed
+or made a directory mid-sort then answered the same pair two ways, which std's sort panics on. The name half is
 `walk::by_name`, the Files view's comparator as well, and it allocates nothing: the two names are
 lowercased a character at a time as they are compared, where each side used to be copied twice.
 `max_filesize` is `source::MAX_SIZE`, so the search reads only what the source pane could show and

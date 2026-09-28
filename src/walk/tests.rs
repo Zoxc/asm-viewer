@@ -191,3 +191,20 @@ fn a_project_reached_through_a_symlink_is_walked() {
 
     assert_eq!(walked(&through), ["main.rs"]);
 }
+
+/// A sort panics when its comparator answers one pair two ways, so an entry that turns
+/// into a directory part way through a sort still sorts as the file it was first read as.
+#[test]
+fn an_entry_keeps_its_kind_for_the_whole_sort() {
+    let root = Temporary::fresh_directory("walk-kinds");
+    let changing = root.join("changing");
+    let other = root.join("other");
+    write(&changing, "");
+    fs::create_dir(&other).expect("the temp directory is writable");
+    let kinds = Mutex::new(Kinds::default());
+
+    assert_eq!(order(&kinds, &changing, &other), Ordering::Less);
+    fs::remove_file(&changing).expect("the file was just written");
+    fs::create_dir(&changing).expect("the temp directory is writable");
+    assert_eq!(order(&kinds, &changing, &other), Ordering::Less);
+}
