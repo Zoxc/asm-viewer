@@ -71,15 +71,15 @@ const SIZE_STEP: f32 = 0.5;
 /// grid in the direction of `by`, so a desktop's 13.75 steps to 14 and to 13.5, its two
 /// neighbours, rather than drifting off the grid or past one of them.
 ///
-/// The bounds are on the *stepper* only: a hand-edited `settings.toml` may still say
-/// anything.
+/// The bounds are on the *stepper* only: a hand-edited `settings.toml` or a desktop may
+/// still say anything. So a bound only stops a press, and a size already past it stays
+/// where it is rather than being moved the other way.
 fn stepped(points: f32, by: f32) -> f32 {
     let at = points / SIZE_STEP;
-    let next = match by > 0.0 {
-        true => at.floor() + 1.0,
-        false => at.ceil() - 1.0,
-    };
-    (next * SIZE_STEP).clamp(5.0, 32.0)
+    match by > 0.0 {
+        true => ((at.floor() + 1.0) * SIZE_STEP).min(32.0).max(points),
+        false => ((at.ceil() - 1.0) * SIZE_STEP).max(5.0).min(points),
+    }
 }
 
 /// A point size as the page writes it: `9`, `10.5`, and never `10.50` or `9.0`. Rounded
@@ -236,7 +236,11 @@ fn font_section(half: FontHalf) -> Element {
     };
     let step = move |by: f32| {
         move |_: Event<PressEventData>| {
-            set_size(Some(stepped(points, by)));
+            // A press that moves nothing makes no override either.
+            let next = stepped(points, by);
+            if next != points {
+                set_size(Some(next));
+            }
         }
     };
 
