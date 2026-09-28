@@ -11149,6 +11149,31 @@ fn a_refusal_that_lands_after_the_server_went_quiet_is_not_held() {
     );
 }
 
+/// **An answer about a file the pane has left is not taken**, though the pane came back
+/// to a file whose links are held and asked nothing about it. Taken, it replaced those
+/// links and the file was asked about again.
+#[test]
+fn an_answer_about_a_file_the_pane_came_back_from_is_not_taken() {
+    let a: Arc<Path> = Arc::from(Path::new("/p/src/a.rs"));
+    let b: Arc<Path> = Arc::from(Path::new("/p/src/b.rs"));
+    let mut linked = Linked::default();
+    linked.asking(ticket(1, 1), a.clone());
+    assert!(linked.answer(ticket(1, 1), a.clone(), a_link()));
+    linked.showing(Some(&b));
+    linked.asking(ticket(1, 2), b.clone());
+    // Back to the first file, before the second is answered.
+    assert!(
+        linked.showing(Some(&a)),
+        "the question about the file left was kept"
+    );
+    assert!(!linked.pending(&a, 1));
+    assert!(
+        !linked.answer(ticket(1, 2), b.clone(), a_link()),
+        "an answer about a file the pane has left was taken"
+    );
+    assert!(linked.links_in(&a).is_some(), "the links shown were lost");
+}
+
 /// **An answer to a question asked before the server settled is not taken**, however late
 /// it arrives. The news that the server has settled and the answer come down two channels
 /// with nothing ordering them, so the news can land first and find nothing to drop; the

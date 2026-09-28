@@ -79,6 +79,24 @@ impl Linked {
         }
     }
 
+    /// The pane is showing `file`, and a question about any other is about a file it has
+    /// left: its answer goes to nobody. Whether anything changed, so the caller writes only
+    /// then.
+    ///
+    /// Needed beside the check in [`Linked::take`] for a pane that comes back to a file
+    /// whose links are still held: nothing is asked about it, so the question about the
+    /// file it left is still the one held, and its answer would replace the links shown.
+    pub(crate) fn showing(&mut self, file: Option<&Path>) -> bool {
+        let left = self
+            .asked
+            .as_ref()
+            .is_some_and(|(asked, _)| Some(&**asked) != file);
+        if left {
+            self.asked = None;
+        }
+        left
+    }
+
     /// Take `links` as the answer about `file` to the question `ticket`. Whether anything
     /// changed, so the caller writes only then.
     pub(crate) fn answer(&mut self, ticket: Ticket, file: Arc<Path>, links: links::Links) -> bool {
@@ -208,6 +226,12 @@ pub(crate) fn use_linking(
         if !*started.read() {
             write_if(linked, |waiting| waiting.forget());
         }
+    });
+
+    // Read and not peeked: the pane moving is what this is about.
+    use_side_effect(move || {
+        let file = showing.read().clone();
+        write_if(linked, |waiting| waiting.showing(file.as_deref()));
     });
 
     use_asking(
