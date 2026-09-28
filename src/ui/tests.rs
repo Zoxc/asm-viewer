@@ -36268,6 +36268,41 @@ fn a_file_moved_aside_on_another_thread_is_named_at_once() {
     assert!(label_area(&test, "Close").is_some(), "no window is up");
 }
 
+/// The window about a project that would not open says the file was left alone only
+/// where there is a file: not for one that is missing, nor where the app has no store,
+/// which is said without looking at the path.
+#[test]
+fn a_project_that_would_not_open_is_said_to_be_left_alone_only_where_there_is_a_file() {
+    fn unopened_harness() -> impl IntoElement {
+        rect().expanded().child(UnopenedPopup)
+    }
+
+    let left = |reason: project::Reason| {
+        let (mut test, _) = TestingRunner::new(
+            unopened_harness,
+            (600., 400.).into(),
+            move |runner: &mut _| {
+                runner
+                    .provide_root_context(move || {
+                        Unopened(State::create(Some(project::Failure {
+                            path: PathBuf::from("/nowhere/project.toml"),
+                            reason,
+                        })))
+                    })
+                    .0
+            },
+            1.,
+        );
+        settle(&mut test);
+        assert!(label_area(&test, "Close").is_some(), "no window is up");
+        label_area(&test, "It has been left exactly as it is.").is_some()
+    };
+
+    assert!(left(project::Reason::NotText));
+    assert!(!left(project::Reason::Missing));
+    assert!(!left(project::Reason::NoStore));
+}
+
 // ---------------------------------------------------------------------------------------
 // The language server and its control.
 

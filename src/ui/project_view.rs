@@ -966,14 +966,16 @@ impl Component for UnopenedPopup {
                                 .color(palette().address_fg)
                                 .span(failure.reason.to_string()),
                         )
-                        // Said only where there is a file to have left alone. The app
-                        // never moves a project of the reader's aside, and a window about
-                        // a file that will not parse is the one place that is worth
-                        // saying.
+                        // Said only where there is a file to have left alone, which a
+                        // missing store does not look for. The app never moves a project
+                        // of the reader's aside, and a window about a file that will not
+                        // parse is the one place that is worth saying.
                         .maybe_child(
-                            (failure.reason != project::Reason::Missing).then(|| {
-                                notice_line("It has been left exactly as it is.".to_owned())
-                            }),
+                            (!matches!(
+                                failure.reason,
+                                project::Reason::Missing | project::Reason::NoStore
+                            ))
+                            .then(|| notice_line("It has been left exactly as it is.".to_owned())),
                         )
                         .child(notice_path(failure.path.to_string_lossy().into_owned())),
                 )
