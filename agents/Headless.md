@@ -115,7 +115,11 @@ one -- the filter boxes decline the chords they must not eat for that reason (`a
 **Time.** `poll(step, duration)` and `poll_n(step, times)` are `sync_and_update` in a loop with a
 real `std::thread::sleep` and a rendering tick between iterations. They are the only thing that ever
 sends a tick. `animation_clock()` hands back the `AnimationClock`, which only scales animation
-*speed*; there is no virtual clock.
+*speed*; there is no virtual clock. Each iteration polls the woken tasks (`handle_events_immediately`)
+before it hands out the `on_sized` of the layout the last iteration made, so a timer that fires every
+iteration sees the render and the layout its last write caused but not their `on_sized`: what a frame
+as slow as the timer gives on the desktop. Many short steps a tick let that land first and hide a race
+until the machine is loaded, which is why the sweep's autoscroll is tested one step a tick.
 
 **Painting.** `render()` rasterises to a `SkData` PNG and `render_to_file(path)` writes it. Verified
 working here. `launch_doc` is the same thing wrapped for freya's own doc screenshots. The background

@@ -353,7 +353,7 @@ pub(crate) struct Nudge {
 pub(crate) struct RowText {
     holder: Weak<RefCell<Option<ParagraphHolderInner>>>,
     line: Rc<RefCell<Line>>,
-    text_x: Rc<Cell<f32>>,
+    text_x: Rc<Cell<Option<f32>>>,
 }
 
 #[cfg(test)]
@@ -492,20 +492,23 @@ impl Listing {
     /// The column at window x `x` on row `row`, off the paragraph the row lent: 0 for a
     /// row with no text, for an x left of its text, and for a row the list has stopped
     /// building, whose paragraph went with it; the end for an x right of the text.
-    pub(crate) fn column_at(&self, row: usize, x: f32) -> usize {
+    /// `None` for a row built and not laid out yet, which cannot say: a sweep's
+    /// autoscroll asks at a tick, which may come after the render of its last scroll and
+    /// before the `on_sized` of the layout that followed.
+    pub(crate) fn column_at(&self, row: usize, x: f32) -> Option<usize> {
         let texts = self.texts.borrow();
         let Some(text) = texts.get(&row) else {
-            return 0;
+            return Some(0);
         };
-        let x = x - text.text_x.get();
-        if x < 0.0 {
-            return 0;
-        }
         let Some(holder) = text.holder.upgrade() else {
-            return 0;
+            return Some(0);
         };
+        let x = x - text.text_x.get()?;
+        if x < 0.0 {
+            return Some(0);
+        }
         let line = text.line.borrow();
-        caret_col(&ParagraphHolder(holder), line.as_str(), x, 0.0).unwrap_or(0)
+        caret_col(&ParagraphHolder(holder), line.as_str(), x, 0.0)
     }
 }
 
@@ -552,7 +555,8 @@ struct RowCells {
     /// relative to the row can be made relative to the text. Cells and not states:
     /// nothing renders from them, and the difference between the two is scroll-invariant.
     row_x: Rc<Cell<f32>>,
-    text_x: Rc<Cell<f32>>,
+    /// `None` until the paragraph has been laid out.
+    text_x: Rc<Cell<Option<f32>>>,
     /// Where the row's top is, which is what the hover box is placed against. Its own
     /// cell rather than a corner of `row_x`'s: this one moves with every scroll, and the
     /// move is what says a box drawn against it is about a place that has gone.
@@ -576,7 +580,7 @@ fn use_row_cells(has_text: bool) -> RowCells {
         holder: use_state(ParagraphHolder::default),
         line: use_hook(|| Rc::new(RefCell::new(Line::default()))),
         row_x: use_hook(|| Rc::new(Cell::new(0.0f32))),
-        text_x: use_hook(|| Rc::new(Cell::new(0.0f32))),
+        text_x: use_hook(|| Rc::new(Cell::new(None))),
         row_y: use_hook(|| Rc::new(Cell::new(f32::NAN))),
         named: use_hook(|| Rc::new(Cell::new(None))),
         laid: use_state(|| None),
@@ -640,8 +644,8 @@ impl RowCells {
     /// and the pointer's icon are this one arithmetic: the row-relative x less the paragraph's x
     /// within the row, both taken from `on_sized` and so scroll-invariant.
     fn x_into_text(&self, at: CursorPoint) -> Option<f32> {
-        self.has_text
-            .then(|| at.x as f32 - (self.text_x.get() - self.row_x.get()))
+        let text_x = self.text_x.get().filter(|_| self.has_text)?;
+        Some(at.x as f32 - (text_x - self.row_x.get()))
     }
 
     /// Where column `col` of a row `len` bytes long is, from the row's padded edge, once
@@ -650,7 +654,7 @@ impl RowCells {
         let laid = self.laid.read();
         let line = laid.as_ref()?;
         let x = caret_x(&self.holder.read(), line.as_str(), col.min(len))?;
-        Some(self.text_x.get() - self.row_x.get() - ROW_PAD + x)
+        Some(self.text_x.get()? - self.row_x.get() - ROW_PAD + x)
     }
 
     /// The device pixel span columns `from..to` of a row `len` bytes long cover, once the
@@ -869,7 +873,7 @@ fn tell_hover(cells: &RowCells, links: Rc<TextLinks>) -> Rc<dyn Fn(Option<usize>
         let Some(columns) = on.and_then(|on| links.names.get(on)).cloned() else {
             return tell(Under::Off);
         };
-        let edge = |column| cells.text_x_of(column).map(|x| cells.text_x.get() + x);
+        let edge = |column| Some(cells.text_x.get()? + cells.text_x_of(column)?);
         // A row whose paragraph is not laid out yet answers no column, and a box placed
         // against nothing would be drawn in the window's corner.
         let (Some(left), Some(right)) = (edge(columns.start), edge(columns.end)) else {
@@ -1079,7 +1083,7 @@ fn text_paragraph(
         .height(Size::fill())
         .holder(cells.holder.read().clone())
         .on_sized(move |e: Event<SizedEventData>| {
-            text_x.set(e.area.min_x());
+            text_x.set(Some(e.area.min_x()));
             line.replace(drawn.clone());
             laid.set_if_modified(Some(drawn.clone()));
         })
@@ -1395,9 +1399,10 @@ fn dragging(marked: State<Marks>, pane: Pane) -> bool {
 
 /// Where a sweep at `at`, a window location, reaches once it has left the rows of
 /// `listing`: [`beyond`], with the rows' top worked out from where the rows sit
-/// ([`Listing::rows_top`]), and the column off the paragraph the row lent. `None` while
-/// the pointer is over a row, which answers for itself.
-fn reach(listing: &Listing, at: CursorPoint) -> Option<Caret> {
+/// ([`Listing::rows_top`]), and the row with the column off the paragraph it lent, or no
+/// column while it has not lent one ([`Listing::column_at`]). `None` while the pointer is
+/// over a row, which answers for itself.
+fn reach(listing: &Listing, at: CursorPoint) -> Option<(usize, Option<usize>)> {
     let area = listing.bounds.get();
     let bounds = Bounds {
         left: area.min_x(),
@@ -1413,10 +1418,7 @@ fn reach(listing: &Listing, at: CursorPoint) -> Option<Caret> {
         at.x as f32,
         at.y as f32,
     )?;
-    Some(Caret {
-        row: reached.row,
-        col: listing.column_at(reached.row, reached.x),
-    })
+    Some((reached.row, listing.column_at(reached.row, reached.x)))
 }
 
 /// The handler that carries a sweep on once the pointer has left the rows: outside the
@@ -1428,10 +1430,10 @@ fn reach(listing: &Listing, at: CursorPoint) -> Option<Caret> {
 ///
 /// Held past an edge of the box, the sweep **scrolls the view**: a task moves it every
 /// [`AUTOSCROLL_TICK`] towards the pointer -- a row up or down, a row's height sideways --
-/// and reaches the run out to what came in at the next tick, once it is laid out, for as
-/// long as the button is down and the pointer stays past an edge; the pointer's last
-/// place is kept in a cell the handler writes and the task reads, since nothing arrives
-/// from a pointer that is not moving. A hook, for the cells to outlive the handler a
+/// and reaches the run out to what came in at the next tick, waiting for it to be laid
+/// out, for as long as the button is down and the pointer stays past an edge; the
+/// pointer's last place is kept in a cell the handler writes and the task reads, since
+/// nothing arrives from a pointer that is not moving. A hook, for the cells to outlive the handler a
 /// render makes afresh; one task at a time, the flag says.
 ///
 /// **The rows and the key are the render's**, and neither is carried into the task: both
@@ -1451,8 +1453,8 @@ pub(crate) fn use_sweep_beyond(
     move |e: Event<PointerEventData>| {
         let at = e.global_location();
         last.set(Some(at));
-        if let Some(caret) = reach(&listing, at) {
-            mark_drag(marked, pane, caret.row, Some(caret.col));
+        if let Some((row, Some(col))) = reach(&listing, at) {
+            mark_drag(marked, pane, row, Some(col));
         }
 
         let area = listing.bounds.get();
@@ -1472,12 +1474,13 @@ pub(crate) fn use_sweep_beyond(
                 if !dragging(marked, pane) {
                     break;
                 }
-                // The rows the last tick brought in, reached now that they are built and
-                // laid out where it put them. Reached straight after the scroll, a row
-                // just scrolled in had no paragraph to say where a column is, and a row
-                // scrolled sideways still had its old x.
-                if let Some(caret) = reach(&listing, at) {
-                    mark_drag(marked, pane, caret.row, Some(caret.col));
+                // The row the last tick brought in, reached before the view moves on. One
+                // not laid out yet cannot say where a column is, so the tick waits for it
+                // rather than put the end at column 0 or scroll past it.
+                match reach(&listing, at) {
+                    Some((row, Some(col))) => mark_drag(marked, pane, row, Some(col)),
+                    Some((_, None)) => continue,
+                    None => {}
                 }
                 let area = listing.bounds.get();
                 // Each offset counts down from zero, so towards the far side is less.

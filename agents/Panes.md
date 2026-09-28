@@ -1311,7 +1311,11 @@ height sideways, the sideways extent being the widest row, `Widest::extent`) and
 to what came in, for as long as the button is down and the pointer stays past an edge. **The reach
 is made at the next tick**, before it scrolls again, and not straight after the scroll: a row just
 scrolled in is not built yet and lends no paragraph, so every tick put the run's end at column 0 of
-the new row, and a row just scrolled sideways still had its old x. The pointer's
+the new row. Built is not enough either. A tick can come after the render a scroll caused and before
+the `on_sized` of the layout that followed, as it does whenever a frame takes as long as a tick, and
+a row whose paragraph has not said where it is answers no column (`Listing::column_at`); the tick
+then waits for it and scrolls no further until it has reached it. A row scrolled sideways can still
+have its old x at such a tick, which leaves the end one step behind until the next. The pointer's
 last place is kept in a cell, since nothing arrives from a pointer that is not moving
 (`use_sweep_beyond`, a hook so the cells outlive the handler a render remakes; one task at a time).
 **The rows and the key the extent is asked under are the render's**, and neither is carried by the

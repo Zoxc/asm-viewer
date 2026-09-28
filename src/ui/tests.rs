@@ -30149,6 +30149,10 @@ fn a_sweep_past_the_edge_scrolls_the_listing_the_pane_is_drawing_now() {
 /// A sweep held still below the pane reaches each row the autoscroll brings in at the
 /// column under the pointer, as a move onto that row would, and not at column 0: the row
 /// is reached once it has been built and laid out, and not straight after the scroll.
+///
+/// One pass a tick, the slowest the desktop draws: each tick then comes before the
+/// `on_sized` of the layout its last scroll caused, so a reach that trusted that layout
+/// to have landed is caught at every tick and not only on a slow machine.
 #[test]
 fn an_autoscrolled_sweep_reaches_the_column_under_the_pointer() {
     // Which rows have text, off the whole listing drawn at once: a separator has none,
@@ -30185,10 +30189,8 @@ fn an_autoscrolled_sweep_reaches_the_column_under_the_pointer() {
     let lead = || marked.peek().assembly.clone().unwrap().chars.lead();
     let start = lead();
     let mut leads = Vec::new();
-    // Many passes a tick, as the desktop draws a frame or more in one: what the task
-    // reaches is what the passes between two ticks have laid out.
-    for _ in 0..6 {
-        test.poll_n(Duration::from_millis(2), 20);
+    for _ in 0..8 {
+        test.poll_n(Duration::from_millis(45), 1);
         leads.push(lead());
     }
     test.release_cursor((300.0, 900.0));
@@ -30527,7 +30529,7 @@ fn a_row_the_list_has_stopped_building_lets_its_paragraph_go() {
     let drawn = paragraphs(&test);
     assert_eq!(drawn.len(), 2, "{drawn:?}");
     let x = drawn[1].0.min_x() + (drawn[1].0.width() / 2.0);
-    let column = listing.column_at(1, x);
+    let column = listing.column_at(1, x).unwrap_or(0);
     assert!(
         column > 0 && column < LENT_TEXT.len(),
         "the row's paragraph did not answer: {column}"
@@ -30537,7 +30539,7 @@ fn a_row_the_list_has_stopped_building_lets_its_paragraph_go() {
     rows.set(1);
     settle(&mut test);
     assert_eq!(paragraphs(&test).len(), 1);
-    assert_eq!(listing.column_at(1, x), 0);
+    assert_eq!(listing.column_at(1, x), Some(0));
 }
 
 /// How many rows the scrolled [`lending_harness`] draws at once, and how many windows of
