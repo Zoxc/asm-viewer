@@ -318,13 +318,15 @@ pub(crate) fn use_analysis_with(
         // ranking is an input to an answer and a visit must not re-ask a question that
         // has been answered.
         let mut question = None;
+        let mut sent = None;
         write_if(analysis, |held| {
             let (asked, changed) = held.asked(current.as_ref(), &open, &visits.peek());
             question = asked;
+            sent = held.pending.as_ref().map(|pending| pending.sent);
             changed
         });
 
-        let (Some(ask), Some(question)) = (current, question) else {
+        let (Some(question), Some(sent)) = (question, sent) else {
             return;
         };
         asking.send(question);
@@ -332,7 +334,7 @@ pub(crate) fn use_analysis_with(
         // The wait, started by the request and never polled.
         spawn(async move {
             Timer::after(SLOW_ANALYSIS).await;
-            write_if(analysis, |held| held.slowed(&ask));
+            write_if(analysis, |held| held.slowed(sent));
         });
     });
 

@@ -14,6 +14,7 @@
 use super::*;
 use crate::counter;
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Everything the analysis crate has to say about what the panes are drawing, shared
 /// through context.
@@ -244,15 +245,26 @@ pub(crate) struct Pending {
     /// which is what displaces the listing that is up. A property of the wait and so a
     /// field of it: there is nothing to be slow about while nothing is being waited for.
     slow: bool,
+    /// Which send this wait is: what the timer started by that send is matched by.
+    pub(crate) sent: Sent,
 }
+
+/// One send of a question. The timer a send starts is matched by this and not by the
+/// [`Ask`]: an A -> B -> A sends A twice, and the first timer is not the second wait's.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Sent(u64);
 
 impl Pending {
     /// A question just sent over `over`: waited for, and not yet long enough to say so.
     fn asked(ask: Ask, over: Vec<Over>) -> Pending {
+        // Counted for the whole process, so a send after a reset of the state is still
+        // one no earlier timer names.
+        static SENDS: AtomicU64 = AtomicU64::new(0);
         Pending {
             ask,
             over,
             slow: false,
+            sent: Sent(SENDS.fetch_add(1, Ordering::Relaxed)),
         }
     }
 }
@@ -469,11 +481,12 @@ impl Analyzed {
         self.pending.as_ref().map(|pending| &pending.ask)
     }
 
-    /// [`SLOW_ANALYSIS`] has passed since `ask` was sent. Whether anything changed, so
-    /// the caller writes only then ([`write_if`]): a question answered since, or one the
-    /// reader has moved on from, is nothing to say the app is still working on.
-    pub(crate) fn slowed(&mut self, ask: &Ask) -> bool {
-        let Some(pending) = self.pending.as_mut().filter(|held| held.ask == *ask) else {
+    /// [`SLOW_ANALYSIS`] has passed since the send `sent`. Whether anything changed, so
+    /// the caller writes only then ([`write_if`]): a question answered since, one the
+    /// reader has moved on from, or one sent again since, is nothing to say the app is
+    /// still working on.
+    pub(crate) fn slowed(&mut self, sent: Sent) -> bool {
+        let Some(pending) = self.pending.as_mut().filter(|held| held.sent == sent) else {
             return false;
         };
         if pending.slow {

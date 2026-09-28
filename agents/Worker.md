@@ -342,8 +342,10 @@ this one for as long as the worker takes), `answered` and `pending`. A listing i
 by the next listing and never by a blank, or every click would flash the pane empty for a frame.
 Only after `SLOW_ANALYSIS` (180 ms, started by the request and never polled) does the message
 displace it -- which is a field of the `Pending` and not a flag beside it, there being nothing to
-be slow about while nothing is being waited for -- and only where it may take that listing down
-(`keeps_listing`, below). A source-driven tab's every line is a question of its own, so a word that
+be slow about while nothing is being waited for. The timer is matched to its wait by the send
+(`Sent`) and not by the `Ask`: A → B → A sends A twice, and the first send's timer must not mark
+the second wait slow before its time. And the message displaces the listing only where it may
+take that listing down (`keeps_listing`, below). A source-driven tab's every line is a question of its own, so a word that
 took the listing away for as long as a decode and gave it back after would be the pane blinking for
 a keypress; the bar over that listing names what is drawn, so nothing on screen is untrue while the
 reader waits. With nothing up to displace, which is the first ask of a tab and the 2.2 s one, the

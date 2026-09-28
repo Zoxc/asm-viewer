@@ -283,9 +283,8 @@ fn a_place_with_no_listing_leaves_nothing_waiting() {
     let ask = Ask::Symbol(symbol_of(&object));
     let mut state = Analyzed {
         pending: Some(Pending {
-            ask,
-            over: Vec::new(),
             slow: true,
+            ..Pending::asked(ask, Vec::new())
         }),
         ..Analyzed::default()
     };
@@ -370,4 +369,25 @@ fn a_checksum_is_found_by_the_path_as_the_file_is() {
 
     assert!(lines.names(file));
     assert_eq!(lines.hash_for(file), Some(recorded));
+}
+
+/// **A timer marks slow only the wait its own send started.** A -> B -> A sends A twice,
+/// and the first send's timer fires while the second is still short.
+#[test]
+fn a_timer_from_an_earlier_send_of_the_question_marks_nothing_slow() {
+    let a = source("line_fixture.c", 3);
+    let b = source("line_fixture.c", 4);
+    let mut state = Analyzed::default();
+    let visits = Visits::default();
+    state.asked(Some(&a), &[], &visits);
+    let first = state.pending.as_ref().expect("A is sent").sent;
+    state.asked(Some(&b), &[], &visits);
+    state.asked(Some(&a), &[], &visits);
+    let second = state.pending.as_ref().expect("A is sent again").sent;
+
+    assert!(
+        !state.slowed(first),
+        "the first send's timer finds another wait"
+    );
+    assert!(state.slowed(second), "and the second's marks it");
 }
