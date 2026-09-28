@@ -347,3 +347,27 @@ fn a_run_of_listing_rows_crosses_into_this_listings_instructions_by_its_base() {
     // two panes ask one function.
     assert_eq!(lit(106..=107), studied.touching(6..=7, 0));
 }
+
+/// A file the line info names by another spelling of the same path is the symbol's, and
+/// so is the checksum recorded for it.
+#[test]
+fn a_checksum_is_found_by_the_path_as_the_file_is() {
+    let recorded = analysis::SourceHash::Md5([7; 16]);
+    let start = analysis::SectionAddress::new(0x1000);
+    let rows = vec![analysis::LineRow {
+        range: start..start.saturating_add(1),
+        file: Some(0),
+        line: Some(1),
+        column: None,
+    }];
+    let name = analysis::shared_name(b"/proj/./src//a.c");
+    let lines = SymbolLines {
+        info: analysis::LineInfo::new(rows, vec![(name, Some(recorded))]).map(Arc::new),
+        file: None,
+        line: None,
+    };
+    let file = Path::new("/proj/src/a.c");
+
+    assert!(lines.names(file));
+    assert_eq!(lines.hash_for(file), Some(recorded));
+}

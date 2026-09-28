@@ -696,9 +696,12 @@ impl SymbolLines {
     /// The checksum the debug info recorded for `file`, one of the files these rows name, or
     /// [`None`] when it names no such file or recorded none for it. Looked up by the name
     /// the pane is showing rather than carried per file, so a landed run's file and the
-    /// symbol's own are answered the same way.
+    /// symbol's own are answered the same way. Matched as paths, as [`names`](Self::names)
+    /// matches, so a file it counts as the symbol's is one it finds the checksum of.
     pub(crate) fn hash_for(&self, file: &Path) -> Option<analysis::SourceHash> {
-        self.info.as_ref()?.hash_for(Vec::from_path_lossy(file))
+        let info = self.info.as_ref()?;
+        let named = info.files().find(|named| named.to_path_lossy() == file)?;
+        info.hash_for(&**named)
     }
 }
 
