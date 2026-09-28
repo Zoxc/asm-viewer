@@ -44,7 +44,8 @@ is ever overwritten, not by an earlier rescue and not by a second copy of the ap
 file at this moment. The copy is synced before the original goes, for the atomic write's
 reason below. The original is **removed** rather than copied, since nothing writes over
 `settings.toml` until a setting changes and a file left in place would be rescued again on every
-launch.
+launch. Through a symlink it is the file the link names that goes, and the link stays: the
+next write lands through it, where removing the link made that write a plain file in its place.
 
 **A project file is never moved aside, and that is now the rule and not an exception.** It may be
 the reader's own file, sitting in their tree beside the code, and the app has no business taking one

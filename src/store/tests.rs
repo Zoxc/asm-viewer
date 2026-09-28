@@ -308,6 +308,36 @@ fn a_write_through_a_symlink_lands_in_its_target() {
     assert_eq!(temporaries(&base.join("elsewhere")), Vec::<PathBuf>::new());
 }
 
+/// A file that will not parse, read through a symlink, is taken away and the link kept:
+/// removing the link left the bad bytes where it pointed, and the next write made a plain
+/// file in its place, so the file it named never saw another save.
+#[cfg(unix)]
+#[test]
+fn a_file_moved_aside_through_a_symlink_keeps_the_link() {
+    use std::os::unix::fs::symlink;
+
+    let base = Temporary::fresh_directory("store-test");
+    let target = base.join("dotfiles").join("settings.toml");
+    written(&target, b"{ not toml");
+    let link = base.join("settings.toml");
+    symlink(Path::new("dotfiles").join("settings.toml"), &link).expect("the link is made");
+    let store = Store::at(&base);
+
+    assert_eq!(store.read::<Named>(&link), None);
+    assert!(!target.exists(), "the bad file was left in place");
+    store
+        .write_toml(&link, &Named { name: "b".into() })
+        .expect("the write lands");
+    assert!(fs::symlink_metadata(&link)
+        .expect("the link is there")
+        .file_type()
+        .is_symlink());
+    assert_eq!(
+        store.read::<Named>(&target),
+        Some(Named { name: "b".into() })
+    );
+}
+
 /// A file the system will not hand over is not written over while it cannot be read: the
 /// read answers the default, and the next write would have replaced the reader's file with
 /// it -- a rename needs no permission on the file. Once it reads again, it is written.

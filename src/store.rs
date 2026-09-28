@@ -326,7 +326,8 @@ impl Store {
     /// The mirror is so that a moved file keeps the shape of the path it had rather than
     /// being flattened into one heap of `session.toml`s. The original is **removed**
     /// rather than copied, since nothing writes over `settings.toml` until a setting
-    /// changes and a file left in place would be rescued again on every launch.
+    /// changes and a file left in place would be rescued again on every launch. For a
+    /// symlink that is the file it names, so the link stays and the next write lands there.
     fn move_aside(&self, path: &Path, data: &[u8]) -> Option<PathBuf> {
         let mirrored = self.mirrored(path);
         let name = mirrored.file_name()?.to_string_lossy().into_owned();
@@ -348,6 +349,8 @@ impl Store {
                 written.inspect_err(|_| drop(fs::remove_file(path)))
             },
         )?;
+        // The file a link names, and not the link: the next write goes through it.
+        let path = &through_links(path);
         if let Err(error) = fs::remove_file(path) {
             // The copy is what matters, and it is already made. A file still here is one
             // more copy on the next run, which is the harmless half of this going wrong.
