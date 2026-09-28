@@ -333,6 +333,52 @@ fn a_program_waited_for_and_found_gone_leaves_the_list_too() {
     assert!(!listed(&handle), "the reaped program is still on the list");
 }
 
+/// **What a program leaves behind goes with it.** A grandchild holding none of the run's
+/// pipes outlives the program; once the program was reaped nothing here would signal the
+/// group, so it outlived a stop and the app as well.
+#[cfg(unix)]
+#[test]
+fn a_program_that_ends_takes_what_it_left_running_with_it() {
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("sleep 30 </dev/null >/dev/null 2>&1 & echo $!")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped());
+    let (handle, pipes) = start(&mut command).expect("/bin/sh started");
+    let mut said = String::new();
+    BufReader::new(pipes.stdout.expect("piped"))
+        .read_line(&mut said)
+        .expect("the grandchild's pid");
+    let pid: i32 = said.trim().parse().expect("a pid");
+
+    assert_eq!(
+        handle.ending(Duration::from_secs(30)),
+        Some(Ended::Exited(Some(0)))
+    );
+    // Gone, or a zombie waiting for whoever it was handed to.
+    let gone = || {
+        // SAFETY: a pid and no signal: this only asks whether the process is there.
+        let there = unsafe { libc::kill(pid, 0) } == 0;
+        !there
+            || std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| stat.contains(") Z "))
+    };
+    let until = Instant::now() + Duration::from_secs(5);
+    while !gone() && Instant::now() < until {
+        thread::sleep(POLL);
+    }
+    let survived = !gone();
+    if survived {
+        // SAFETY: as above; the one this test started.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    assert!(
+        !survived,
+        "the grandchild outlived the program that started it"
+    );
+}
+
 /// What `output` hands back is both pipes whole and how the program ended, as
 /// `Command::output` would say it.
 #[cfg(unix)]

@@ -28,9 +28,9 @@ parked in.
 **Whether it is already over is read under the lock it is set under.** The other way a process
 stops being there is `try_wait` reaping it, and that is what the flag records, under the same lock.
 A stop that read the flag first and then waited for the lock would go on to signal a group whose
-last member has just been reaped, and the system is free to have handed that pid on -- to a group
-leader of its own, which every other program started here is. Stop pressed as a program exits by
-itself is the ordinary way into that window.
+leader has just been reaped, the rest killed before it, and the system is free to have handed that
+pid on -- to a group leader of its own, which every other program started here is. Stop pressed as
+a program exits by itself is the ordinary way into that window.
 
 ## The two reaps, which had to become one
 
@@ -75,9 +75,17 @@ after the spawn, and closing the app's only handle to it is the kill. The sliver
 and the assignment is accepted rather than bought back with `CREATE_SUSPENDED` and a `ResumeThread`,
 for a window a scratchpad's program does not use, and a job the system refuses leaves the stop
 exactly what it was. The child's own kill stays, under the same lock and after the group's, as what
-a refused job or a third platform still gets. The kill is **by value**: the group a stop took out
-from under the lock is one nothing else can reach, so there is no second kill to make harmless, and
-the Windows half no longer carries a mutex of its own to make it so.
+a refused job or a third platform still gets. The kill **forgets the group as it kills it**, so a
+second kill signals nothing; it is called under the process's lock, so the Windows half carries no
+mutex of its own.
+
+**What a program leaves running goes with it when it ends.** A grandchild holding none of the
+run's pipes -- redirected, or daemonized -- outlives the program. Once the program was reaped
+nothing signalled the group again, not a stop and not `stop_all`, since the pid is then the
+system's to hand on. So `look` finds the child ended *without reaping it* (`waitid` with `WNOWAIT`
+on Unix), kills the group while the zombie still keeps its id from being handed on, and only then
+reaps. Windows did this already: the job closes when the last handle to the program is dropped.
+It also ends what a build or a failed server left behind.
 
 ## The one list, and the one way down
 
@@ -169,7 +177,6 @@ left, and one this app stopped reads as stopped and comes off the list. Both go 
 what those tests pin is the count as well -- `Ended` said exactly once and last, with nothing to
 say on either pipe as much as with both of them written to. The list's one rule is pinned on its
 own, either way in: a stop takes its handle off at once, and so does a bounded wait that found the
-program gone. Nothing short of a real program says
-whether a stop killed anything *else*, and building one means running cargo, which no test here
-does, so the group and what a stop reaches are judged by hand. The Windows half is judged
-by inspection: nothing in this repo runs there.
+program gone. So is what a program leaves running: a grandchild `/bin/sh` started is gone once
+`/bin/sh` is reaped. Whether a stop reaches a real program's children needs one built by cargo,
+which no test here runs, so that is judged by hand. The Windows half is judged by inspection: nothing in this repo runs there.

@@ -16,7 +16,8 @@
 //! that could ever find it again -- the grandchild's pid was never anywhere but inside the
 //! program that is now gone. The two platforms have the same shape and nothing else in
 //! common: [`Group::arrange`] runs before the spawn, [`Group::of`] takes hold of what was
-//! spawned, and [`Group::kill`] ends the lot.
+//! spawned, [`Group::exited`] asks whether the child has ended while the group can still be
+//! named, and [`Group::kill`] ends the lot.
 //!
 //! `agents/Process.md` is the reasoning.
 
@@ -50,17 +51,35 @@ impl Group {
         Group(child.id() as i32)
     }
 
+    /// Whether the child has ended, asked **without reaping it**. While it is a zombie its
+    /// pid is not handed on, and nor is the group named by it, so a kill of the group
+    /// between this and the reap reaches only what the child left running.
+    fn exited(child: &mut Child) -> io::Result<bool> {
+        // SAFETY: an all-zero `siginfo_t` is a valid one, and the only thing read back.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let options = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
+        // SAFETY: a pid of our own child and a pointer to the structure above.
+        let asked =
+            unsafe { libc::waitid(libc::P_PID, child.id() as libc::id_t, &mut info, options) };
+        if asked == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // Left zero by a `WNOHANG` that found nothing.
+        // SAFETY: the field `waitid` fills.
+        Ok(unsafe { info.si_pid() } != 0)
+    }
+
     /// `kill(-pgid)` is the whole group. Guarded because the negative of a small number is
     /// not a group at all: `-1` is every process this user may signal and `0` is *this*
     /// app's own group, and neither can come of a real child, so neither may be reached by
     /// a pid that somehow arrived as one.
     ///
-    /// By value: the group a stop takes out from under the lock is one nothing else can
-    /// reach, so there is no second kill to make harmless.
-    fn kill(self) {
-        if self.0 > 1 {
+    /// Once: the group is forgotten as it is killed, so a second kill signals nothing.
+    fn kill(&mut self) {
+        let group = std::mem::take(&mut self.0);
+        if group > 1 {
             // SAFETY: a signal number and a pid, both plain values; `kill` reads no memory.
-            unsafe { libc::kill(-self.0, libc::SIGKILL) };
+            unsafe { libc::kill(-group, libc::SIGKILL) };
         }
     }
 }
@@ -122,12 +141,16 @@ impl Group {
         Group(assigned.then_some(job))
     }
 
+    /// Whether the child has ended. Nothing is let go by asking: the process handle
+    /// `Child` holds is what keeps it named.
+    fn exited(child: &mut Child) -> io::Result<bool> {
+        child.try_wait().map(|status| status.is_some())
+    }
+
     /// Close the handle, which is what kills: this app holds the only one, the child never
-    /// having been given it to inherit. By value, and the close *is* the drop: the group a
-    /// stop takes out from under the lock is one nothing else can reach, so there is no
-    /// second kill to make harmless.
-    fn kill(self) {
-        drop(self.0);
+    /// having been given it to inherit. Once: the handle is gone after the first.
+    fn kill(&mut self) {
+        drop(self.0.take());
     }
 }
 
@@ -143,7 +166,11 @@ impl Group {
         Group
     }
 
-    fn kill(self) {}
+    fn exited(child: &mut Child) -> io::Result<bool> {
+        child.try_wait().map(|status| status.is_some())
+    }
+
+    fn kill(&mut self) {}
 }
 
 /// How often a process is asked again whether it has ended. Polled rather than waited on:
@@ -193,9 +220,9 @@ impl Handle {
     ///
     /// **A program that is already over is not signalled.** `over` is read under the lock
     /// it is set under: a stop that read it first and then waited for the lock would go on
-    /// to signal a group whose last member has since been reaped, and the system is free
-    /// to have handed that pid on -- to a group leader of its own, which every other
-    /// program started here is. The second stop is a no-op for the same reason, the first
+    /// to signal a group whose leader has since been reaped, the rest killed before it
+    /// ([`Handle::look`]), and the system is free to have handed that pid on -- to a group
+    /// leader of its own, which every other program started here is. The second stop is a no-op for the same reason, the first
     /// having taken the process out from under the lock.
     pub fn stop(&self) {
         {
@@ -203,7 +230,7 @@ impl Handle {
             let over = self.0.over.swap(true, Ordering::SeqCst);
             // Taken whether or not it is signalled, which is what makes the second stop a
             // no-op.
-            if let (false, Some((mut child, group))) = (over, held.take()) {
+            if let (false, Some((mut child, mut group))) = (over, held.take()) {
                 group.kill();
                 // The child's own kill after the group's: it is what a platform with no
                 // group, or a job object the system refused, still gets.
@@ -258,15 +285,26 @@ impl Handle {
 
     /// How it ended, if it has, asked without waiting. [`None`] while it is still going.
     ///
+    /// **What it left running goes with it.** A grandchild holding none of its pipes
+    /// outlives it, and nothing here could signal the group after the reap. So the group
+    /// is killed between finding the child ended and reaping it, while the child's pid
+    /// still names it.
+    ///
     /// A process found to be gone is marked over **under the lock**, since `try_wait` is
     /// what reaps it: after this the pid is the system's to hand on, and [`Handle::stop`]
     /// reads the flag under this same lock so that it cannot signal a group that is no
     /// longer this one.
     fn look(&self) -> Option<Ended> {
         let mut held = self.0.child.lock().unwrap_or_else(|held| held.into_inner());
-        let Some((child, _)) = held.as_mut() else {
+        let Some((child, group)) = held.as_mut() else {
             return Some(Ended::Stopped);
         };
+        match Group::exited(child) {
+            Ok(false) => return None,
+            Ok(true) => group.kill(),
+            // Asked again below, which says what went wrong.
+            Err(_) => {}
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
                 self.0.over.store(true, Ordering::SeqCst);
