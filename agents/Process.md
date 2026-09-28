@@ -162,7 +162,9 @@ wherever it lands, and a multi-byte character straddling it would be a replaceme
 each of the two rows with the character itself on neither, so what is left of one is carried to the
 front of the next read. Only
 an incomplete sequence at the end of a cut row is carried -- bytes that are genuinely invalid go through lossily,
-as what a program writes is not this app's to reject. `MAX_OUTPUT_LINES` (5000) is what is kept,
+as what a program writes is not this app's to reject. The end is read on its own, since `from_utf8`
+over the row reports only its first error, and an invalid byte earlier on hid the character the cut
+split. `MAX_OUTPUT_LINES` (5000) is what is kept,
 oldest first out, with `RunOutput::dropped` so the view can say the story is missing its beginning;
 it is a line cap and not a byte cap, because the view is a list of rows and a byte budget would make
 the row count depend on how long the lines happened to be. **It is cheap to copy**, because the

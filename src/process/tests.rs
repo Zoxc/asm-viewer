@@ -77,6 +77,21 @@ fn a_line_as_long_as_the_cut_is_one_row() {
     assert_eq!(lengths, [cut, cut, cut, cut, 0, 4]);
 }
 
+/// An invalid byte earlier on the row does not stop the carry: what decides it is the end
+/// of the row, not the first thing on it that is not a character.
+#[test]
+fn a_character_on_the_cut_is_carried_past_an_invalid_byte() {
+    let mut written = b"\xff".to_vec();
+    written.extend(std::iter::repeat_n(b'x', MAX_LINE as usize - 2));
+    written.extend("é".as_bytes());
+    written.extend(b"yyy");
+    let mut lines = Vec::new();
+    stream_lines(Cursor::new(written), Stream::Out, |line| lines.push(line));
+
+    assert_eq!(lines.len(), 2);
+    assert_eq!(&*lines[1].text, "éyyy");
+}
+
 /// What is not a character is still delivered, lossily, as it always was. The carry is for
 /// a cut this module made, and `error_len() == None` is what tells that from output that is
 /// simply not UTF-8: bytes that are genuinely invalid must not be held back for a

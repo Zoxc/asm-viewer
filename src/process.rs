@@ -636,12 +636,10 @@ pub fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnM
         // newline stopped at the end of the pipe, where a character left unfinished stays so.
         let cut_here = !ended && buffer.len() as u64 == MAX_LINE;
 
-        // `error_len() == None` is exactly "an incomplete sequence at the end", so bytes
-        // that are genuinely invalid still go through lossily below.
-        carry = match std::str::from_utf8(&buffer) {
-            Err(error) if cut_here && error.error_len().is_none() => {
-                buffer.split_off(error.valid_up_to())
-            }
+        // Only the end of the row decides: bytes that are genuinely invalid, there or
+        // anywhere before it, still go through lossily below.
+        carry = match unfinished(&buffer) {
+            Some(at) if cut_here => buffer.split_off(at),
             _ => Vec::new(),
         };
         // The read was that character's first bytes and nothing else: no row yet.
@@ -661,6 +659,23 @@ pub fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnM
         cut = !ended;
 
         emit(output_line(stream, &buffer));
+    }
+}
+
+/// Where a character left unfinished at the end of `bytes` begins, if one is.
+///
+/// Asked of the end alone: `from_utf8` over the whole row reports only its first error, so
+/// an invalid byte earlier on would hide the unfinished character after it. A character is
+/// at most four bytes, so an unfinished one is at most three, the first of them the last
+/// byte there that is not a continuation byte.
+fn unfinished(bytes: &[u8]) -> Option<usize> {
+    let lead = (bytes.len().saturating_sub(3)..bytes.len())
+        .rev()
+        .find(|&at| bytes[at] & 0xc0 != 0x80)?;
+    // `error_len() == None` is exactly "an incomplete sequence at the end".
+    match std::str::from_utf8(&bytes[lead..]) {
+        Err(error) if error.error_len().is_none() => Some(lead),
+        _ => None,
     }
 }
 
