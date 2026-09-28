@@ -37887,6 +37887,23 @@ fn typing_in_the_project_view_does_not_re_render_the_root() {
     );
 }
 
+/// **The Files box suggests what it takes**: an extension, which is what a file is
+/// matched by. It said `rust`, and a reader typing that sent the server no file at all.
+#[test]
+fn the_files_box_suggests_an_extension() {
+    let (mut test, _roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
+    });
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|text| text == "rs"), "{drawn:?}");
+}
+
 /// The Project view says whether the reader has agreed to a server reading this directory,
 /// and is the way back: taking it back forgets the answer and stops the server it was
 /// given for, since a reader who did not mean to let a program read their project has said

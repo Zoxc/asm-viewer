@@ -702,7 +702,9 @@ impl Component for LanguageSection {
             )
             .placeholder(match open.names_server() {
                 true => "every file opened",
-                false => languages::Language::Rust.spoken(),
+                // What the box takes is an extension, not what a server calls the
+                // language.
+                false => "rs",
             })
             .width(Size::fill())
             .on_pre_key_down(plain_keys()),
