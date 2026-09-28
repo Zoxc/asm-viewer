@@ -356,8 +356,9 @@ opposite of ("a stale listing is doctrine and a stale sentence is not"). Clickin
 question per click and most of its lines -- a comment, a brace, a declaration -- were compiled into
 nothing, so the pane says so on click after click, and blanking between two of those sentences is
 the pane flashing every time. The line it names is the line before this one for as long as the
-answer takes, which is what a listing left up is too; a tab that has asked nothing yet has no
-sentence to leave up and draws its own ground.
+answer takes, which is what a listing left up is too. Past `SLOW_ANALYSIS` as well, while the
+sentence is about a line of the tab asking (`Analyzed::keeps_up`), as a listing of that tab's file
+is kept. A tab that has asked nothing yet has no sentence to leave up and draws its own ground.
 
 That is the order of the arms in `Analyzed::showing`, the one place either pane decides what it is
 drawing, so the two cannot disagree. `showing` takes the **document** and not a word from

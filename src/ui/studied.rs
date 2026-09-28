@@ -296,21 +296,19 @@ impl Analyzed {
     /// drawing.
     ///
     /// **The order of the arms is the mechanism**: a listing beats a short wait, so a
-    /// click never flashes the pane empty; a wait past [`SLOW_ANALYSIS`] beats a listing
-    /// it may take down ([`keeps_listing`]), so a function of a file nobody here is
-    /// reading is not left up under the next tab, and loses to one it may not -- reading
-    /// down a file is a question per line, and a word that displaces the listing between
-    /// two of them is the pane blinking for a keypress, over a listing the bar above it
-    /// names honestly; and a **sentence** is left up over a wait exactly as a listing is,
-    /// for the same reason and no other -- clicking down a file's comments and braces is
-    /// one sentence after another, and a pane that blanks between two of them flashes on
-    /// every click. The line it names is the line before this one for as long as the
-    /// answer takes, which is what a listing left up is too.
+    /// click never flashes the pane empty; a wait past [`SLOW_ANALYSIS`] beats what is up
+    /// where it may take it down ([`Analyzed::keeps_up`]), so a function of a file nobody
+    /// here is reading is not left up under the next tab, and loses to one it may not --
+    /// reading down a file is a question per line, and a word that displaces the listing
+    /// between two of them is the pane blinking for a keypress, over a listing the bar
+    /// above it names honestly; and a **sentence** is left up over a wait exactly as a
+    /// listing is, for the same reason and no other -- clicking down a file's comments and
+    /// braces is one sentence after another, and a pane that blanks between two of them
+    /// flashes on every click. The line it names is the line before this one for as long
+    /// as the answer takes, which is what a listing left up is too.
     pub(crate) fn showing(&self, document: &Document) -> Showing<'_> {
         match (&self.shown, &self.pending) {
-            (shown, Some(pending))
-                if pending.slow && !keeps_listing(shown.as_ref(), &pending.ask) =>
-            {
+            (_, Some(pending)) if pending.slow && !self.keeps_up(&pending.ask) => {
                 Showing::Message(Cow::Borrowed("Analysing..."))
             }
             (Some(shown), _) => Showing::Listing(shown),
@@ -334,6 +332,17 @@ impl Analyzed {
                 // instruction picked out in it.
                 Document::Code(_) => "Click an instruction",
             })),
+        }
+    }
+
+    /// Whether what is up may be left up over a slow wait for `ask`: a listing where
+    /// [`keeps_listing`] says so, and a sentence where it is about a line of the tab
+    /// asking.
+    fn keeps_up(&self, ask: &Ask) -> bool {
+        match (&self.shown, &self.answered) {
+            (Some(_), _) => keeps_listing(self.shown.as_ref(), ask),
+            (None, Some(answered)) => asked_of(answered) == asked_of(ask),
+            (None, None) => false,
         }
     }
 

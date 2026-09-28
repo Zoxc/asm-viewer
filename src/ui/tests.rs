@@ -6435,6 +6435,13 @@ fn a_wait_with_no_listing_keeps_the_sentence_that_is_up() {
         matches!(held.showing(&file), crate::ui::Showing::Message(text) if text == said),
         "the pane blanked between two sentences"
     );
+    // Past the slow mark too, as a listing of this file is kept.
+    let sent = held.pending.as_ref().expect("the second line is out").sent;
+    assert!(held.slowed(sent));
+    assert!(
+        matches!(held.showing(&file), crate::ui::Showing::Message(text) if text == said),
+        "a slow wait took the sentence down"
+    );
 
     // And a tab that has asked nothing yet has no sentence to leave up.
     let mut fresh = Analyzed::default();
