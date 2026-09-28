@@ -1290,9 +1290,11 @@ fn use_kept_place(
 ///
 /// On the first rows since the reading was reset there are no old rows to carry from, and
 /// the run comes back through the places kept for the tab instead ([`Kept::carry`]); a
-/// run left over from a listing this tab is not showing goes. That run is always
-/// `use_land`'s: the reset is a change of the active entry, which `use_land` answers a
-/// pass after the memo, and the rows come a pass after the reading follows it.
+/// run left over from a listing this tab is not showing goes. With nothing kept, the run
+/// on screen is left alone: it is `use_land`'s, the caret a place shown for the first time
+/// is given, or none. It is always `use_land`'s: the reset is a change of the active
+/// entry, which `use_land` answers a pass after the memo, and the rows come a pass after
+/// the reading follows it.
 ///
 /// [`None`] ends the run: there is no code to count rows from, or there are no rows at
 /// all and nothing to keep a place against.
@@ -1334,11 +1336,8 @@ fn rebuild(
                 .or_else(|| spot_at(before, row))?;
             row_of(&built, spot)
         });
-    } else {
-        let replanted = step
-            .kept
-            .as_ref()
-            .and_then(|kept| kept.carry(|spot| row_of(&built, spot)));
+    } else if let Some(kept) = step.kept.as_ref() {
+        let replanted = kept.carry(|spot| row_of(&built, spot));
         step.carried = replanted.is_some();
         set_assembly(marked, replanted);
     }

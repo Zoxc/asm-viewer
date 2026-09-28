@@ -646,7 +646,8 @@ land on takes the keyboard too**, with that caret on the first line of its drive
 door opened it (`fresh_run`, `ui/focus.rs`). That is done in `use_land` and not by the ask, because
 `use_land` writes both runs whole as a place arrives: a caret the ask's effect put there first, which
 it does when the temporal tab's panes already hold boxes, was written over with the new place's empty
-runs. The caret is kept with the place once it is left, so coming back to it does not move the
+runs. In an object's code it outlives the first rows arriving, which replace the run only where the
+place kept one to carry instead. The caret is kept with the place once it is left, so coming back to it does not move the
 keyboard again. The temporal tab is told from one that stays by its
 name being **italic** (`font_slant`) and by nothing else, the chip reading the flag through the same memo
 beside the document. Every tab has a ×, pages included, because there is a way back to one now: the

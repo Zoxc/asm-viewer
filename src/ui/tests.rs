@@ -25372,8 +25372,15 @@ fn back_before_a_caret_is_planted_leaves_it_to_the_place_it_was_for() {
             shown,
             "Back after {passes} passes did not come back to where the place was left"
         );
-        assert!(
-            doors.marked.peek().assembly.is_none(),
+        // The caret the place was opened with, on its first row.
+        assert_eq!(
+            doors
+                .marked
+                .peek()
+                .assembly
+                .as_ref()
+                .map(|run| run.chars.lead().row),
+            Some(0),
             "Back after {passes} passes planted the newer place's caret"
         );
     }
@@ -39576,6 +39583,68 @@ fn opening_a_place_puts_the_keyboard_on_its_first_line() {
         let drawn = labels(&test);
         assert!(drawn.contains(&has.to_owned()), "{drawn:?}");
     }
+}
+
+/// The code tab on top, over the keyboard and the landing as `app()` wires them.
+fn code_caret_harness() -> impl IntoElement {
+    use_keyboard_and_land();
+    let open = use_open();
+    let active = use_consume::<Active>().0;
+    let objects = use_consume::<Objects>().0;
+    use_reading_of(active, objects, use_sectioned());
+    let entry = {
+        let (strip, docs) = (open.strip.read(), open.docs.read());
+        active_tab(&strip, &docs)
+            .map(|(_, at)| at.document)
+            .filter(|document| matches!(document, Document::Code(_)))
+            .and_then(|document| Some((docs.showing(&document)?, document)))
+    };
+    rect()
+        .expanded()
+        .maybe_child(entry.map(|(tab, document)| AssemblyPane { tab, document }.into_element()))
+}
+
+/// The caret an object's code is opened with stays when its first rows arrive: the rows
+/// being new, the run on screen was taken for one left over from another listing and
+/// dropped, and the keyboard had nothing to move until a click.
+#[test]
+fn an_objects_code_keeps_its_first_caret_when_its_rows_arrive() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let (mut test, roots) = TestingRunner::new(
+        code_caret_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(|| code_states(Reading::default())),
+        1.,
+    );
+    let (states, marked, mut reading) = (roots.states, roots.doors.marked, roots.sectioned.reading);
+    let mut open = states.objects;
+    open.write().push(object.clone());
+    settle(&mut test);
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code, Reach::NewTab);
+    settle(&mut test);
+    settle(&mut test);
+    let caret = || {
+        marked
+            .peek()
+            .assembly
+            .clone()
+            .map(|run| run.chars.lead().row)
+    };
+    assert_eq!(caret(), Some(0));
+
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: None,
+        window: vec![],
+    };
+    assert!(reading
+        .write()
+        .take(&ask, Some(&ask), skeleton(&object), vec![]));
+    settle(&mut test);
+    settle(&mut test);
+    assert_eq!(caret(), Some(0), "the first caret went with the first rows");
 }
 
 /// **A chip judges the caret against the runs of the place it raises**, not those of the
