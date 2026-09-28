@@ -710,7 +710,7 @@ fn on_listing_key(
                     });
                 }
             }
-            Key::Named(NamedKey::Escape) => peel(marked, pane, &*text, &*file),
+            Key::Named(NamedKey::Escape) if plain && !shift => peel(marked, pane, &*text, &*file),
             _ => {}
         }
     }

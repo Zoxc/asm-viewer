@@ -28898,6 +28898,37 @@ fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
     );
 }
 
+/// Escape drops a listing's run only with nothing held: a key answers under its own
+/// modifiers and no others, so a modified Escape stays free for the window.
+#[test]
+fn a_modified_escape_leaves_the_run() {
+    let shown = shown_sum_to();
+    let (mut test, roots) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let marked = roots.doors.marked;
+    settle(&mut test);
+    let first = paragraphs(&test)[0].0;
+    test.move_cursor(left_of(&first));
+    test.press_cursor(left_of(&first));
+    test.release_cursor(left_of(&first));
+    settle(&mut test);
+    assert!(marked.peek().assembly.is_some(), "the press left no caret");
+
+    for held in [Modifiers::SHIFT, Modifiers::CONTROL, Modifiers::ALT] {
+        key_with(&mut test, Key::Named(NamedKey::Escape), held);
+        assert!(
+            marked.peek().assembly.is_some(),
+            "Escape with {held:?} dropped the run"
+        );
+    }
+    key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::empty());
+    assert!(marked.peek().assembly.is_none(), "Escape left the run");
+}
+
 /// A run from the end of a row's text to [`END`] is a caret, the two being one place once
 /// clamped: Ctrl+C copies the caret's row, the row wears the caret's wash, and one Escape
 /// drops the run. A Shift+click in the gutter after a click past the text makes one.
