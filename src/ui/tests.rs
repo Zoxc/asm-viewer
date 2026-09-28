@@ -40587,6 +40587,31 @@ fn press_finder_chord(
     keys.up(&Key::Named(NamedKey::Control), Modifiers::empty());
 }
 
+/// Ctrl+P over an open finder starts the list at the top as a first open does: the row
+/// goes back to the first, and a list left scrolled to its end would not draw it.
+#[test]
+fn the_chord_again_scrolls_the_list_back_to_its_first_row() {
+    let walked: Vec<String> = (0..20).map(|n| format!("f{n:02}.rs")).collect();
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        for name in &walked {
+            let _ = emit(walked_file(root, name));
+        }
+        let _ = emit(WalkEvent::Finished);
+    });
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, |_| !finder.peek().walking);
+    type_into_finder(&mut test, finder, "rs");
+    let first = finder_rows(&test).first().cloned();
+    key_with(&mut test, Key::Named(NamedKey::End), Modifiers::empty());
+    settle(&mut test);
+
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, |_| !finder.peek().walking);
+    type_into_finder(&mut test, finder, "rs");
+
+    assert_eq!(finder_selected(&test), first);
+}
+
 /// The overlay is drawn as nothing at all until the chord, and the walk's files are what
 /// the box then picks out. Fails on a finder that draws its list before it is opened.
 #[test]

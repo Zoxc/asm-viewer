@@ -526,23 +526,32 @@ fn recent(asking: &Asking, visits: &Visits) -> Listed {
 /// The overlay: mounted at the root, and drawing [`FinderPanel`] only while the finder is
 /// open.
 ///
-/// Subscribed to `open` alone, through a memo: the walk goes on writing `Finder` after the
-/// finder closes, and a closed overlay reading the whole state would render for each write.
+/// Subscribed to `open` and the open's id alone, through a memo: the walk goes on writing
+/// `Finder` after the finder closes, and a closed overlay reading the whole state would
+/// render for each write.
 #[derive(PartialEq)]
 pub(crate) struct FinderOverlay;
 
 impl Component for FinderOverlay {
     fn render(&self) -> impl IntoElement {
         let finder = use_consume::<Finding>().0;
-        let open = use_memo(move || finder.read().open);
-        rect().maybe_child(open().then_some(FinderPanel))
+        let open = use_memo(move || {
+            let state = finder.read();
+            state.open.then_some(state.id)
+        });
+        // Keyed by the open, so Ctrl+P over an open finder mounts it afresh too.
+        rect().maybe_child(open().map(|id| FinderPanel { key: DiffKey::None }.key(id)))
     }
 }
 
 /// The box, and the files under it. Mounted afresh for every open, so its scroll starts at
 /// the top, where `open_finder` puts the row.
 #[derive(PartialEq)]
-struct FinderPanel;
+struct FinderPanel {
+    key: DiffKey,
+}
+
+keyed!(FinderPanel);
 
 impl Component for FinderPanel {
     fn render(&self) -> impl IntoElement {
@@ -701,6 +710,10 @@ impl Component for FinderPanel {
                     ),
             )
             .into_element()
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.keyed()
     }
 }
 

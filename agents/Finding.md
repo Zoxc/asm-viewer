@@ -182,6 +182,9 @@ box, the scroll controller, the memos and the focus effect, is mounted only whil
 open. The walk goes on writing `Finder` after a close, up to ten times a second on a large
 project, and an overlay reading the whole state rendered for each write only to draw nothing.
 A panel mounted per open also starts its scroll at the top, where `open_finder` puts the row.
+It is keyed by the open's id and not only gated on `open`, since Ctrl+P over an open finder
+leaves `open` true: without the key the row went back to the first and the list stayed where
+it was scrolled.
 
 **A file the finder opens obeys `Reach::outside`**, the rule every row outside the panes follows:
 the preview tab, or, with Ctrl held, a tab of its own that stays. It used to open `NewTab` whatever
