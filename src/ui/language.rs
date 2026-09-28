@@ -879,9 +879,12 @@ pub(crate) fn use_language_with(
                     jobs.send(LspJob::ReadSettings { directory });
                 }
             }
-            let moved = before.is_some_and(|(was_file, was_directory, was_program, _)| {
-                was_file == file && (was_directory != directory || was_program != program)
-            });
+            // Not where the project was left: the same file reopened is a project
+            // arriving, whatever it now says.
+            let moved = !left
+                && before.is_some_and(|(was_file, was_directory, was_program, _)| {
+                    was_file == file && (was_directory != directory || was_program != program)
+                });
             // A stop takes an unanswered question about starting one with it.
             if left || elsewhere || moved {
                 stop_server(language, &jobs);

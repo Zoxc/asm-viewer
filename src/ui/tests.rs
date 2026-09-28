@@ -37573,6 +37573,38 @@ fn the_trust_prompt_goes_with_its_project() {
     assert!(!labels(&test).iter().any(|text| text == "Start it"));
 }
 
+/// **The open project reopened keeps the answer it arrives with**, though its file now
+/// names another directory. Taken for the reader typing a new one, the agreement was
+/// dropped, and the store lost the one it held for that pair.
+#[test]
+fn reopening_the_open_project_keeps_its_agreement() {
+    let (mut test, roots, _asking, _asks) = mount_server(|_: LspJob| None);
+    let states = roots.states;
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/store/one.avproj")),
+        workspace_text: "/p".to_owned(),
+        trusted: true,
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+
+    // The same file, changed on disk, arrives the way a switch brings it.
+    clear_project(states);
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/store/one.avproj")),
+        workspace_text: "/q".to_owned(),
+        trusted: true,
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+
+    assert!(
+        proj.read().trusted,
+        "the agreement it arrived with was dropped"
+    );
+}
+
 /// Declining starts nothing and is remembered nowhere: the next press asks again, since
 /// what was answered was the press and not the project.
 #[test]

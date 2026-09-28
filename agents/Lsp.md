@@ -64,8 +64,9 @@ only ask again but write the `false` straight back into the store it was read fr
 saved as it changes. A project *saved* moves only where it is kept. And the mount is none
 of those: the deps it mounts with are already the reopened project's, the restore being an
 earlier hook of the same render. So the effect is handed what it last saw beside what it
-sees now (`use_on_change`, `agents/UI.md`), and clears only where the file stayed and the
-directory or the program changed. A changed program stops the server as well, as taking
+sees now (`use_on_change`, `agents/UI.md`), and clears only where the file stayed, the
+project was not left, and the directory or the program changed. The open project reopened
+is the same file under a new `Stay`: it arrives, though its file may name another pair. A changed program stops the server as well, as taking
 the agreement back does: it was the agreement that server ran under.
 
 **The server belongs to the project.** Leaving the project stops it, even for a project
