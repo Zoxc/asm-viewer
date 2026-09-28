@@ -115,6 +115,20 @@ fn only_a_newline_ends_a_row() {
     assert_eq!(highlighted.line(0), "x\x0by\rz\u{85}w\u{2028}v\u{2029}u");
 }
 
+/// A copy of a line loses its line break and nothing else: a lone CR before it, or at the
+/// end of the file, is drawn as a space and copied as itself.
+#[test]
+fn a_line_keeps_a_lone_cr() {
+    let seeded = Seeded::directory("lonecr");
+    let path = seeded.file("f.c", "a\r\r\nb\r");
+    let file = source::load(&path).expect("the seeded file loads");
+
+    let highlighted = Highlighted::new(file, Appearance::Light);
+
+    assert_eq!(highlighted.line(0), "a\r");
+    assert_eq!(highlighted.line(1), "b\r");
+}
+
 /// A file no grammar parses gets one plain span per line, and freya's runs over the line
 /// break. The row stops before it, as a coloured one does: a two-row copy was double-spaced,
 /// End put the caret past the line, and a CRLF file drew a `\r` in every row.

@@ -172,7 +172,12 @@ impl Highlighted {
             return "";
         };
         let line = self.file.text().get(start..end).unwrap_or_default();
-        line.trim_end_matches(['\n', '\r'])
+        // The break is `\n` or `\r\n` and nothing else: a lone CR is the row's, drawn
+        // as a space.
+        match line.strip_suffix('\n') {
+            Some(line) => line.strip_suffix('\r').unwrap_or(line),
+            None => line,
+        }
     }
 
     /// What `line` is drawn as: its text in order, each piece with the colour it wears.
