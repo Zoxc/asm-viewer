@@ -773,7 +773,9 @@ apiece, on the worker, every time a file was shown.
 An item in a trait `impl` is the one name that asks a different question. Its *definition*
 is itself, so `textDocument/definition` on it goes nowhere the reader is not already; its
 *declaration* is the trait's. `declaration` and `trait` together say so, and that is the
-only thing `lsp::Followed::Declaration` is for. The two genuinely disagree elsewhere,
+only thing `lsp::Followed::Declaration` is for. The link carries it, and so does the
+`NameAt` a menu or a key is built from, so "Go to definition" and F12 ask what a press
+asks. The two genuinely disagree elsewhere,
 which is why neither can replace the other: a **call** to a trait method is defined in the
 `impl` that runs and declared in the trait, and a reader following it wants the code that
 runs.

@@ -283,6 +283,8 @@ fn name_at_column(
         at: at.clone(),
         name: name_at(source, row, &link.columns)?,
         column: link.columns.start,
+        // `follow_link`'s rule: a name with nothing to follow asks for its definition.
+        follows: link.asks.unwrap_or(lsp::Followed::Definition),
     })
 }
 
@@ -342,7 +344,7 @@ pub(crate) fn caret_questions(
                 server,
                 common.asking.doors.open,
                 Lookup::at(&named.at, named.column),
-                lsp::Followed::Definition,
+                named.follows,
                 Reach::InPlace,
             ),
             Chord::References => locating.listed(server, named, lsp::Listed::References),

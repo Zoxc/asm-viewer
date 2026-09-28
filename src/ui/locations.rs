@@ -461,7 +461,9 @@ impl Locating {
     /// ask with no server -- a question is not what starts one, that being the control the
     /// reader presses (`follow_name`'s rule).
     pub(crate) fn listed(self, server: &Server, named: NameAt, of: lsp::Listed) {
-        let NameAt { at, name, column } = named;
+        let NameAt {
+            at, name, column, ..
+        } = named;
         let asked = ask_where(
             server.language,
             &server.jobs,
@@ -476,13 +478,16 @@ impl Locating {
     }
 }
 
-/// The name a question for the server is about: the row it is on, what it is called, and
-/// which column of that row it starts at.
+/// The name a question for the server is about: the row it is on, what it is called,
+/// which column of that row it starts at, and what a press on it asks.
 #[derive(Clone, PartialEq)]
 pub(crate) struct NameAt {
     pub(crate) at: LinePos,
     pub(crate) name: String,
     pub(crate) column: usize,
+    /// The link's own question, so going to the definition asks what a press does: the
+    /// declaration for an item in a trait `impl` (`src/links.rs`).
+    pub(crate) follows: lsp::Followed,
 }
 
 /// The three questions a server can be asked about `named`, as the rows a name's menu
@@ -505,14 +510,19 @@ pub(crate) fn name_menu(
     named: NameAt,
 ) -> Vec<MenuButton> {
     let definition = {
-        let (server, at, column) = (server.clone(), named.at.clone(), named.column);
+        let (server, at, column, follows) = (
+            server.clone(),
+            named.at.clone(),
+            named.column,
+            named.follows,
+        );
         MenuButton::new()
             .on_press(move |_| {
                 follow_name(
                     &server,
                     open,
                     Lookup::at(&at, column),
-                    lsp::Followed::Definition,
+                    follows,
                     Reach::InPlace,
                 )
             })

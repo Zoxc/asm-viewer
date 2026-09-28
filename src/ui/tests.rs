@@ -12339,6 +12339,52 @@ fn an_item_in_a_trait_impl_asks_the_server_for_its_declaration() {
     );
 }
 
+/// **"Go to definition" and F12 ask what a press on the name asks**: the declaration, on
+/// an item in a trait `impl`. They asked for the definition, which is the item itself.
+#[test]
+fn go_to_definition_on_a_trait_impl_item_asks_what_a_press_does() {
+    let (file, _directory) = calling_file("implmenu");
+    let legend = lsp::Legend::of(&["function"], &["declaration", "trait"]);
+    let in_an_impl = links::Links::of(
+        &legend,
+        &[lsp::Token {
+            line: 2,
+            columns: 12..18,
+            kind: 0,
+            modifiers: 0b11,
+        }],
+    );
+    let (mut test, roots, asks) =
+        mount_linking_calling(|_job: LspJob| None, file.clone(), in_an_impl);
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+    let declaration = lsp::Question::Followed(lsp::Followed::Declaration);
+
+    let name = word_point(&test, "helper");
+    right_click(&mut test, name);
+    let entry = centre_of(&test, "Go to definition");
+    press_at(&mut test, entry);
+    let (_, want) = next_ask(&mut test, &asks).expect("the menu asked the server");
+    assert_eq!(want, declaration, "the menu asked for the definition");
+
+    // Alt held, so the press that puts the caret there follows nothing.
+    let mut alt = roots.keys.alt;
+    alt.set(true);
+    caret_on(&mut test, "helper");
+    alt.set(false);
+    while next_job(&asks).is_some() {}
+    press_chord(&mut test, Chord::Definition);
+    let (_, want) = next_ask(&mut test, &asks).expect("F12 asked the server");
+    assert_eq!(want, declaration, "F12 asked for the definition");
+}
+
 /// The three questions a click cannot ask are all on the name, and "Find implementations"
 /// is the panel's second: it holds a question of its own kind and asks the server at the
 /// place the reader pointed.
