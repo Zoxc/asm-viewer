@@ -66,6 +66,18 @@ pub fn is_project_file(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == PROJECT_EXTENSION)
 }
 
+/// `path` as a project file: with `.avproj` added where it has not got it, since the
+/// extension is all anything recognises one by ([`is_project_file`]). What a save dialog
+/// answers is taken through here: only Windows' adds the extension itself.
+pub fn as_project_file(path: PathBuf) -> PathBuf {
+    if is_project_file(&path) {
+        return path;
+    }
+    let mut named = path.into_os_string();
+    named.push(format!(".{PROJECT_EXTENSION}"));
+    PathBuf::from(named)
+}
+
 /// `path` as a project is named by: absolute, with its `.` and `..` taken out by text.
 /// Projects are compared by spelling, so `../app/app.avproj` given from `/src/tools` has to
 /// come out as `/src/app/app.avproj`, or the recent list keeps both.

@@ -22,6 +22,19 @@ fn a_project_file_is_known_by_its_extension() {
     }
 }
 
+/// A save dialog answers with the name as typed on Linux, so the extension is added to a
+/// name without it, and a name with it is left alone.
+#[test]
+fn a_project_file_is_given_its_extension() {
+    for (typed, named) in [
+        ("/src/kernel", "/src/kernel.avproj"),
+        ("/src/kernel.toml", "/src/kernel.toml.avproj"),
+        ("/src/kernel.avproj", "/src/kernel.avproj"),
+    ] {
+        assert_eq!(as_project_file(typed.into()), PathBuf::from(named));
+    }
+}
+
 /// A project named on the command line with `..` in it is the same project as the one the
 /// file dialog opens, so both reach the recent list under one spelling.
 #[test]

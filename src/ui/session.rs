@@ -772,7 +772,8 @@ fn restore_ui(arranged: Arrangement, ui: Option<&SavedUi>) {
 /// Ask where to put the open project, and put it there.
 ///
 /// A **save** dialog, which is the one place in the app that has one: the reader is naming
-/// a file that is not there yet, and the extension is what makes it a project.
+/// a file that is not there yet, and the extension is what makes it a project. It is added
+/// where the name has not got it.
 pub(crate) fn ask_where_to_save(states: ProjectStates, put: project::Put) {
     let mut proj = states.proj;
     let store = states.store;
@@ -794,10 +795,19 @@ pub(crate) fn ask_where_to_save(states: ProjectStates, put: project::Put) {
             .add_filter("Project", &[project::PROJECT_EXTENSION])
             .set_file_name(suggested),
         AskFor::Save,
-        move |path| {
+        move |typed: PathBuf| {
             // The project the reader asked to save, and not whichever is open when the
             // dialog answers.
             if states.left(asked) {
+                return;
+            }
+            // A file the dialog did not ask about replacing is left alone.
+            let path = project::as_project_file(typed.clone());
+            if path != typed && path.exists() {
+                log::warn!(
+                    "not saving over {}, which was not the name given",
+                    path.display()
+                );
                 return;
             }
             let store = store.peek().clone();
