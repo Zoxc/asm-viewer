@@ -891,7 +891,9 @@ take the restored run with it, so each of them judges itself by what the last ru
 hook -- and hands a change of entry off to `use_land` untouched. **An object's code is the one listing whose rows are not its rows
 next time**: the reading is reset when the tab is left (`use_reading_of`) and comes back as guesses,
 so a run kept by rows would land rows away. Its assembly run is kept with the **place each of its
-rows stood for** (`Kept::spots`, stamped with the reading generation), written by `use_kept_place`
+rows stood for** (`Kept::spots`, stamped with the reading generation, which a new reading counts on
+from and never repeats, or a run kept under the last reading was put back as it was on the rows of
+the next at the same count), written by `use_kept_place`
 whenever the run or the rows change, never on the run that switches tab, when the marks on screen
 are still the last tab's. It is carried through them (`Kept::carry`) when the rows are built for the
 first time since the reset, which is a pass after `use_land` has put the kept run back; until then
@@ -1098,9 +1100,10 @@ place
 (`agents/UI.md`, `Places::code_at`), plants a door's caret once there are rows to plant it in (the planting
 paragraph above), and rebuilds the rows whenever the reading's object or generation changes, in the
 one run that also moves the controller to where the place now is. The object as well: every object's
-reading counts from nought, and a pane moved in place to another object's code -- a switch between
-two code tabs re-renders it rather than mounting it again -- can see that object's first answer at
+reading once counted from nought, and a pane moved in place to another object's code -- a switch between
+two code tabs re-renders it rather than mounting it again -- could see that object's first answer at
 the very generation the old rows were counted at, and kept by the generation alone it stayed empty.
+A new reading now counts on from the last (`use_reading_of`), but a generation still names no object.
 **The rebuild costs what is held, not the
 listing**: `section::Layout` is every stretch's estimate, and it is the skeleton itself, counted
 once on the worker with the first ask. `Rows::over` lays the held stretches over it -- a decoded

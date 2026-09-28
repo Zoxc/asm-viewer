@@ -993,10 +993,9 @@ struct Held {
     tab: Option<DocId>,
     stop: Option<Stop>,
     /// The object and the reading generation the rows were counted at. The object too,
-    /// since every object's reading counts from nought: a pane moved in place to another
-    /// object's code can see that one's first answer at the generation the old rows were
-    /// counted at. By `Weak`, which holds no bytes and keeps any other object off the
-    /// address.
+    /// since a generation is a count and names no object: only `use_reading_of` keeps a
+    /// new reading counting on from the last. By `Weak`, which holds no bytes and keeps
+    /// any other object off the address.
     built: Option<(Weak<Object>, u64)>,
     /// The place last derived from the offset, to tell a scroll from a write made
     /// from outside.

@@ -239,7 +239,8 @@ pub(crate) struct Reading {
     pub(crate) code: Option<Arc<Layout>>,
     /// The decoded stretches, by flat index.
     pub(crate) held: BTreeMap<usize, Arc<Stretched>>,
-    /// Bumped whenever `code` or `held` changes: what the view's rows are keyed on.
+    /// Bumped whenever `code` or `held` changes: what the view's rows are keyed on. A
+    /// reading that replaces another counts on from it ([`use_reading_of`]).
     pub(crate) generation: u64,
 }
 
@@ -350,7 +351,14 @@ pub(crate) fn use_reading_of(
             _ => None,
         };
         if !same_arc(&reading.peek().object, &wanted) {
-            reading.set(Reading::of(wanted));
+            // Counting on from the last reading, never from nought again: a run is kept
+            // with the generation its rows were counted at, and put back as it is at that
+            // generation.
+            let generation = reading.peek().generation;
+            reading.set(Reading {
+                generation,
+                ..Reading::of(wanted)
+            });
             window.set(None);
             if rows.peek().is_some() {
                 rows.set(None);

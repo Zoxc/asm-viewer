@@ -26792,6 +26792,54 @@ fn a_unified_view_asks_for_its_skeleton_once_the_reading_is_its_own() {
     assert!(asked.code.is_none());
 }
 
+/// The reading following the active document, and nothing else.
+fn code_reading_harness() -> impl IntoElement {
+    let active = use_consume::<Active>().0;
+    let objects = use_consume::<Objects>().0;
+    use_reading_of(active, objects, use_sectioned());
+    rect().expanded()
+}
+
+/// A reading made afresh counts on from the one it replaces. A kept run is stamped with the
+/// generation its rows were counted at and put back as it is where the rows on screen are
+/// at that generation, so a new reading that counted from nought again put a run kept
+/// under the last one on the rows of another listing.
+#[test]
+fn a_new_reading_counts_on_from_the_last() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let (mut test, roots) = TestingRunner::new(
+        code_reading_harness,
+        (100., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(|| code_states(Reading::default())),
+        1.,
+    );
+    let (states, mut reading) = (roots.states, roots.sectioned.reading);
+    let mut open = states.objects;
+    open.write().push(object.clone());
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
+    settle(&mut test);
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: None,
+        window: vec![],
+    };
+    assert!(reading.write().take(&ask, None, skeleton(&object), vec![]));
+    let first = reading.peek().generation;
+
+    // Away to the object's symbols, which drops the reading, and back.
+    let symbols = Document::Object(object.clone());
+    open_document(states.open, states.visits, symbols, Reach::NewTab);
+    settle(&mut test);
+    assert!(reading.peek().object.is_none());
+    open_document(states.open, states.visits, code, Reach::NewTab);
+    settle(&mut test);
+    assert!(reading.peek().is_about(&object));
+    assert!(reading.write().take(&ask, None, skeleton(&object), vec![]));
+    assert!(reading.peek().generation > first);
+}
+
 /// The Assembly pane over whichever code tab is active, mounted the way `ContentArea`
 /// mounts a document's body: unkeyed, so switching between two code tabs re-renders the
 /// one scope rather than remounting it.
