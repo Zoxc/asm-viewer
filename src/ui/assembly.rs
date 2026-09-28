@@ -43,11 +43,12 @@ pub(crate) fn asm_line(instruction: &Instruction, address: Address) -> String {
 }
 
 /// What one piece of an instruction's text is: one of the formatter's spans, or one of its
-/// links, by its place in [`links`]' answer.
+/// links, by its place in [`links`]' answer, with the kind of the span it replaced ([`None`]
+/// for one appended after the row).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Piece {
     Span(SpanKind),
-    Link(usize),
+    Link(usize, Option<SpanKind>),
 }
 
 /// An instruction's links, in the order [`doors_of`] gives their doors: the span of
@@ -98,7 +99,7 @@ fn pieces(instruction: &Instruction) -> Vec<(Cow<'_, str>, Piece)> {
         .enumerate()
         .map(
             |(i, (text, kind))| match links.iter().position(|&(at, _)| at == Some(i)) {
-                Some(link) => (links[link].1.clone(), Piece::Link(link)),
+                Some(link) => (links[link].1.clone(), Piece::Link(link, Some(*kind))),
                 None => (Cow::Borrowed(text.as_str()), Piece::Span(*kind)),
             },
         )
@@ -106,7 +107,7 @@ fn pieces(instruction: &Instruction) -> Vec<(Cow<'_, str>, Piece)> {
     for (link, (at, text)) in links.iter().enumerate() {
         if at.is_none() {
             pieces.push((Cow::Borrowed(" "), Piece::Span(SpanKind::Other)));
-            pieces.push((text.clone(), Piece::Link(link)));
+            pieces.push((text.clone(), Piece::Link(link, None)));
         }
     }
     pieces
@@ -124,7 +125,7 @@ fn text_of(instruction: &Instruction) -> (Line, Vec<(usize, Range<usize>)>) {
     for (piece, kind) in pieces(instruction) {
         let start = text.len();
         text.push_str(&piece);
-        if let Piece::Link(link) = kind {
+        if let Piece::Link(link, _) = kind {
             links.push((link, start..text.len()));
         }
     }
@@ -1106,11 +1107,11 @@ fn instruction_text(
 ) -> Text {
     let instruction = &data.assembly().instructions[index];
     let doors = doors_of(data, index);
-    // Each link's text in the colour its door is drawn in at rest.
-    let rest = |link: usize| {
-        doors
-            .get(link)
-            .map_or(palette().name_fg, |door| door.colours().0)
+    // Each link's text in the colour its door is drawn in at rest. A link with no door
+    // is no link, and keeps the colour of the span it replaced.
+    let rest = |link: usize, replaced: Option<SpanKind>| match doors.get(link) {
+        Some(door) => door.colours().0,
+        None => replaced.map_or(palette().name_fg, kind_color),
     };
     let spans = pieces(instruction)
         .into_iter()
@@ -1123,7 +1124,7 @@ fn instruction_text(
                         _ => FontWeight::NORMAL,
                     },
                 ),
-                Piece::Link(link) => (rest(link), FontWeight::NORMAL),
+                Piece::Link(link, replaced) => (rest(link, replaced), FontWeight::NORMAL),
             };
             Span::new(text.into_owned())
                 .color(colour)

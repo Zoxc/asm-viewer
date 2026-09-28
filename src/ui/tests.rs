@@ -25241,6 +25241,18 @@ fn a_symbol_the_code_listing_leaves_out_offers_no_door_into_it() {
         CursorIcon::Pointer,
         "the call is drawn as a door"
     );
+    // Nor is it drawn as one: it keeps the colour of the number it is.
+    let assembly = b.data.assembly(&b.object).expect("b decodes");
+    let Some(Operand::Call { span, .. }) = assembly.instructions[0].operand else {
+        panic!("the call keeps its address");
+    };
+    assert_eq!(
+        span_colour(&test, &operand),
+        Some(Fill::Color(crate::ui::palette::kind_color(
+            assembly.instructions[0].format[span].1
+        ))),
+        "the call is drawn in a door's colour"
+    );
     press_at(&mut test, door);
     settle(&mut test);
     assert!(
@@ -37872,6 +37884,23 @@ fn a_project_with_settings(text: &str) -> Temporary {
     std::fs::write(directory.join(".vscode").join("settings.json"), text)
         .expect("writing the settings file");
     directory
+}
+
+/// The colour a span was drawn in, of the first one saying exactly `text`.
+fn span_colour(test: &TestingRunner, text: &str) -> Option<Fill> {
+    use freya::elements::paragraph::ParagraphElement;
+    use std::any::Any;
+
+    test.find(|node, _element| {
+        let element = node.element();
+        (element.as_ref() as &dyn Any)
+            .downcast_ref::<ParagraphElement>()?
+            .spans
+            .iter()
+            .find(|span| span.text == text)
+            .map(|span| span.text_style_data.color.clone())
+    })
+    .flatten()
 }
 
 /// The colour a label was drawn in, of the first one holding `has`.
