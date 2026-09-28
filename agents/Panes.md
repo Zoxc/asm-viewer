@@ -1302,7 +1302,10 @@ sight and past the right the last, and not the row's start or end, which is what
 the sweep used to jump to. Held past any edge of the box, the sweep **scrolls the view**: a task the
 handler starts moves it every `AUTOSCROLL_TICK` towards the pointer (a row up or down, a row's
 height sideways, the sideways extent being the widest row, `Widest::extent`) and reaches the run out
-to what came in, for as long as the button is down and the pointer stays past an edge. The pointer's
+to what came in, for as long as the button is down and the pointer stays past an edge. **The reach
+is made at the next tick**, before it scrolls again, and not straight after the scroll: a row just
+scrolled in is not built yet and lends no paragraph, so every tick put the run's end at column 0 of
+the new row, and a row just scrolled sideways still had its old x. The pointer's
 last place is kept in a cell, since nothing arrives from a pointer that is not moving
 (`use_sweep_beyond`, a hook so the cells outlive the handler a render remakes; one task at a time).
 **The rows and the key the extent is asked under are the render's**, and neither is carried by the

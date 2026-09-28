@@ -1415,11 +1415,11 @@ fn reach(listing: &Listing, at: CursorPoint) -> Option<Caret> {
 ///
 /// Held past an edge of the box, the sweep **scrolls the view**: a task moves it every
 /// [`AUTOSCROLL_TICK`] towards the pointer -- a row up or down, a row's height sideways --
-/// and reaches the run out to what came in, for as long as the button is down and the
-/// pointer stays past an edge; the pointer's last place is kept in a cell the handler
-/// writes and the task reads, since nothing arrives from a pointer that is not moving. A
-/// hook, for the cells to outlive the handler a render makes afresh; one task at a time,
-/// the flag says.
+/// and reaches the run out to what came in at the next tick, once it is laid out, for as
+/// long as the button is down and the pointer stays past an edge; the pointer's last
+/// place is kept in a cell the handler writes and the task reads, since nothing arrives
+/// from a pointer that is not moving. A hook, for the cells to outlive the handler a
+/// render makes afresh; one task at a time, the flag says.
 ///
 /// **The rows and the key are the render's**, and neither is carried into the task: both
 /// are the [`Listing`]'s own cells, written by every render of the list and read at the
@@ -1459,6 +1459,13 @@ pub(crate) fn use_sweep_beyond(
                 if !dragging(marked, pane) {
                     break;
                 }
+                // The rows the last tick brought in, reached now that they are built and
+                // laid out where it put them. Reached straight after the scroll, a row
+                // just scrolled in had no paragraph to say where a column is, and a row
+                // scrolled sideways still had its old x.
+                if let Some(caret) = reach(&listing, at) {
+                    mark_drag(marked, pane, caret.row, Some(caret.col));
+                }
                 let area = listing.bounds.get();
                 // Each offset counts down from zero, so towards the far side is less.
                 let side = |before: bool, past: bool| {
@@ -1494,9 +1501,6 @@ pub(crate) fn use_sweep_beyond(
                     if target != x {
                         controller.scroll_to_x(target);
                     }
-                }
-                if let Some(caret) = reach(&listing, at) {
-                    mark_drag(marked, pane, caret.row, Some(caret.col));
                 }
             }
             running.set(false);

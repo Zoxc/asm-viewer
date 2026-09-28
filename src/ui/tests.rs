@@ -29855,6 +29855,65 @@ fn a_sweep_past_the_edge_scrolls_the_listing_the_pane_is_drawing_now() {
     );
 }
 
+/// A sweep held still below the pane reaches each row the autoscroll brings in at the
+/// column under the pointer, as a move onto that row would, and not at column 0: the row
+/// is reached once it has been built and laid out, and not straight after the scroll.
+#[test]
+fn an_autoscrolled_sweep_reaches_the_column_under_the_pointer() {
+    // Which rows have text, off the whole listing drawn at once: a separator has none,
+    // and column 0 is all a sweep can reach on one.
+    let texts: HashSet<usize> = {
+        let shown = shown_sum_to();
+        let (mut whole, _) = TestingRunner::new(
+            listing_harness,
+            (600., 1200.).into(),
+            move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+            1.,
+        );
+        settle(&mut whole);
+        let rows = paragraphs(&whole);
+        let top = rows[0].0.origin.y;
+        rows.iter()
+            .map(|(area, _, _)| ((area.origin.y - top) / code_row_height()).round() as usize)
+            .collect()
+    };
+    let shown = shown_sum_to();
+    let (mut test, roots) = TestingRunner::new(
+        listing_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let marked = roots.doors.marked;
+    settle(&mut test);
+    let first = paragraphs(&test)[0].0;
+    test.move_cursor(left_of(&first));
+    test.press_cursor(left_of(&first));
+    test.move_cursor((300.0, 900.0));
+    settle(&mut test);
+    let lead = || marked.peek().assembly.clone().unwrap().chars.lead();
+    let start = lead();
+    let mut leads = Vec::new();
+    // Many passes a tick, as the desktop draws a frame or more in one: what the task
+    // reaches is what the passes between two ticks have laid out.
+    for _ in 0..6 {
+        test.poll_n(Duration::from_millis(2), 20);
+        leads.push(lead());
+    }
+    test.release_cursor((300.0, 900.0));
+    mark_release(marked);
+    assert!(
+        leads.iter().any(|lead| lead.row > start.row),
+        "the sweep did not scroll: {leads:?}"
+    );
+    assert!(
+        leads
+            .iter()
+            .all(|lead| lead.col > 0 || !texts.contains(&lead.row)),
+        "a row scrolled in was reached at column 0: {leads:?}"
+    );
+}
+
 /// How many rows [`over_scrolled_harness`] draws, and how big its window is: enough rows
 /// that the listing is taller than the box, so the view has somewhere to scroll and an
 /// offset can be past the end of it.
