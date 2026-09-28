@@ -184,14 +184,23 @@ pub(crate) fn hunt(
         // In the stretch the walk started in, the reader's place is the caret's address,
         // which of the lines there it is on, and its column, and each hit is placed
         // against all three. A caret on a row that draws nothing sits just above the
-        // lines at its address.
+        // lines at its address, except on the blank under a header, which sits past the
+        // end of the header's line.
         let caret = from
             .filter(|_| step == 0 || step == total)
             .map(|(at, col)| {
-                let rank = lines
-                    .iter()
-                    .position(|(address, kind, _)| *address == at.address && *kind == at.kind);
-                (at.address, rank, col)
+                let rank_of = |wanted: section::Kind| {
+                    lines
+                        .iter()
+                        .position(|(address, kind, _)| *address == at.address && *kind == wanted)
+                };
+                match (rank_of(at.kind), at.kind) {
+                    (None, section::Kind::Space { under: true }) => {
+                        let header = rank_of(section::Kind::Header);
+                        (at.address, header, header.map_or(col, |_| usize::MAX))
+                    }
+                    (rank, _) => (at.address, rank, col),
+                }
             });
         let mut ranked: Vec<_> = lines.into_iter().enumerate().collect();
         if direction == Direction::Back {

@@ -188,3 +188,26 @@ fn a_walk_tells_apart_the_rows_at_one_address_and_the_hits_on_one_line() {
     let first = found(&object, &code, "r", Some((mov, 15)), Direction::Back);
     assert_eq!(first, Some((mov, 10..11)), "back skipped the first hit");
 }
+
+/// The blank row under a section's header is drawn below the header, so a walk from a
+/// caret there goes down past the header forward and finds it first going back. It was
+/// taken for a row above every line at its address, so forward found the header and back
+/// went the whole way round the object.
+#[test]
+fn a_caret_under_a_header_is_below_it() {
+    let (object, code) = code();
+    let space = CodeLine {
+        address: PlacedAddress::ZERO,
+        kind: section::Kind::Space { under: true },
+    };
+    let from = Some((space, 0));
+    let header = CodeLine {
+        address: PlacedAddress::ZERO,
+        kind: section::Kind::Header,
+    };
+    let forward = found(&object, &code, "s", from, Direction::Forward).expect("a match");
+    assert_ne!(forward.0, header, "forward went up to the header");
+    assert_eq!(forward.0.address, PlacedAddress::ZERO);
+    let back = found(&object, &code, "s", from, Direction::Back).expect("a match");
+    assert_eq!(back.0, header, "back went round the object");
+}
