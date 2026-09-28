@@ -500,9 +500,8 @@ fn keep_stderr(
                 return;
             }
             let mut said = said.lock().unwrap_or_else(|held| held.into_inner());
-            if said.len() < MAX_SAID {
-                said.extend_from_slice(&buffer[..read]);
-            }
+            let room = MAX_SAID.saturating_sub(said.len());
+            said.extend_from_slice(&buffer[..read.min(room)]);
         }
     })
     .map_err(|error| log::warn!("the language server's stderr could not be read: {error}"))

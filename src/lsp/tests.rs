@@ -1522,6 +1522,18 @@ fn a_character_split_across_two_reads_is_still_the_character() {
     assert_eq!(String::from_utf8_lossy(&said), line);
 }
 
+/// No more than [`MAX_SAID`] bytes are kept, even where the read that reached it held more.
+#[test]
+fn what_is_kept_of_stderr_stops_at_the_bound() {
+    let said = Arc::new(Mutex::new(Vec::new()));
+    let chunks = vec![vec![b'x'; 1000]; MAX_SAID / 1000 + 2];
+
+    let reader = keep_stderr(Some(InChunks(chunks)), &said).expect("a thread");
+    reader.join().expect("the stderr thread");
+
+    assert_eq!(said.lock().expect("what was said").len(), MAX_SAID);
+}
+
 /// A directory of this test's own under the system temporary directory, holding a `server`
 /// program that `does`. The directory goes when the test ends.
 #[cfg(unix)]
