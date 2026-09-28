@@ -305,7 +305,10 @@ pub static SECTIONS: &[Section] = &[
                 "Leave the box, keeping what was typed: from a filter box the keyboard \
                  goes back to the list, and a find bar closes.",
             ),
-            gesture("Tab", "Nothing. It does not move the keyboard on."),
+            gesture(
+                "Tab",
+                "Move the keyboard out of the box, to the next control.",
+            ),
         ],
     },
     Section {
