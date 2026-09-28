@@ -506,7 +506,8 @@ pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> 
         .map_err(|error| error.to_string())?;
 
     // Made if it is not there, and made *implicit* in that case so the file gains a
-    // `[profile.release]` header and no empty `[profile]` above it.
+    // `[profile.release]` header and no empty `[profile]` above it. Either may be an inline
+    // table (`release = { opt-level = 3 }`), which cargo reads the same.
     let table = document
         .as_table_mut()
         .entry("profile")
@@ -515,13 +516,19 @@ pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> 
             table.set_implicit(true);
             toml_edit::Item::Table(table)
         })
-        .as_table_mut()
+        .as_table_like_mut()
         .ok_or_else(|| format!("`profile` in {} is not a table", profiles.display()))?;
 
+    // `insert` and not `entry`: inside an inline table it makes the new table inline too.
+    if !table.contains_key(profile.name()) {
+        table.insert(
+            profile.name(),
+            toml_edit::Item::Table(toml_edit::Table::new()),
+        );
+    }
     let one = table
-        .entry(profile.name())
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
+        .get_mut(profile.name())
+        .and_then(toml_edit::Item::as_table_like_mut)
         .ok_or_else(|| format!("`profile.{}` is not a table", profile.name()))?;
     let carries = one
         .get("debug")
@@ -529,13 +536,13 @@ pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> 
             carries_lines(debug.as_bool(), debug.as_integer(), debug.as_str())
         });
     if !carries {
-        one["debug"] = toml_edit::value("line-tables-only");
+        one.insert("debug", toml_edit::value("line-tables-only"));
     }
     if one
         .get("strip")
         .is_some_and(|strip| strips(strip.as_bool(), strip.as_str()))
     {
-        one["strip"] = toml_edit::value("none");
+        one.insert("strip", toml_edit::value("none"));
     }
 
     write_atomically(profiles, document.to_string().as_bytes()).map_err(|error| error.to_string())

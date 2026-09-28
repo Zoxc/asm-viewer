@@ -512,6 +512,26 @@ fn adding_debug_lines_to_a_profile_that_is_there_keeps_its_other_keys() {
     assert!(!after.contains("debug = false"), "{after}");
 }
 
+/// cargo reads a profile written as an inline table like any other, and so does the edit.
+#[test]
+fn debug_lines_are_added_to_an_inline_profile() {
+    let directory = Temporary::fresh_directory("cargo-test");
+    let manifest_at = directory.join("Cargo.toml");
+    for text in [
+        "[profile]\nrelease = { opt-level = 3 }\n",
+        "profile = { release = { opt-level = 3 } }\n",
+        "profile = { dev = { opt-level = 1 } }\n",
+    ] {
+        fs::write(&manifest_at, text).expect("a manifest");
+
+        add_debug_lines(&profile_manifest(&directory), Profile::Release).expect("the write");
+
+        assert!(debug_lines(&profile_manifest(&directory), Profile::Release));
+        let after = fs::read_to_string(&manifest_at).expect("the file");
+        assert!(after.contains("opt-level"), "{after}");
+    }
+}
+
 /// cargo takes `[profile.*]` from the **workspace root** and ignores a member's own table,
 /// with a warning, so a project opened at a member is asked about the root's manifest and
 /// the offer to add lines edits that file. Reading the member's own would go on offering
