@@ -335,7 +335,12 @@ pub(crate) fn caret_questions(
             locating.find(Query::line(at), common.subject());
             return;
         }
-        let named = name_at_column(&common.source, &at, &common.links, caret.col);
+        // A caret just past a name is on it: a double press and every door that selects a
+        // name leave the caret at its end.
+        let named = name_at_column(&common.source, &at, &common.links, caret.col).or_else(|| {
+            let before = caret.col.checked_sub(1)?;
+            name_at_column(&common.source, &at, &common.links, before)
+        });
         let (Some(named), Some(server)) = (named, common.server.as_ref()) else {
             return;
         };

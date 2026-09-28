@@ -289,8 +289,9 @@ mean two things; all that differs is where the place comes from, the run's lead 
 instead of the pointer's column. `name_at_column` is where a column is
 looked up among the server's names, and the pointer's `Named::at_column` goes through it too, so the
 two ways of pointing at a name cannot land a column apart. It takes the place as **one value**, the file and
-the line together, so neither caller can say where the row is twice and have the two disagree. A caret **on no name** asks nothing about
-one, and with no server there is nobody to ask; the line's locations are about the row and not
+the line together, so neither caller can say where the row is twice and have the two disagree. A caret just past a name is on it: a
+double press and every door that selects a name leave the lead at its end. A caret **on no name**
+asks nothing about one, and with no server there is nobody to ask; the line's locations are about the row and not
 about a name, so they are asked wherever the caret is, exactly as the menu item is offered on
 every row. A pane with **no run at all** has no caret and answers none of the four. Only the
 Source pane offers them: the two assembly listings draw no names. The states they need -- and the

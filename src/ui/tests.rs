@@ -12550,6 +12550,35 @@ fn caret_on(test: &mut TestingRunner, word: &str) {
     settle(test);
 }
 
+/// **A caret just past a name is on it**, which is where a double press on the name
+/// leaves it.
+#[test]
+fn the_f12_family_asks_about_a_name_the_caret_ends() {
+    let (file, _directory) = calling_file("f12end");
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+    let at = word_point(&test, "main");
+    test.move_cursor(at);
+    for _ in 0..2 {
+        test.press_cursor(at);
+        test.release_cursor(at);
+    }
+    settle(&mut test);
+    while next_job(&asks).is_some() {}
+
+    press_chord(&mut test, Chord::Definition);
+    let (asked, _) = next_ask(&mut test, &asks).expect("F12 asked nothing");
+    assert_eq!((asked.line, asked.column), (1, 3));
+}
+
 /// **The F12 family is a row's menu asked about the caret.** F12 goes to what the name
 /// under it names, Shift+F12 lists what refers to it, Ctrl+F12 what implements it, and
 /// Alt+F12 every symbol the caret's line was compiled into -- each the same call the menu
