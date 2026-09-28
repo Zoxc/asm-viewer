@@ -335,7 +335,9 @@ pointers `Symbol` compares, `Ask::Source` by `LinePos`, the one `Arc` in the UI 
 text, so two allocations of one path are one question and a tab switch does not re-resolve.
 `Shown::answers` widens it in the one direction that is free: a source question that resolved to a
 symbol has already answered a later ask for that symbol outright, and the listing is retagged rather
-than worked out again. A dropped answer is what clicking twice quickly *means*, so nothing logs or
+than worked out again. A symbol can still be decoded twice -- its tab, another tab and back
+before the first answer lands sends it twice -- and the second answer, an equal listing in new
+`Arc`s, leaves the one up in place, so nothing keyed by those `Arc`s starts over. A dropped answer is what clicking twice quickly *means*, so nothing logs or
 retries. **What the panes show meanwhile** is the listing they already have. `Analyzed` holds
 `shown` (the listing actually drawn and the question it answers, which is the one asked *before*
 this one for as long as the worker takes), `answered` and `pending`. A listing is replaced

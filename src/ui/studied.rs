@@ -389,7 +389,17 @@ impl Analyzed {
         changed |= put(&mut self.over, over);
 
         match landed {
-            Some(shown) => changed |= put(&mut self.shown, Some(shown)),
+            // A symbol decoded again -- asked a second time while its first answer was on
+            // its way -- is the listing that is up already. That one stays, retagged, so
+            // nothing keyed by its `Arc`s starts over and nothing is drawn again.
+            Some(shown) => match self
+                .shown
+                .as_mut()
+                .filter(|up| matches!(ask, Ask::Symbol(_)) && up.answers(&ask))
+            {
+                Some(up) => changed |= put(&mut up.ask, ask.clone()),
+                None => changed |= put(&mut self.shown, Some(shown)),
+            },
             // A question that named no symbol leaves the listing that is up -- the click
             // lights no pair in it and nothing else, which is what says it landed nowhere
             // -- but **only one this line may be left looking at** ([`keeps_listing`]),
@@ -459,7 +469,14 @@ impl Analyzed {
                 changed |= put(&mut shown.ask, ask.clone());
             }
             changed |= put(&mut self.answered, Some(ask.clone()));
-            changed |= put(&mut self.over, ids);
+            // Over nothing for a symbol, as the worker's answer to one says: it names its
+            // object, and recording the objects open would be a change every time they
+            // are asked about.
+            let over = match ask {
+                Ask::Symbol(_) => Vec::new(),
+                Ask::Source { .. } => ids,
+            };
+            changed |= put(&mut self.over, over);
             changed |= self.pending.take().is_some();
             return (None, changed);
         }

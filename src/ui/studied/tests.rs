@@ -391,3 +391,53 @@ fn a_timer_from_an_earlier_send_of_the_question_marks_nothing_slow() {
     );
     assert!(state.slowed(second), "and the second's marks it");
 }
+
+/// **A symbol decoded twice keeps the listing that is up.** Its tab, a source tab and the
+/// symbol again before the first answer lands sends it twice; the second answer is an
+/// equal listing in new `Arc`s, and taking it would reset what is keyed by them.
+#[test]
+fn a_second_answer_for_the_symbol_up_changes_nothing() {
+    let object = fixture();
+    let symbol = symbol_of(&object);
+    let ask = Ask::Symbol(symbol.clone());
+    let open = [object];
+    let mut state = Analyzed::default();
+    assert!(state.take(
+        ask.clone(),
+        Some(Studied::new(symbol.clone())),
+        Vec::new(),
+        Some(&ask),
+        &open
+    ));
+    assert!(!state.take(
+        ask.clone(),
+        Some(Studied::new(symbol)),
+        Vec::new(),
+        Some(&ask),
+        &open
+    ));
+}
+
+/// **A symbol in hand stays in hand whatever is open.** The effect runs again when the
+/// objects change, and a symbol's answer is over none of them.
+#[test]
+fn asking_again_for_the_symbol_up_changes_nothing() {
+    let object = fixture();
+    let symbol = symbol_of(&object);
+    let ask = Ask::Symbol(symbol.clone());
+    let open = [object];
+    let visits = Visits::default();
+    let mut state = Analyzed::default();
+    state.asked(Some(&ask), &open, &visits);
+    state.take(
+        ask.clone(),
+        Some(Studied::new(symbol)),
+        Vec::new(),
+        Some(&ask),
+        &open,
+    );
+    assert!(matches!(
+        state.asked(Some(&ask), &open, &visits),
+        (None, false)
+    ));
+}
