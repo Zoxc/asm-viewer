@@ -240,9 +240,17 @@ impl Find {
     /// Take `hits` as the answer `about` says it is, and say whether anything changed.
     /// Refused where the pane has moved on, which is the whole of the supersession rule:
     /// a comparison and not a generation count.
+    ///
+    /// A refused answer to the last question asked leaves nothing in flight, so `asked`
+    /// is cleared with it: kept, the same question typed again was taken for one still on
+    /// its way and never asked.
     fn take(&mut self, about: About, hits: Shared<Hit>) -> bool {
         if self.about().as_ref() != Some(&about) {
-            return false;
+            let answered = self.asked.as_ref() == Some(&about);
+            if answered {
+                self.asked = None;
+            }
+            return answered;
         }
         self.found = Some((about, hits));
         true

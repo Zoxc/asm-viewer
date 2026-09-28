@@ -33250,6 +33250,67 @@ fn a_step_asked_before_the_answer_is_made_when_it_comes() {
     );
 }
 
+/// How many questions the gated worker below has answered.
+#[derive(Clone)]
+struct FindsAnswered(Arc<std::sync::atomic::AtomicUsize>);
+
+/// [`gated_find_harness`], counting what its worker answers.
+fn counted_find_harness() -> impl IntoElement {
+    let gate = use_consume::<FindGate>().0;
+    let answered = use_consume::<FindsAnswered>().0;
+    use_find_with(use_consume::<Looking>().0, move |ask| {
+        let _ = gate.lock().expect("the gate").recv();
+        let answer = find_work(ask);
+        answered.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        answer
+    });
+    listing_harness()
+}
+
+/// **A question whose answer was refused is asked again when the bar comes back to it.**
+/// The pattern is cleared while its answer is on the way, and typed again once the answer
+/// has been refused. Fails on a bar that still takes the question for one in flight: it
+/// is never asked again, and the bar shows no hits for it.
+#[test]
+fn a_refused_answer_is_asked_again() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let (open, gate) = std::sync::mpsc::channel::<()>();
+    let gate = FindGate(Arc::new(std::sync::Mutex::new(gate)));
+    let answered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = FindsAnswered(answered.clone());
+    let (mut test, roots) = TestingRunner::new(
+        counted_find_harness,
+        (600., 600.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context(move || gate);
+            runner.provide_root_context(move || counted);
+            runner.provide_root_context(move || listing_states(shown))
+        },
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    let mnemonic = drawn_twice(&test);
+
+    open_find_bar(&mut test);
+    let at = find_at(&states, &document);
+    let finds = states.places.finds;
+    edit_find(finds, at, |bar| bar.filter.pattern = mnemonic.clone());
+    settle(&mut test);
+    edit_find(finds, at, |bar| bar.filter.pattern = String::new());
+    settle(&mut test);
+    open.send(()).expect("the worker is waiting");
+    pump(&mut test, |_| {
+        answered.load(std::sync::atomic::Ordering::SeqCst) == 1
+    });
+    settle(&mut test);
+
+    let _ = open.send(());
+    edit_find(finds, at, |bar| bar.filter.pattern = mnemonic.clone());
+    find_answered(&mut test, finds, at, &mnemonic);
+}
+
 /// **A click since the last step is where the next one starts.** The bar remembers which
 /// hit the pane is on, and a step goes on from that only while the pane's run is still
 /// that hit; once the reader has clicked elsewhere, the step starts from the click, as the
