@@ -76,6 +76,20 @@ fn each_row_draws_its_own_part_of_the_run() {
     assert_eq!(selection.of_row(3, 3), Some((0, 3)));
 }
 
+/// A run of several rows that ends at the start of one takes nothing of that row, so an
+/// empty row there draws no stub, as a row with text draws no highlight.
+#[test]
+fn a_run_ending_at_a_rows_start_draws_nothing_on_it() {
+    let down = CharSelection::at(caret(1, 2)).extended(caret(3, 0));
+    assert_eq!(down.of_row(3, 0), None);
+    assert_eq!(down.of_row(3, 10), None);
+    let up = CharSelection::at(caret(3, 0)).extended(caret(1, 2));
+    assert_eq!(up.of_row(3, 0), None);
+    // Where it starts, the row's newline is in the run: an empty row there draws.
+    let from_empty = CharSelection::at(caret(1, 0)).extended(caret(3, 2));
+    assert_eq!(from_empty.of_row(1, 0), Some((0, 0)));
+}
+
 /// What is copied is each row's own part, in listing order, joined with newlines.
 #[test]
 fn copying_joins_each_rows_part_with_newlines() {

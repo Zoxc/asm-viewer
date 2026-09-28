@@ -294,13 +294,14 @@ impl CharSelection {
 
     /// What row `row` draws of the run, as the range of its `len` bytes to highlight: from the
     /// first end's column on its row, to the second end's on its own, and the whole of
-    /// every row between. `None` for a row outside the run, and for an empty run.
+    /// every row between. `None` for a row outside the run, for an empty run, and for the
+    /// row a run of several ends at the start of, which it takes nothing of.
     pub fn of_row(self, row: usize, len: usize) -> Option<(usize, usize)> {
         if self.is_empty() {
             return None;
         }
         let (from, to) = self.ends();
-        if row < from.row || row > to.row {
+        if row < from.row || row > to.row || (row > from.row && row == to.row && to.col == 0) {
             return None;
         }
         let start = if row == from.row {
