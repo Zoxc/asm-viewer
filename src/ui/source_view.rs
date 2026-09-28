@@ -363,6 +363,21 @@ impl SourceSide {
     }
 }
 
+/// Whether the run picked out in an object's code is on an instruction no line was
+/// compiled into.
+fn on_unlined_instruction(built: &Built, marks: &Marks) -> bool {
+    marks.assembly.as_ref().is_some_and(|picked| {
+        let row = picked.chars.anchor().row;
+        matches!(
+            built.row(row),
+            Some(section::Row {
+                kind: section::Kind::Instruction(_),
+                ..
+            })
+        ) && code_places(Some(built), row..=row).is_empty()
+    })
+}
+
 /// The whole of what the Source pane draws for `active`: which file, which place its rows
 /// are kept under, and which line it opens at.
 ///
@@ -559,7 +574,7 @@ impl Component for SourcePane {
         //
         // The tab's own document and not `Active`, which is a memo and a beat behind:
         // this pane is only ever mounted for the tab it belongs to.
-        let side = {
+        let (side, unlined) = {
             let (analysis, marks) = (analysis.read(), marked.peek());
             // Peeked and not read: the line a code tab opens at is read out of the rows,
             // and a window of them decoding must not draw the pane again.
@@ -567,7 +582,12 @@ impl Component for SourcePane {
                 .document
                 .code()
                 .and_then(|object| sectioned.peek_rows_of(object));
-            source_side(Some(&self.document), &analysis, &marks, built.as_deref())
+            let side = source_side(Some(&self.document), &analysis, &marks, built.as_deref());
+            let unlined = side.is_none()
+                && built
+                    .as_deref()
+                    .is_some_and(|built| on_unlined_instruction(built, &marks));
+            (side, unlined)
         };
 
         // **The one fact three questions are asked about:** which file this pane is
@@ -610,6 +630,11 @@ impl Component for SourcePane {
         });
 
         let Some(side) = side else {
+            // A code tab asks the worker nothing, so the answer below would say to click
+            // the instruction the reader has just clicked.
+            if unlined {
+                return placeholder("No line info");
+            }
             // The same answer the assembly pane gives, from the same place, plus one case
             // of its own: a symbol can be analysed and still name no file.
             let analysis = analysis.read();

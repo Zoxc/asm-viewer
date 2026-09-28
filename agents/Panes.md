@@ -52,7 +52,7 @@ selects nothing on this side, so neither changes which file is up. **In an objec
 companion is the file of the pressed instruction** and nothing before a press: the listing draws no
 symbol of its own, an instruction row's run is a run of the file the row was compiled from
 (`Picked::file`), and the tab opens on that row's line; the pane says "Click an instruction" until
-then. **That file is worked out again while the run has none**, which a run planted by a door
+then, and "No line info" for a decoded instruction no line was compiled into. **That file is worked out again while the run has none**, which a run planted by a door
 always does at first: a door plants the caret the moment there are rows, and the first rows are the
 skeleton, where the instruction's row is still a guess and is nobody's line. A carry maps row
 indices and keeps the rest of the run as it was, so nothing else would ever fill the file in, and a

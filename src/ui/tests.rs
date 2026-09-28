@@ -23664,6 +23664,56 @@ fn a_run_in_the_section_view_opens_its_file_beside_it() {
     );
 }
 
+/// An instruction no line was compiled into, picked out in an object's code, is said to
+/// have no line info, and not to be waiting for a click: the pane once said "Click an
+/// instruction" to a reader who had just clicked one.
+#[test]
+fn an_instruction_with_no_line_says_so_beside_an_objects_code() {
+    // Stripped, so no instruction in it has a line.
+    let (_path, objects) = fixture_objects_of("line_fixture_hidden.so", 1);
+    let object = objects[0].clone();
+    let held = reading_of(&object, &[0, 1, 2]);
+    let code = held.code.clone().expect("the reading has a skeleton");
+    let rows = Rows::new(code.code().clone(), |flat| held.body(flat));
+    let row = (0..rows.len())
+        .find(|&row| {
+            matches!(
+                rows.row(row),
+                Some(section::Row {
+                    kind: section::Kind::Instruction(_),
+                    ..
+                })
+            )
+        })
+        .expect("the fixture decodes an instruction");
+    let built = Arc::new(Built {
+        rows,
+        reading: held,
+    });
+
+    let reading = reading_of(&object, &[]);
+    let (mut test, (marked, code_rows)) = TestingRunner::new(
+        code_source_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| {
+            let roots = runner.provide_root_context(move || code_states(reading));
+            (roots.doors.marked, roots.sectioned.rows)
+        },
+        1.,
+    );
+    let (mut marked, mut code_rows) = (marked, code_rows);
+    code_rows.set(Some(built));
+    let mut picked = picked_row(row, "/x", Owed::NEITHER);
+    picked.file = None;
+    marked.set(Marks {
+        assembly: Some(picked),
+        source: None,
+    });
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"No line info".to_string()), "{drawn:?}");
+}
+
 /// **And that pane opens on the line the pressed row was compiled from**, as an
 /// assembly-driven tab's source side opens on the symbol's own line: the unified view
 /// draws no symbol, so the row picked out in it is the only thing saying where in the
