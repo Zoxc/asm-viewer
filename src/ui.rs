@@ -559,8 +559,9 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     // splits the reader can drag, each a number and the context it is read back out of
     // ([`Split`]). 50.0: what the leading side of a document starts at, before anything
     // is dragged. 380: what the widest group of the default arrangement needs to name
-    // every panel in it, the four across the top being the widest. A group's bar neither
-    // elides nor scrolls, so a narrower sidebar would open with the last name clipped.
+    // every panel on one row, the four across the top being the widest. A group's bar
+    // wraps what it cannot fit, so a narrower sidebar would open with that group two rows
+    // high.
     // The sidebar is the one of the three in pixels, its panel being a literal width.
     let dock = context(SidebarDock, DockArea::default());
     let document = Split::create(50.0, Unit::Percent, 1.0, 99.0);

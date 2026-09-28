@@ -43892,6 +43892,66 @@ fn a_raise_redraws_only_the_headers_it_changed() {
     );
 }
 
+/// **A group's bar wraps what it cannot fit onto a second row**, so every header stays
+/// on screen to be pressed or dragged: in a narrow sidebar, or with every panel dragged
+/// into one group, a bar of one row clipped the last of them.
+///
+/// Fails with the bar one row high.
+#[test]
+fn a_narrow_group_draws_every_header() {
+    let width = 160.0;
+    let (mut test, _dock) = TestingRunner::new(
+        panel_headers_harness,
+        (width, 500.).into(),
+        |runner: &mut _| {
+            runner.provide_root_context(|| {
+                let mut dock = test_roots().states.arranged.dock;
+                dock.set(DockArea::column(vec![vec![
+                    Panel::Objects,
+                    Panel::Files,
+                    Panel::Search,
+                    Panel::Symbols,
+                    Panel::History,
+                    Panel::Bookmarks,
+                    Panel::Locations,
+                ]]));
+                dock
+            })
+        },
+        1.,
+    );
+    settle(&mut test);
+    for title in [
+        "Objects",
+        "Files",
+        "Search",
+        "Symbols",
+        "History",
+        "Bookmarks",
+        "Locations",
+    ] {
+        let area = label_area(&test, title).expect("the header is drawn");
+        assert!(
+            area.max_x() <= width,
+            "{title}'s header is past the group's edge: {area:?}"
+        );
+    }
+    // And the bar is only as tall as its rows: freya's drop past the last header fills
+    // what it is in, and in the row it took the whole group.
+    let bar = test
+        .find(|node, element| {
+            let area = node.layout().area;
+            (element.style().background == Fill::Color(palette().header_bg)
+                && area.origin == (0.0, 0.0).into())
+            .then_some(area)
+        })
+        .expect("the bar is drawn");
+    assert!(
+        bar.height() <= 7.0 * list_row_height(),
+        "the bar took more than its rows: {bar:?}"
+    );
+}
+
 /// **A sweep held past a pane's edge arms no tooltip in the sidebar.** freya sends a held
 /// button's moves to whatever is under the pointer, and its tooltip arms on the hover
 /// alone, so a sweep dragged out over the panels showed the tooltip of every row it

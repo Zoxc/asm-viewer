@@ -578,8 +578,9 @@ group narrower than its headers lays them out at their natural widths and past i
 edge: there is no scrolling, no elision and no overflow list, and a panel drawn out there is
 one the reader cannot get at. Measured here: the four names of the sidebar's top group take
 376px, and at the 300px it used to open at Locations was laid out from 294 to 368. **Cost:**
-the sidebar opens at 380, what the widest default group needs (`src/ui.rs`); a reader who
-drags it narrower is on their own. A `ScrollView` around `tab_children` is not the answer it
+the bar wraps its headers onto more rows (`src/ui/dock.rs`), with freya's drop past the last
+header laid behind them, since in a wrapping row it fills the whole group; and the sidebar
+opens at 380, where the widest default group fits on one row (`src/ui.rs`). A `ScrollView` around `tab_children` is not the answer it
 looks like: it does scroll (measured), but only under Shift or a horizontal wheel, the axes
 swapping for `pressing_shift` alone (`scrollview.rs:259-268`), so a plain wheel over a 26px
 bar does nothing -- and a `ScrollView` stops answering the wheel entirely while a `DragZone`

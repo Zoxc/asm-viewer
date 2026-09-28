@@ -560,15 +560,32 @@ fn panel_drag(panel: Panel) -> Element {
         .into_element()
 }
 
-/// The bar a group's headers sit in: a plain row, the seven panels always fitting.
+/// The bar a group's headers sit in: a row, wrapped onto another when the headers do not
+/// fit, so every one of them can still be pressed and dragged.
+///
+/// freya's last child is the drop past the last header, a box that fills what it is in.
+/// In the row it would take the bar's whole group, so it is laid behind the headers
+/// instead, over the bar's whole box.
 fn panel_bar(ctx: TabBarContext<PanelId>) -> Element {
+    let mut headers = ctx.tab_children;
+    let past = headers.split_off(ctx.tab_count.min(headers.len()));
     rect()
         .width(Size::fill())
-        .height(Size::px(list_row_height()))
-        .horizontal()
         .background(palette().header_bg)
         .border(bottom_hairline())
-        .children(ctx.tab_children)
+        .child(
+            rect()
+                .position(Position::new_absolute())
+                .expanded()
+                .children(past),
+        )
+        .child(
+            rect()
+                .width(Size::fill())
+                .horizontal()
+                .content(Content::wrap())
+                .children(headers),
+        )
         .into_element()
 }
 

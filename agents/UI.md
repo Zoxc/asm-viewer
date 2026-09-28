@@ -569,8 +569,8 @@ body are `fn() -> Element` and not elements, so both are still built in the scop
 which is what subscribes that scope to the palette. `Panel` is imported by name as well as through
 the glob (`src/ui.rs`), freya's prelude having a `Panel` of its own. The outer split stays a
 `ResizableContainer` because docking cannot express a literal width. That width is 380 because a
-group's tab bar neither elides nor scrolls (`notes/upstream/freya.md`): the sidebar has to open wide
-enough for the widest default group to name every panel in it, which is the four across the top.
+group's tab bar wraps rather than eliding or scrolling (`notes/upstream/freya.md`): at 380 the widest
+default group, the four across the top, names every panel on one row.
 
 `tidy` is freya's `close_empty_panels` **written out rather than called**, because that sweep can
 leave a tree with no panel at all where this keeps one: an area that loses its last panel keeps an
@@ -810,11 +810,13 @@ chips and the rect tree with one-line handlers. That is also what lets a rule be
 beside the tests that drive the whole bar there is one per rule, calling it with no bar drawn
 (`src/ui/tests.rs`).
 
-A sidebar group's bar is a plain row, seven panels always fitting. Two things bite there. freya appends one child more than there are tabs, a
-`rect().expanded()` drop zone for "past the last tab", and `expanded()` is meaningless inside a
-horizontal scroll view, so it is given a width of its own. And a tab's name is elided **by character
-count in Rust**, where every other truncation is a width: a `maximum_width` anywhere inside one
-makes it shrinkable, and a horizontal scroll view measures children against the space *left*, so
+A sidebar group's bar is a row that wraps onto another when its headers do not fit, so a narrow
+sidebar, or a group holding every panel, still draws each header where it can be pressed and dragged
+(`a_narrow_group_draws_every_header`). freya appends one child more than there are tabs, a
+`rect().expanded()` drop zone for "past the last tab", which in a wrapping row of no fixed height
+took the whole group; it is laid behind the headers instead, over the bar's box. And a tab's name is
+elided **by character count in Rust**, where every other truncation is a width: a `maximum_width`
+anywhere inside one makes it shrinkable, and a row measures children against the space *left*, so
 tabs past the edge get no width and draw as a bare ×. Do not "fix" that back into a width.
 
 **A tab is named after the function, not after the whole demangled name** (`src/naming.rs`,
