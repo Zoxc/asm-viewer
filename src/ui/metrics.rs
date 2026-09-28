@@ -255,13 +255,21 @@ pub(crate) const SIZE_READOUT_WIDTH: f32 = 52.0;
 /// [`field_label_width`]'s reasoning, against the **fixed-width** font: the gestures are
 /// drawn in it, so the column follows it rather than the interface font beside them.
 ///
-/// Fifteen times the size, which is what the longest gesture takes: they run to 24
-/// characters (`Escape, or click outside`), and a fixed-width character is about six
-/// tenths of its size wide. The column is what the gestures need and not a share of the
-/// page, because a gesture cut in half is the one thing on the row a reader cannot guess
-/// the rest of.
+/// Wide enough for the longest gesture, a fixed-width character being about six tenths of
+/// its size wide; a little over, since some fonts run wider. Worked out from the list
+/// rather than written down, so a longer gesture added to it widens the column. The column
+/// is what the gestures need and not a share of the page, because a gesture cut in half is
+/// the one thing on the row a reader cannot guess the rest of.
 pub(crate) fn gesture_width() -> f32 {
-    fonts().mono.size() * 15.0
+    static LONGEST: LazyLock<usize> = LazyLock::new(|| {
+        shortcuts::SECTIONS
+            .iter()
+            .flat_map(|section| section.gestures)
+            .map(|gesture| gesture.keys.chars().count())
+            .max()
+            .unwrap_or(0)
+    });
+    (fonts().mono.size() * 0.62 * *LONGEST as f32).ceil()
 }
 
 /// How wide the column a Source row's line number is written in.
