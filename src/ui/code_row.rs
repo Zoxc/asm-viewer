@@ -1085,13 +1085,14 @@ fn on_measured(
 ) -> impl FnMut(Event<SizedEventData>) + 'static {
     let cells = cells.clone();
     move |e: Event<SizedEventData>| {
-        cells.row_x.set(e.area.min_x());
-        // A row that has moved -- a scroll, a resize, a listing redrawn -- takes any box
-        // drawn against it with it. Watched here rather than at the wheel: a
-        // `VirtualScrollView` stops the wheel event it acted on, so the pane never sees
-        // the one that matters, and this covers the keyboard, the sweep's autoscroll and
-        // a font change as well.
-        if cells.row_y.replace(e.area.min_y()) != e.area.min_y() && cells.named.take().is_some() {
+        // A row that has moved either way -- a scroll down or sideways, a resize, a split
+        // dragged, a listing redrawn -- takes any box drawn against it with it. Watched
+        // here rather than at the wheel: a `VirtualScrollView` stops the wheel event it
+        // acted on, so the pane never sees the one that matters, and this covers the
+        // keyboard, the sweep's autoscroll and a font change as well.
+        let across = cells.row_x.replace(e.area.min_x()) != e.area.min_x();
+        let down = cells.row_y.replace(e.area.min_y()) != e.area.min_y();
+        if (across || down) && cells.named.take().is_some() {
             if let Some(tell) = on_hover.as_ref() {
                 tell(Under::Moved);
             }

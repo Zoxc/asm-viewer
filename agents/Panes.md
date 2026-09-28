@@ -811,10 +811,12 @@ is taller under a name than over it nearly everywhere, so "more room" put the bo
 almost always -- over the lines about to be read, and jumping from one side to the other as
 the pointer moved down the file.
 
-**A row that has moved takes the box with it.** The row's `on_sized` says so, rather than a
-wheel handler on the pane: a `VirtualScrollView` stops the wheel event it acted on, so the
-pane never sees the one that mattered, and the row moving covers the keyboard, the sweep's
-autoscroll, a resize and a font change as well.
+**A row that has moved takes the box with it**, down or sideways: the box is placed at the
+name's window x, so a sideways scroll or a split dragged under a still pointer would leave it over
+another name. The row's `on_sized` says so, rather than a wheel handler on the pane: a
+`VirtualScrollView` stops the wheel event it acted on, so the pane never sees the one that
+mattered, and the row moving covers the keyboard, the sweep's autoscroll, a resize and a font
+change as well.
 
 **Alt held says a press is not a door this time.** Every door in a code row acts on a plain press,
 which leaves no way to put the pointer down on one and sweep: the press follows the link and the

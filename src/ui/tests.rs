@@ -10131,6 +10131,61 @@ fn word_row(test: &TestingRunner, word: &str) -> Area {
         .unwrap_or_else(|| panic!("{word:?} is drawn"))
 }
 
+/// A row scrolled sideways under a still pointer takes the box drawn against it away, as
+/// one scrolled down does: the box was placed at the name's x, and another name may be
+/// there now.
+#[test]
+fn a_sideways_scroll_takes_the_box_away() {
+    let directory = Seeded::directory("sideways");
+    let long = "x".repeat(400);
+    let file = directory.named(
+        "calls.rs",
+        &format!("fn main() {{\n    let n = helper(1); // {long}\n}}\n"),
+    );
+    let (mut test, roots, _asks) = mount_linking(
+        move |job: LspJob| match job {
+            LspJob::Hover { ticket, .. } => Some(LspAnswer::Hovered {
+                ticket,
+                said: Ok(Some(lsp::Hovered {
+                    text: "fn helper".to_owned(),
+                    line: 2,
+                    columns: 12..18,
+                })),
+            }),
+            _ => None,
+        },
+        file.clone(),
+    );
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+    let at = word_point(&test, "helper");
+    test.move_cursor(at);
+    hovered(&mut test);
+    assert!(hover_box(&test).is_some(), "the box is not drawn");
+    let before = word_row(&test, "helper");
+
+    test.scroll(at, (-150., 0.));
+    settle(&mut test);
+    settle(&mut test);
+    let after = word_row(&test, "helper");
+    assert_ne!(
+        after.min_x(),
+        before.min_x(),
+        "the row did not scroll sideways"
+    );
+    assert!(
+        hover_box(&test).is_none(),
+        "the box stayed after the row moved sideways"
+    );
+}
+
 /// The box is drawn against the name's row, on the side there is room on: the file here
 /// is three lines at the top of a tall window, so it goes under the row -- and its left
 /// edge is the name's own, which is what says it is about that name and not about the row
