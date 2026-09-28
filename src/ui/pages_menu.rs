@@ -106,13 +106,13 @@ pub(crate) fn page_following(page: Page) -> Option<Placing> {
 }
 
 /// The menu at the **top left of the window**: the ways in and out of a project, and under
-/// them Project, Settings and the Scratchpad -- the whole of the way back to a page that has
-/// been closed.
+/// them the pages -- Project, Settings, Shortcuts and the Scratchpad, and Debug when Alt
+/// was held -- the whole of the way back to a page that has been closed.
 ///
-/// It lists all three pages and marks the ones that are open, rather than listing only the
+/// It lists every page and marks the ones that are open, rather than listing only the
 /// closed ones: a menu whose rows come and go as tabs are closed is a menu a reader has to
-/// read every time, where a list that is always the same three is one they learn. Picking
-/// an open one shows it, which is what the reader meant by picking it.
+/// read every time, where a list that is always the same is one they learn. Picking an
+/// open one shows it, which is what the reader meant by picking it.
 ///
 /// **An item that would do nothing is left out** rather than drawn dim, freya's `MenuItem`
 /// having no disabled state and the app answering that the way it does on a tab's menu:
@@ -166,7 +166,7 @@ impl Component for PagesButton {
         let side = toggle_size();
         dropdown(
             (side, side),
-            "Projects, Settings and the Scratchpad",
+            "Projects and pages",
             glyph(("menu", lucide::menu())),
             hovering,
             showing,

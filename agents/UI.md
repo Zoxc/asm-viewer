@@ -655,10 +655,10 @@ place kept one to carry instead. The caret is kept with the place once it is lef
 keyboard again. The temporal tab is told from one that stays by its
 name being **italic** (`font_slant`) and by nothing else, the chip reading the flag through the same memo
 beside the document. Every tab has a ×, pages included, because there is a way back to one now: the
-**menu at the top left of the window** (`PagesButton`), which is the whole of it. It lists all three
+**menu at the top left of the window** (`PagesButton`), which is the whole of it. It lists every page
 and marks the ones that are open rather than listing only the closed ones -- a menu whose rows come
-and go is one a reader has to read every time, where a list that is always the same three is one
-they learn -- and picking an open one shows it. A page opens **beside the tab on screen**, the way
+and go is one a reader has to read every time, where a list that is always the same is one they
+learn -- and picking an open one shows it. A page opens **beside the tab on screen**, the way
 anything else the reader opens does. What a closed page was showing is state at the root of the app,
 so closing one loses nothing: a build or a run it started goes on, and it comes back as it was.
 
