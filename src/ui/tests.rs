@@ -21842,7 +21842,7 @@ fn a_new_run_in_the_same_pad_is_followed() {
     test.sync_and_update();
     let jobs = asking.peek().clone().expect("the wiring handed one back");
 
-    let mut run = |test: &mut TestingRunner, lines: usize| {
+    let run = |test: &mut TestingRunner, lines: usize| {
         request_run(pad, &jobs);
         pump(test, |_| !emitters.lock().expect("the emitters").is_empty());
         let mut emit = emitters.lock().expect("the emitters").remove(0);
