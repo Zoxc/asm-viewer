@@ -322,9 +322,9 @@ pub(crate) struct Listing {
     key: Rc<Cell<u64>>,
     /// How many rows the list is drawing: see [`Listing::counting`].
     rows: Rc<Cell<usize>>,
-    /// How far down the rows are pushed to sit on the device pixel grid: see
+    /// How far right and down the rows are pushed to sit on the device pixel grid: see
     /// [`Listing::padding`].
-    nudge: State<f32>,
+    nudge: State<Nudge>,
     /// How tall the list is: see [`Listing::viewport`]. The `VirtualScrollView` measures
     /// itself but keeps the answer, so the box around it is what is measured.
     viewport: State<f32>,
@@ -332,6 +332,14 @@ pub(crate) struct Listing {
     /// [`bring_caret_into_view`]. The list's and not the row's, which a scroll away and
     /// back mounts afresh.
     revealed: Rc<Cell<Option<(u64, Caret)>>>,
+}
+
+/// How far right and down a listing's rows are pushed to start on a device pixel edge:
+/// each less than one device pixel.
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
+pub(crate) struct Nudge {
+    pub(crate) left: f32,
+    pub(crate) top: f32,
 }
 
 /// A row's laid-out paragraph and where it starts, lent to the list by the row as it
@@ -357,7 +365,7 @@ impl Listing {
         Listing::new(
             ScrollController::new(0, 0, Vec::new()),
             Widest::detached(),
-            State::create(0.0),
+            State::create(Nudge::default()),
             State::create(0.0),
         )
     }
@@ -370,7 +378,7 @@ impl Listing {
     pub(crate) fn new(
         controller: ScrollController,
         widest: Widest,
-        nudge: State<f32>,
+        nudge: State<Nudge>,
         viewport: State<f32>,
     ) -> Self {
         Listing {
@@ -393,22 +401,27 @@ impl Listing {
     pub(crate) fn measured(&self, grid: Grid, area: Area) {
         let (mut nudge, mut viewport) = (self.nudge, self.viewport);
         viewport.set_if_modified(area.height());
-        nudge.set_if_modified(grid.nudge(area.min_y()));
+        nudge.set_if_modified(Nudge {
+            left: grid.nudge(area.min_x()),
+            top: grid.nudge(area.min_y()),
+        });
         self.bounds.set(area);
     }
 
-    /// The padding that puts the rows on the device pixel grid, read as the box's top
-    /// padding: whatever fraction the bars, tabs and fonts above a listing add up to, its
-    /// rows are washed and highlighted as whole pixels, so two rows' washes meet on an
-    /// edge instead of each fading into the other over the pixel they share. A read: the
-    /// box re-renders as it lands.
+    /// The padding that puts the rows on the device pixel grid, read as the box's top and
+    /// left padding: whatever fraction the bars, tabs and fonts above a listing add up to,
+    /// and whatever a split dragged to a fraction leaves beside it, its rows are washed and
+    /// highlighted as whole pixels, so two rows' washes meet on an edge instead of each
+    /// fading into the other over the pixel they share, and a mark a row puts on the grid
+    /// in its own x is on it in the window's. A read: the box re-renders as it lands.
     pub(crate) fn padding(&self) -> Gaps {
-        Gaps::new(*self.nudge.read(), 0.0, 0.0, 0.0)
+        let nudge = *self.nudge.read();
+        Gaps::new(nudge.top, 0.0, 0.0, nudge.left)
     }
 
-    /// That padding as it is, for a handler, which subscribes nothing.
+    /// The top padding as it is, for a handler, which subscribes nothing.
     fn nudge(&self) -> f32 {
-        *self.nudge.peek()
+        self.nudge.peek().top
     }
 
     /// How tall the list is, which is what a reveal, a page and the scroll's extent are

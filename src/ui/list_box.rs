@@ -76,7 +76,7 @@ pub(crate) fn use_list_box(pane: Pane, listing: u64) -> ListBox {
     let widest = use_widest();
     // Made here and not in the context's closure, which runs once: a hook has to run on
     // every render.
-    let nudge = use_state(|| 0.0f32);
+    let nudge = use_state(Nudge::default);
     let viewport = use_state(|| 0.0f32);
     let grid = pixel_grid();
     let held = use_provide_context(|| Listing::new(controller, widest, nudge, viewport));

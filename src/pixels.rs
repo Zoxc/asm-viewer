@@ -14,9 +14,9 @@
 //! what freya is given; the scale factor only decides which of them are grid points.
 //!
 //! The answers are relative to whatever the caller positions them in, so they land on the
-//! grid only if that element's own origin does. At 1x and 2x that is every ancestor whose
-//! offsets are whole numbers, which is all of them here; at 1.5x the pane's own origin
-//! decides, and nothing inside a row can see it.
+//! grid only if that element's own origin does. Nothing inside a row can see its origin,
+//! and what is above and beside a pane need not end on a whole pixel -- a split is a
+//! percentage -- so a code listing pads its rows onto the grid (`Listing::padding`).
 
 /// The device pixel grid: one scale factor, and the rounding a stroke needs to sit on it.
 #[derive(Clone, Copy, PartialEq, Debug)]

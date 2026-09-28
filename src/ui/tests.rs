@@ -29463,8 +29463,9 @@ fn an_instruction_line_past_the_listing_is_empty() {
     assert!(instruction_line(&assembly, usize::MAX).len() == 0);
 }
 
-/// The listing under half a pixel of something above it: what the real window does to it
-/// through whatever the dock, the bars and the fonts add up to.
+/// The listing under half a pixel of something above it and beside half a pixel of
+/// something on its left: what the real window does to it through whatever the dock, the
+/// bars and the fonts add up to, and a split dragged to a fraction.
 fn offset_listing_harness() -> impl IntoElement {
     let analysis = use_consume::<Analysis>().0;
     let document = analysis
@@ -29477,16 +29478,23 @@ fn offset_listing_harness() -> impl IntoElement {
     rect()
         .expanded()
         .child(rect().height(Size::px(0.5)).width(Size::fill()))
-        .child(rect().expanded().child(AssemblyPane {
-            tab: pane_tab(&document),
-            document,
-        }))
+        .child(
+            rect()
+                .expanded()
+                .horizontal()
+                .child(rect().width(Size::px(0.5)).height(Size::fill()))
+                .child(rect().expanded().child(AssemblyPane {
+                    tab: pane_tab(&document),
+                    document,
+                })),
+        )
 }
 
-/// A listing laid out half a pixel down still draws its rows on whole device pixels: the
-/// list pads its top by the fraction that puts its first row on the grid, so the washes of
-/// two rows meet on a pixel edge instead of each fading into the other over the pixel
-/// they share. The caret is a stroke on the same grid.
+/// A listing laid out half a pixel down and across still draws its rows on whole device
+/// pixels: the list pads its top and its left by the fraction that puts its first row on
+/// the grid, so the washes of two rows meet on a pixel edge instead of each fading into
+/// the other over the pixel they share. The caret is a stroke on the same grid, which a
+/// row works out in its own x.
 #[test]
 fn a_listings_rows_sit_on_whole_device_pixels_wherever_it_is_laid_out() {
     let shown = shown_sum_to();
@@ -29517,6 +29525,7 @@ fn a_listings_rows_sit_on_whole_device_pixels_wherever_it_is_laid_out() {
     settle(&mut test);
     let carets = carets(&test);
     assert_eq!(carets.len(), 1, "{carets:?}");
+    assert_eq!(carets[0].origin.x.fract(), 0.0, "{carets:?}");
     assert_eq!(carets[0].origin.x, first.origin.x);
     assert_eq!(carets[0].width(), 2.0);
     assert_eq!(carets[0].origin.y, first.origin.y);
@@ -29771,7 +29780,7 @@ fn sweeping_harness() -> impl IntoElement {
 
     let widest = use_widest();
     let controller = use_scroll_controller(ScrollConfig::default);
-    let nudge = use_state(|| 0.0f32);
+    let nudge = use_state(Nudge::default);
     let viewport = use_state(|| 0.0f32);
     let listing_ctx = use_provide_context(|| Listing::new(controller, widest, nudge, viewport));
     // Every render, as each list tells its own.
@@ -29932,7 +29941,7 @@ fn over_scrolled_harness() -> impl IntoElement {
     let marked = use_consume::<Marked>().0;
     let widest = use_widest();
     let controller = use_scroll_controller(ScrollConfig::default);
-    let nudge = use_state(|| 0.0f32);
+    let nudge = use_state(Nudge::default);
     let viewport = use_state(|| 0.0f32);
     let listing = use_provide_context(|| Listing::new(controller, widest, nudge, viewport));
     listing.drawing(1);
@@ -30183,7 +30192,7 @@ fn lending_harness() -> impl IntoElement {
     let from = *use_consume::<LentFrom>().0.read();
     let widest = use_widest();
     let controller = use_scroll_controller(ScrollConfig::default);
-    let nudge = use_state(|| 0.0f32);
+    let nudge = use_state(Nudge::default);
     let viewport = use_state(|| 0.0f32);
     let listing = use_provide_context(|| Listing::new(controller, widest, nudge, viewport));
     // Every render, as each list tells its own.

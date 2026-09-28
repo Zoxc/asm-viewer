@@ -974,9 +974,12 @@ own end. A corner's half-stroke now ends at the *far* edge of that run rather th
 line, so the joint is filled to the pixel instead of stopping inside the run behind an antialiased
 edge. All of it is relative to the gutter's own origin, which nothing inside a row can see, and
 **that origin is put on the grid by the list** (`Listing::padding`, `src/ui/code_row.rs`): the box
-around a listing's rows learns where it was laid out from its own `on_sized` and pads its top by the
-rest of the device pixel, so whatever fraction the bars, tabs and fonts above it add up to, its rows
-start on a pixel edge and, their height being whole pixels, stay on one. What that buys is the
+around a listing's rows learns where it was laid out from its own `on_sized` and pads its top and
+its left by the rest of the device pixel, so whatever fraction the bars, tabs and fonts above it add
+up to, its rows start on a pixel edge and, their height being whole pixels, stay on one. The left is
+the document split's doing: it is a percentage and freya rounds nothing, so the second pane starts
+at a fraction at most split positions, and every mark a row snaps in its own x was off the grid by
+that fraction. What that buys is the
 washes: two rows' backgrounds meeting on a fraction each fade into the other over the pixel they
 share, and a translucent wash fading twice looks like a light seam between every pair of selected
 rows. The scroll offset is whole logical pixels, so at 1× and 2× the rows stay on the grid as they
