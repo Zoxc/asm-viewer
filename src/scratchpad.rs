@@ -1148,37 +1148,60 @@ fn check_comparator(comparator: &str) -> Result<(), Problem> {
         .unwrap_or(comparator)
         .trim_start();
 
-    // `1.2.3-rc.1+build`: the core is what has to be numbers, and the rest is an
-    // identifier charset. Splitting on the first of the two markers is what keeps a
+    // `1.2.3-rc.1+build`: the core is what has to be numbers, and the rest is
+    // identifiers. Splitting on the first of the two markers is what keeps a
     // pre-release's own `-` out of the core.
     let (core, tail) = match version.find(['-', '+']) {
         Some(marker) => version.split_at(marker),
         None => (version, ""),
     };
 
-    let mut parts = core.split('.');
     let mut counted = 0;
-    for part in &mut parts {
+    for part in core.split('.') {
         counted += 1;
-        if counted > 3 || part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+        if counted > 3 || !is_number(part) {
             return Err(Problem::NotAVersion);
         }
     }
-    if counted == 0 {
-        return Err(Problem::NotAVersion);
-    }
 
-    // The tail is `-<identifiers>`, `+<identifiers>` or both, and an identifier is
-    // alphanumerics, `-` and `.`. A tail that is only its marker is a half-typed one.
-    let bad_tail = tail.len() == 1
-        || tail
-            .bytes()
-            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'+')));
-    if bad_tail {
-        return Err(Problem::NotAVersion);
+    // The tail is `-<pre-release>`, `+<build>` or both, and only after all three numbers.
+    let (pre, build) = match tail.strip_prefix('-') {
+        Some(rest) => match rest.split_once('+') {
+            Some((pre, build)) => (Some(pre), Some(build)),
+            None => (Some(rest), None),
+        },
+        None => (None, tail.strip_prefix('+')),
+    };
+    let fine = (tail.is_empty() || counted == 3)
+        && pre.is_none_or(|pre| identifiers(pre, true))
+        && build.is_none_or(|build| identifiers(build, false));
+    match fine {
+        true => Ok(()),
+        false => Err(Problem::NotAVersion),
     }
+}
 
-    Ok(())
+/// Digits, with no leading zero.
+fn is_number(part: &str) -> bool {
+    !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()) && !is_padded(part)
+}
+
+fn is_padded(part: &str) -> bool {
+    part.len() > 1 && part.starts_with('0')
+}
+
+/// Whether `text` is dot-separated identifiers, each alphanumerics and `-` and none empty.
+/// In a pre-release (`numbered`) one that is all digits may not start with a zero.
+fn identifiers(text: &str, numbered: bool) -> bool {
+    text.split('.').all(|identifier| {
+        !identifier.is_empty()
+            && identifier
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && !(numbered
+                && identifier.bytes().all(|byte| byte.is_ascii_digit())
+                && is_padded(identifier))
+    })
 }
 
 impl fmt::Display for Problem {

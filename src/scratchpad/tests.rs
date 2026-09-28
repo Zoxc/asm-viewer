@@ -108,6 +108,8 @@ fn a_version_that_is_not_a_version_says_so() {
         ">=1.2, <2.0",
         "1.0.0-rc.1",
         "1.0.0-alpha+build.5",
+        "1.0.0-rc.0+007",
+        "0.1.0",
         " 1.0 ",
     ] {
         assert_eq!(dependency("serde", good).check(), Ok(()), "{good}");
@@ -127,6 +129,17 @@ fn a_version_that_is_not_a_version_says_so() {
         ("1.2-", Problem::NotAVersion),
         ("1.2-rc/1", Problem::NotAVersion),
         (">=1,", Problem::NotAVersion),
+        // What cargo refuses as well: a leading zero, an empty identifier, a second `+`,
+        // and a tail on fewer than three numbers.
+        ("01", Problem::NotAVersion),
+        ("1.02.3", Problem::NotAVersion),
+        ("1.0.0-01", Problem::NotAVersion),
+        ("1.0.0-rc.", Problem::NotAVersion),
+        ("1.0.0-a..b", Problem::NotAVersion),
+        ("1.0.0-+", Problem::NotAVersion),
+        ("1.2.3-rc+", Problem::NotAVersion),
+        ("1.2.3+a+b", Problem::NotAVersion),
+        ("1.2-rc", Problem::NotAVersion),
     ] {
         assert_eq!(dependency("serde", bad).check(), Err(problem), "{bad:?}");
     }
