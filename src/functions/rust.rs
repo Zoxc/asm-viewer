@@ -67,12 +67,10 @@ pub fn functions(text: &str) -> Vec<Function> {
                 }
             }
             Token::Semicolon => {
-                // A declaration comes back off `found` where it is the last one there,
-                // so that whatever was found inside the signature keeps its place.
+                // A declaration comes back out of `found`, and whatever was found inside
+                // its signature stays: those are after it, and nothing still open is.
                 if let Some(last) = open.pop_if(|last| last.declared(&scanner)) {
-                    if last.found + 1 == found.len() {
-                        found.pop();
-                    }
+                    last.forget(&mut found);
                 }
             }
         }

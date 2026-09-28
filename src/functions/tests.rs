@@ -451,6 +451,18 @@ fn c() {}
     assert_eq!(named(&rust::functions(text)), [("b", 1, 1), ("c", 2, 2)]);
 }
 
+/// Defect: a declaration came back out only where it was the last function found, so one
+/// with a function inside its signature stayed as a one-line function of its own.
+#[test]
+fn a_declaration_goes_and_what_its_signature_holds_stays() {
+    let text = "\
+trait T {
+    fn f() -> [u8; { fn g() -> usize { 3 } g() }];
+}
+";
+    assert_eq!(named(&rust::functions(text)), [("g", 2, 2)]);
+}
+
 /// Where the brackets do not balance, a body ends at the close that takes the scan back
 /// out of the depth its brace opened at, whichever bracket that is. Here an unclosed `(`
 /// takes the brace that would have ended the body, and the `)` after it ends it instead.
