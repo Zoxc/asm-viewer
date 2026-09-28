@@ -239,6 +239,22 @@ fn a_return_type_in_front_of_an_operator_is_not_the_name() {
         short_name("public: int foo::operator int(void)"),
         "foo::operator int"
     );
+    // A conversion to a type with a path of its own keeps the class. Written by hand.
+    assert_eq!(
+        short_name(
+            "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >\
+             ::operator std::basic_string_view<char, std::char_traits<char> >() const"
+        ),
+        "basic_string::operator std::basic_string_view"
+    );
+    assert_eq!(
+        short_name("Foo::operator std::string() const"),
+        "Foo::operator std::string"
+    );
+    assert_eq!(
+        short_name("public: __cdecl Foo::operator class std::basic_string<char>(void) const"),
+        "Foo::operator class std::basic_string"
+    );
 }
 
 /// A C++ return type and an MSVC access prefix sit in front of the first segment, where

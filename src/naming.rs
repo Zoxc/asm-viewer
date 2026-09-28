@@ -601,8 +601,16 @@ fn operator_token(name: &str, at: usize) -> Option<usize> {
         .iter()
         .find(|candidate| symbol.starts_with(candidate.as_bytes()))
         .map(|candidate| spaces + candidate.len())
-        // A conversion operator -- `operator Foo` -- names a type rather than a symbol.
-        // The keyword alone is taken and the type is read as the rest of the segment.
+        // A conversion operator -- `operator std::string` -- names a type rather than a
+        // symbol. The type is taken up to the first bracket, so its `::` is not a place to
+        // cut, and its template arguments hang off it as a name's do.
+        .or_else(|| {
+            let end = symbol
+                .iter()
+                .position(|byte| b"<>()[]{},\"`'".contains(byte))
+                .unwrap_or(symbol.len());
+            (spaces > 0).then_some(spaces + end)
+        })
         .unwrap_or(0);
     Some(at + KEYWORD.len() + taken)
 }
