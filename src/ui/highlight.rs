@@ -620,10 +620,13 @@ pub(crate) fn read(ask: &SourceAsk) -> Option<SourceText> {
                 Some(Filed {
                     text: Some(text),
                     loads,
-                }) if *loads >= ask.since => Some(text.file.clone()),
+                }) if *loads >= ask.since => Some((text.file.clone(), *loads)),
                 _ => None,
             };
-            (cache.forgets.count, cache.loads, held)
+            // Text held from before is filed under the count it was read at, not under a
+            // binary that may have landed since.
+            let loads = held.as_ref().map_or(cache.loads, |held| held.1);
+            (cache.forgets.count, loads, held.map(|held| held.0))
         };
         let file = held.or_else(|| source::load(&ask.file));
         let parsed = file.map(|file| Arc::new(Highlighted::new(file, ask.appearance)));

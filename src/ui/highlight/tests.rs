@@ -38,6 +38,31 @@ fn a_missing_file_is_asked_about_until_it_is_forgotten() {
     assert!(sourced.pending(&showing, Appearance::Light).is_some());
 }
 
+/// A file parsed again from the text it holds, for a theme switch, keeps the count that
+/// text was read at: a binary landing while that parse was queued still has it read off
+/// the disk again.
+#[test]
+fn a_reparse_of_held_text_keeps_the_count_it_was_read_at() {
+    let seeded = Seeded::directory("held");
+    let path = seeded.file("f.rs", "old\n");
+    let showing: Arc<Path> = Arc::from(Path::new(&path));
+    let mut sourced = Sourced::default();
+    sourced.loaded();
+    let since = sourced.since;
+    let ask = |appearance| SourceAsk {
+        file: path.clone(),
+        appearance,
+        since,
+    };
+    read(&ask(Appearance::Light));
+
+    // The switch's ask is made, then a binary lands before it is read.
+    sourced.loaded();
+    read(&ask(Appearance::Dark));
+
+    assert!(sourced.pending(&showing, Appearance::Dark).is_some());
+}
+
 /// A read is thrown away for a forget of its own directory made while it ran, and for no
 /// other: a build of some other directory costs it nothing.
 #[test]
