@@ -152,11 +152,26 @@ fn which_door_a_location_row_presses_through() {
                 Some(at),
                 Some(Subject {
                     tab: elsewhere,
-                    file
+                    file: file.clone()
                 })
             ),
             Chosen::Landing(_)
         ),
         "a tab that has moved off the file drives nothing"
+    );
+
+    // Asked from an instruction whose line is in a header: the tab shows `now.c`.
+    let mut docs = Docs::default();
+    let id = docs.open(Document::Source(file.clone()));
+    let header = LinePos {
+        file: Arc::from(Path::new("inlined.h")),
+        line: 42,
+    };
+    assert!(
+        matches!(
+            chosen(&docs, Some(header), Some(Subject { tab: id, file })),
+            Chosen::Landing(_)
+        ),
+        "a line of another file drives nothing"
     );
 }

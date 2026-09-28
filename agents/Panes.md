@@ -621,7 +621,8 @@ on screen), the runs on screen are still the place being left's, and a line sele
 kept under that place and lost to the one raised. So that door, and `land_on`, leave a landing
 too. A row answering a question asked from a source-driven tab chooses for that tab instead:
 `Located::subject` is a `Subject`, the tab's id beside its file, and `Subject::entry` is the rule -- the choice is written
-under that entry while the tab is still open on that file -- with `land_on` raising the tab and the
+under that entry while the tab is still open on that file and the row's line is in it (a line
+of a header the code was inlined from lands in a tab of the symbol's own) -- with `land_on` raising the tab and the
 line left as a landing, a move and not a visit, the tab being open already. **Two doors join the
 two views** and both go through the same functions. A
 **Ctrl**-press on a label in an object's code opens the symbol's own tab, a `NewTab` as Ctrl opens

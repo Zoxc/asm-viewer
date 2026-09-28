@@ -183,8 +183,8 @@ impl Query {
 /// The source-driven tab a line question was asked from, and the file it was showing.
 ///
 /// A row of the answer is **chosen for that tab** -- its assembly side follows the symbol
-/// -- while the tab is still open on that file, and opens the symbol as a tab of its own
-/// once it has closed or moved off the file. The file is half of it: a tab handed another
+/// -- while the tab is still open on that file and the question's line is in it, and
+/// opens the symbol as a tab of its own otherwise. The file is half of it: a tab handed another
 /// document is no longer the tab the question was asked from.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Subject {
@@ -736,9 +736,9 @@ impl Component for LocationsPanel {
 enum Chosen {
     /// The symbol alone, the answer naming no line to open it on.
     Alone,
-    /// The tab the question was asked from, which is still open and still on that file:
-    /// this symbol is chosen for the place it is at, and its source side drives from the
-    /// line the question was asked from.
+    /// The tab the question was asked from, which is still open and still on the file
+    /// the line is in: this symbol is chosen for the place it is at, and its source side
+    /// drives from the line the question was asked from.
     Driving { entry: Entry, at: LinePos },
     /// A landing on the line, in a tab for the symbol: the row names a place in a file,
     /// and the assembly pane's caret is the pair's.
@@ -752,7 +752,12 @@ fn chosen(docs: &Docs, at: Option<LinePos>, subject: Option<Subject>) -> Chosen 
     let Some(at) = at else {
         return Chosen::Alone;
     };
-    match subject.and_then(|subject| subject.entry(docs)) {
+    // A line of another file -- code inlined from a header -- is not a line the tab can
+    // be driven from.
+    match subject
+        .filter(|subject| subject.file == at.file)
+        .and_then(|subject| subject.entry(docs))
+    {
         Some(entry) => Chosen::Driving { entry, at },
         None => Chosen::Landing(at),
     }
