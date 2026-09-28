@@ -778,7 +778,9 @@ only thing `lsp::Followed::Declaration` is for. The link carries it, and so does
 asks. The two genuinely disagree elsewhere,
 which is why neither can replace the other: a **call** to a trait method is defined in the
 `impl` that runs and declared in the trait, and a reader following it wants the code that
-runs.
+runs. rust-analyzer sets `trait` on an item in the trait's own body too, so that item is a
+link whose declaration is itself. Nothing in the token tells the two apart, and the pane
+opens nothing for an answer on the line it asked about, so the press does nothing.
 
 **The question is only put to a server that has finished reading the project**
 (`Language::ready`, `src/ui/linking.rs`). Not for tidiness: a request holds the one

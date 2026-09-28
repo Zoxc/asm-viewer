@@ -17,11 +17,14 @@
 //! the two genuinely disagree -- a call to a trait method is defined in the `impl` that
 //! runs and declared in the trait). `declaration` and `trait` together are what say so.
 //!
-//! One thing this is deliberately loose about. The `!` of a `macro_rules!` is a `macro`
+//! Two things this is deliberately loose about. The `!` of a `macro_rules!` is a `macro`
 //! token like the `!` of a macro *use*, with nothing to tell them apart, so it is a link
 //! that the server then places nowhere -- a click that does nothing, which is what the
 //! spec says a link the server cannot place does anyway (`notes/specs/Split View.md`).
-//! Telling the two apart would mean reading the row's text here, which is the pane's.
+//! And an item declared in a trait's own body carries `declaration` and `trait` as an
+//! item in a trait `impl` does, so it is a link too, and its declaration is itself: the
+//! pane opens nothing for an answer on the line asked about. Telling either pair apart
+//! would mean reading the file's text here, which is the pane's.
 
 use std::ops::Range;
 
