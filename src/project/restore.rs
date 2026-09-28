@@ -498,9 +498,16 @@ impl SavedTab {
         // A tab with nothing left on its trail is dropped: a strip whose tabs all
         // degraded onto the same object would collapse into one.
         trail.current()?;
-        // The rows of what survived, in the trail's order; `rebuilt` keeps the survivors
-        // in the order they were given, so the two agree.
-        let entries = resolved.into_iter().flatten().collect();
+        // The rows of each place the trail kept, in its order. `rebuilt` collapses a
+        // place saved twice onto its newest and cuts to the cap, so each is looked up
+        // rather than every survivor taken.
+        let survivors: Vec<RestoredEntry> = resolved.into_iter().flatten().collect();
+        let entries = trail
+            .entries()
+            .iter()
+            .filter_map(|stop| survivors.iter().find(|entry| entry.stop() == *stop))
+            .cloned()
+            .collect();
         Some(RestoredTab::Document {
             temporal: self.temporal,
             trail,

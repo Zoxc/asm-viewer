@@ -676,6 +676,25 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
     assert_eq!(rows, [3, 5]);
 }
 
+/// A place saved twice keeps the rows of its newest copy, the one the trail keeps, and
+/// no rows for the older one.
+#[test]
+fn a_place_saved_twice_keeps_the_rows_of_its_newest() {
+    let objects = objects();
+    let mut tab = saved_one(saved_entry(saved_object("a.o"), 7));
+    tab.entries.push(saved_entry(saved_object("a.o"), 3));
+    let session = Session {
+        tabs: vec![tab],
+        ..Session::default()
+    };
+
+    let restored = session.restore(&objects).tabs;
+    let (_, trail, entries) = as_document(&restored[0]);
+    assert_eq!(trail.entries().len(), 1);
+    let rows: Vec<usize> = entries.iter().map(|entry| entry.asm_row.row).collect();
+    assert_eq!(rows, [7]);
+}
+
 /// A hand-written or trimmed file: the `serde(default)`s keep a missing table from taking
 /// the active document down with it, and the restore is exactly what it would have been.
 #[test]
