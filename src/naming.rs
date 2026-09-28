@@ -246,7 +246,12 @@ fn qualifier(segment: &str) -> Option<&str> {
     let mut pending = vec![segment];
     let mut opened = 0;
     while let Some(text) = pending.pop() {
-        let segments = split_path(referent(text));
+        let text = referent(text);
+        // A function pointer has no name of its own either.
+        if keyword(text, "fn").is_some() || text.starts_with("fn(") {
+            continue;
+        }
+        let segments = split_path(text);
         let Some(&last) = segments.last() else {
             continue;
         };
@@ -278,7 +283,8 @@ fn qualifier(segment: &str) -> Option<&str> {
 }
 
 /// A type with the reference or pointer it is reached through taken off the front: `str`
-/// in `&str` and `&'a str`, `[u8]` in `&mut &[u8]`, `T` in `*const T`.
+/// in `&str` and `&'a str`, `[u8]` in `&mut &[u8]`, `T` in `*const T`. What goes before a
+/// function pointer's `fn` goes too: `unsafe`, `extern "C"` and `for<'a>`.
 fn referent(text: &str) -> &str {
     let mut text = text.trim_start();
     loop {
@@ -290,11 +296,19 @@ fn referent(text: &str) -> &str {
             }
         } else if let Some(rest) = text.strip_prefix('*') {
             rest
-        } else if let Some(rest) = ["mut", "const"]
+        } else if let Some(rest) = ["mut", "const", "unsafe"]
             .into_iter()
             .find_map(|word| keyword(text, word))
         {
             rest
+        } else if let Some(rest) = keyword(text, "extern") {
+            let rest = rest.trim_start();
+            match rest.starts_with('"') {
+                true => &rest[skip_string(rest, 0)..],
+                false => rest,
+            }
+        } else if text.starts_with("for<") {
+            &text[skip_group(text, 3)..]
         } else {
             return text;
         };

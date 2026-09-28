@@ -62,6 +62,22 @@ fn an_impl_qualifier_is_named_after_the_type_it_is_on() {
     assert_eq!(short_name("<&mut &[u8] as Foo>::bar"), "Foo::bar");
 }
 
+/// A function pointer is a type with no name of its own too. Written by hand.
+#[test]
+fn a_function_pointer_falls_back_to_the_trait() {
+    assert_eq!(
+        short_name("<fn() as core::ops::function::FnOnce<()>>::call_once"),
+        "FnOnce::call_once"
+    );
+    assert_eq!(short_name("<fn(i32) -> i32 as Foo>::bar"), "Foo::bar");
+    assert_eq!(
+        short_name("<unsafe extern \"C\" fn(*mut u8) as Foo>::bar"),
+        "Foo::bar"
+    );
+    assert_eq!(short_name("<for<'a> fn(&'a u8) as Foo>::bar"), "Foo::bar");
+    assert_eq!(short_name("<&fn() as Foo>::bar"), "Foo::bar");
+}
+
 /// A tuple, a slice or an array has no name of its own, and `::default` alone would not
 /// say what the tab is showing.
 #[test]
@@ -414,7 +430,7 @@ fn a_quoted_run_is_never_cut_on() {
     assert_eq!(short_name("winit::extern \"a::b\" fn(u8)"), "winit::fn");
     assert_eq!(
         short_name("<extern \"a as b\" fn() as core::fmt::Debug>::fmt"),
-        "fn::fmt"
+        "Debug::fmt"
     );
 }
 
