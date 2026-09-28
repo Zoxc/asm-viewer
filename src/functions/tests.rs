@@ -358,6 +358,48 @@ fn b() {
     assert_eq!(named(&rust::functions(text)), [("a", 1, 6), ("b", 7, 9)]);
 }
 
+/// Defect: every `<` and `>` was counted as an angle bracket, so the shift in `1 << 3` left
+/// two open at the body's brace, and a `x < y` in one body left one open for every
+/// signature after it. The function was dropped, and one nested in another hid the outer
+/// one's closing brace. A `<` now counts only inside the bracket it was opened in.
+#[test]
+fn a_shift_or_a_comparison_is_not_an_angle_bracket() {
+    let text = "\
+fn bits() -> [u8; 1 << 3] {
+    [0; 8]
+}
+fn c() {
+    1
+}
+";
+    assert_eq!(named(&rust::functions(text)), [("bits", 1, 3), ("c", 4, 6)]);
+
+    let text = "\
+fn a() -> bool {
+    x < y
+}
+fn f<const N: usize>() -> Foo<{ N > 0 }> {
+    1
+}
+";
+    assert_eq!(named(&rust::functions(text)), [("a", 1, 3), ("f", 4, 6)]);
+
+    let text = "\
+fn outer() {
+    fn bits() -> [u8; 1 << 3] {
+        [0; 8]
+    }
+}
+fn d() {
+    2
+}
+";
+    assert_eq!(
+        named(&rust::functions(text)),
+        [("outer", 1, 5), ("bits", 2, 4), ("d", 6, 8)]
+    );
+}
+
 /// Defect: the scanner looked for the closing quote of an escaped character one byte past
 /// the backslash, so `'\''` ended on the escaped quote. The real one then opened a literal
 /// of its own, `|'` was read as a character, and the `"` after it opened a string that ran

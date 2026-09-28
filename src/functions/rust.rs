@@ -198,6 +198,9 @@ struct Scanner<'a> {
     /// How many `(`, `[` or `<` are open: the grouping a `fn`'s own body brace is never
     /// inside. Counted by [`next`](Scanner::next) too, angle brackets as it passes them.
     grouped: usize,
+    /// How many of those are `<`, per bracket open at the position, innermost last; the
+    /// first is outside every bracket. A bracket's close drops what was opened inside it.
+    angles: Vec<usize>,
     /// Where each line starts, for turning an offset into a 1-based line.
     lines: Vec<usize>,
 }
@@ -217,6 +220,7 @@ impl<'a> Scanner<'a> {
             position: 0,
             depth: 0,
             grouped: 0,
+            angles: vec![0],
             lines,
         }
     }
@@ -250,6 +254,7 @@ impl<'a> Scanner<'a> {
                     if bracket.groups() {
                         self.grouped += 1;
                     }
+                    self.angles.push(0);
                     return Some(Token::Open(bracket));
                 }
                 b')' | b']' | b'}' => {
@@ -258,6 +263,10 @@ impl<'a> Scanner<'a> {
                     self.depth = self.depth.saturating_sub(1);
                     if bracket.groups() {
                         self.grouped = self.grouped.saturating_sub(1);
+                    }
+                    if self.angles.len() > 1 {
+                        let inside = self.angles.pop().unwrap_or(0);
+                        self.grouped = self.grouped.saturating_sub(inside);
                     }
                     return Some(Token::Close);
                 }
@@ -268,15 +277,26 @@ impl<'a> Scanner<'a> {
                 // A type's angle brackets group like a parenthesis, so that the `{` of a
                 // `{ N }` const argument in one is not read as a body. `>` after `-` is
                 // the arrow of a return type; `>>` is two closes and arrives as two
-                // bytes. A comparison miscounts, which is why the close saturates: those
-                // only occur in a body, whose function already has its brace, and any
-                // `fn` inside one is measured from the count as it stood at its keyword.
+                // bytes. A comparison or a shift miscounts, so a `>` closes only a `<`
+                // opened inside the same bracket, and a bracket's close forgets the `<`
+                // left open inside it. At a signature's own level there is none to
+                // miscount: an expression in one -- `[u8; 1 << 3]`, `{ N > 0 }` -- is
+                // inside a bracket of its own.
                 b'<' => {
-                    self.grouped += 1;
+                    if let Some(angles) = self.angles.last_mut() {
+                        *angles += 1;
+                        self.grouped += 1;
+                    }
                     self.position += 1;
                 }
                 b'>' => {
-                    if self.position == 0 || self.text[self.position - 1] != b'-' {
+                    let arrow = self.position > 0 && self.text[self.position - 1] == b'-';
+                    if let Some(angles) = self
+                        .angles
+                        .last_mut()
+                        .filter(|angles| !arrow && **angles > 0)
+                    {
+                        *angles -= 1;
                         self.grouped = self.grouped.saturating_sub(1);
                     }
                     self.position += 1;
