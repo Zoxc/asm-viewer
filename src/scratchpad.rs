@@ -124,9 +124,10 @@ fn main() {
 /// beside the pads, and every pad's own `Cargo.toml`. [`PadId::new`] is the only way to make
 /// one and `Deserialize` goes through it, so an id out of either file cannot be `..`, an
 /// absolute path or a name with a separator in it. The rules are [`check_name`]'s, since the
-/// id is what `[package] name` says, and they are strictly stronger than what a safe path
-/// component needs. No `Display`, deliberately: an id has no business being written into
-/// anything a reader looks at.
+/// id is what `[package] name` says, and two more make it a safe path component everywhere:
+/// no capital, so no two ids name one directory where case does not count, and no name
+/// Windows keeps for a device (`nul`, `com1`). No `Display`, deliberately: an id has no
+/// business being written into anything a reader looks at.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct PadId(String);
@@ -152,6 +153,9 @@ impl PadId {
     pub fn new(text: impl Into<String>) -> Option<PadId> {
         let text = text.into();
         check_name(&text).ok()?;
+        if text.bytes().any(|byte| byte.is_ascii_uppercase()) || is_device(&text) {
+            return None;
+        }
         Some(PadId(text))
     }
 
@@ -166,6 +170,19 @@ impl PadId {
     pub fn directory_in(&self, store: &Store) -> PathBuf {
         store.scratchpads().join(self.as_str())
     }
+}
+
+/// Whether Windows keeps `name` for a device, which a path naming it opens instead of a
+/// directory. Asked of a crate name, so without a capital or an extension.
+fn is_device(name: &str) -> bool {
+    if matches!(name, "con" | "prn" | "aux" | "nul") {
+        return true;
+    }
+    let numbered = |stem: &str| {
+        name.strip_prefix(stem)
+            .is_some_and(|digit| digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit())
+    };
+    numbered("com") || numbered("lpt")
 }
 
 /// One scratchpad: what the app files it under, what the reader calls it, the source it

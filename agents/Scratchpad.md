@@ -31,8 +31,9 @@ ordinary bound box with nothing to apply, nothing to refuse and no gesture to di
 `ProjectId`'s treatment all the same: a newtype whose `Deserialize` goes through the checked
 constructor, because it is interpolated into a path *and* read back out of two files a user can
 edit, the order beside the pads and every pad's own `Cargo.toml`, where it is what `[package] name`
-says. `check_name` is the one check, and the crate-name rules it applies are strictly stronger than
-what a safe path component needs. It has no `Display`, deliberately. That is also what gives the
+says. `check_name` is the one check, and a crate name is not quite a safe path component, so the
+id adds two rules to it: no capital, since `Pad` and `pad` are one directory where case does not
+count, and no name Windows keeps for a device, `nul` or `com1`. It has no `Display`, deliberately. That is also what gives the
 enumeration its rule: the manifest read answers `None` for a crate name that is not an id, so **a
 directory whose manifest parses, with a source file beside it, is a pad and anything else is not**,
 repaired at the point of use and never on load. `stated_in` is that sentence, and it is all the

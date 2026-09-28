@@ -227,6 +227,14 @@ fn an_id_out_of_a_file_goes_through_the_same_check_a_generated_one_does() {
     assert_eq!(PadId::new("9lives"), None);
     assert_eq!(PadId::new("a/b"), None);
     assert_eq!(PadId::new(".."), None);
+    // Two ids that would name one directory where case does not count, or a device on
+    // Windows, are not ids.
+    assert_eq!(PadId::new("Pad"), None);
+    for device in ["nul", "con", "prn", "aux", "com1", "lpt9"] {
+        assert_eq!(PadId::new(device), None, "{device}");
+    }
+    assert!(PadId::new("console").is_some());
+    assert!(PadId::new("com10").is_some());
 
     // And the same through serde, which is the path a hand-edited file takes.
     let read = |text: &str| toml::from_str::<BTreeMap<String, PadId>>(text);
