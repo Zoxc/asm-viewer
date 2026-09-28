@@ -679,7 +679,8 @@ Running puts `server_bg` under it -- the app's one control with a colour of its 
 process the reader started is worth telling apart from a toggle that happens to be on -- and
 a failure colours both the border and the text `invalid_fg`. Starting, or a server reading
 the project, turns the icon into a loader: the only moving thing in the bar, and it says an
-answer is not ready rather than not there.
+answer is not ready rather than not there. Reading is not being `ready()`, below, so the loader
+stays up through the gaps between progress tokens, and the Project view says the same.
 
 **Nothing about it changes width.** The two history buttons are at the same corner, and a
 label or an icon that grew would walk them out from under the pointer -- so the state is

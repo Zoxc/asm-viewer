@@ -257,11 +257,15 @@ impl Language {
     }
 
     /// Whether something is going on: starting one, or a server reading the project.
-    /// What the control draws a turning loader for instead of its own icon.
+    /// What the control draws a turning loader for instead of its own icon. Reading is
+    /// not being [`ready`], so the gaps between progress tokens do not count as done, as
+    /// they do not for links.
+    ///
+    /// [`ready`]: Language::ready
     pub(crate) fn busy(&self) -> bool {
         match &self.state {
             Lsp::Starting { .. } => true,
-            Lsp::Running { said, .. } => said.working,
+            Lsp::Running { said, .. } => !said.ready(),
             Lsp::Off | Lsp::Failed(_) => false,
         }
     }
@@ -277,7 +281,7 @@ impl Language {
         match &self.state {
             Lsp::Off => Verdict::plain("Not running. The control in the top bar starts it."),
             Lsp::Starting { .. } => Verdict::plain("Starting..."),
-            Lsp::Running { said, .. } if said.working => Verdict::plain("Reading the project..."),
+            Lsp::Running { said, .. } if !said.ready() => Verdict::plain("Reading the project..."),
             Lsp::Running { .. } => Verdict::plain("Running"),
             Lsp::Failed(why) => Verdict::bad_news(why.clone()),
         }
@@ -490,7 +494,7 @@ impl Language {
         match &self.state {
             Lsp::Off => format!("Start {program}"),
             Lsp::Starting { .. } => format!("Starting {program}"),
-            Lsp::Running { said, .. } if said.working => {
+            Lsp::Running { said, .. } if !said.ready() => {
                 format!("{program} is reading the project")
             }
             Lsp::Running { .. } => format!("Stop {program}"),

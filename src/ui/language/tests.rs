@@ -95,6 +95,28 @@ fn each_remark_is_written_on_the_field_it_is_about_and_no_other() {
     );
 }
 
+/// **A gap between progress tokens is still reading**, for what the control and the
+/// Project view say as for the links: a server that has said it has not settled is not
+/// done because no token is open.
+#[test]
+fn a_quiet_server_that_has_not_settled_is_still_reading() {
+    let mut state = Language {
+        state: Lsp::running_to_nothing(),
+        run: 1,
+        ..Language::default()
+    };
+    assert!(state.remarked(1, &lsp::Note::Settled(false)));
+    assert!(!state.working(), "no progress is open");
+    assert!(state.busy(), "the control drew a server that is done");
+    assert_eq!(
+        state.verdict(Some(Path::new("/p"))).text,
+        "Reading the project..."
+    );
+    assert!(state
+        .words("rust-analyzer", Some(Path::new("/p")))
+        .contains("reading the project"));
+}
+
 #[test]
 fn a_start_counts_the_run_up() {
     let mut state = Language {
