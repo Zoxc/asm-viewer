@@ -216,7 +216,11 @@ mod desktop_parse {
     pub fn pango(value: &str) -> Option<Spec> {
         let mut words: Vec<&str> = unquote(value.trim()).split_whitespace().collect();
 
-        let points = words.last().and_then(|last| last.parse::<f32>().ok());
+        // Pango's own range, which is also what keeps `inf` and `NaN` family words.
+        let points = words
+            .last()
+            .and_then(|last| last.parse::<f32>().ok())
+            .filter(|points| (0.0..=1_000_000.0).contains(points));
         if points.is_some() {
             words.pop();
         }

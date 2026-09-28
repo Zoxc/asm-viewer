@@ -79,6 +79,13 @@ fn a_pango_description_can_omit_its_size() {
 /// Pango's family is a list: the first name in it is the family, and the commas are not
 /// part of it.
 #[test]
+fn a_pango_size_is_a_number_pango_would_take() {
+    assert_eq!(pango("'Infinity'"), spec("Infinity", None));
+    assert_eq!(pango("'Foo NaN'"), spec("Foo NaN", None));
+    assert_eq!(pango("'Foo inf 10'"), spec("Foo inf", Some(10.0)));
+}
+
+#[test]
 fn a_pango_family_list_names_its_first_family() {
     assert_eq!(pango("'Cantarell, 11'"), spec("Cantarell", Some(11.0)));
     assert_eq!(
