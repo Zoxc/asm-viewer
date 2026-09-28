@@ -87,8 +87,8 @@ keys among them, and is otherwise freya's own default, written out once because 
 it wholesale. **Written out, it lets the modifier keys through**: freya's cancels a Ctrl, Alt or
 Caps Lock key-down, which cancels the global one the root tracks the modifiers from, so a Ctrl held
 in a filter box was never seen by the row it was held for. The Project, Settings and Scratchpad
-boxes filter no list and decline no chord, so they take that tail alone, `plain_keys`; declining is
-one call if that changes. Two ids are
+boxes have no keys of their own and take `plain_keys`, which is `box_keys` declining the chords
+alone: kept, Ctrl+P typed a `p` into a font's family and saved it as the override. Two ids are
 minted in the pane, the rows' and the box's, the pane being what holds them both. The headless tests pin the whole door — the chord ignored with
 nothing focused, answered from a pressed row, and not typed into the box it reaches.
 

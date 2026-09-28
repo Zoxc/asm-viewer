@@ -360,12 +360,9 @@ pub(crate) fn box_keys(
     })
 }
 
-/// The hook a box that declines no chord is given: [`Boxed::tail`] alone, which is freya's
-/// default with the modifiers let through. Every `Input` takes this or [`box_keys`], since
-/// freya's own default hides a held Ctrl or Alt from the root.
+/// The hook an `Input` with no keys of its own is given: [`box_keys`] declining the
+/// window's chords and nothing else. Every `Input` takes this or [`box_keys`], since
+/// freya's own default hides a held Ctrl or Alt from the root and keeps every chord.
 pub(crate) fn plain_keys() -> Callback<Event<KeyboardEventData>, bool> {
-    Callback::new(|e: Event<KeyboardEventData>| {
-        typed_in_box(&e.key);
-        Boxed::Input.tail(&e)
-    })
+    box_keys(Boxed::Input, &[], |_, _| {})
 }

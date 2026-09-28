@@ -32620,6 +32620,50 @@ fn every_chord_reaches_the_root_from_a_filter_box() {
     every_chord_into_a_box(&mut test, labels);
 }
 
+/// A box with no keys of its own, as the Project, Settings and Scratchpad pages draw
+/// theirs, under the watch the chords are seen by.
+#[derive(Clone, PartialEq)]
+struct PlainBox;
+
+impl Component for PlainBox {
+    fn render(&self) -> impl IntoElement {
+        let text = use_state(String::new);
+        rect()
+            .expanded()
+            .on_global_key_down(watch_key)
+            .child(
+                rect()
+                    .height(Size::px(40.))
+                    .child(Input::new(text).on_pre_key_down(plain_keys())),
+            )
+            .child(label().text(format!("typed: {}", text.read())))
+    }
+}
+
+fn plain_box_harness() -> impl IntoElement {
+    PlainBox
+}
+
+/// **Every chord reaches the root from a box with no keys of its own too.** Fails on a
+/// box that declines none: Ctrl+P types a `p` into it and the finder does not open.
+#[test]
+fn every_chord_reaches_the_root_from_a_plain_box() {
+    let (mut test, _states) = TestingRunner::new(
+        plain_box_harness,
+        (300., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(|| test_roots().states),
+        1.,
+    );
+    settle(&mut test);
+    test.click_cursor((50., 20.));
+    settle(&mut test);
+    test.write_text("x");
+    settle(&mut test);
+    assert!(labels(&test).contains(&"typed: x".to_string()));
+
+    every_chord_into_a_box(&mut test, labels);
+}
+
 /// The Assembly pane with the find worker behind it, which is what a bar over it needs:
 /// the pane holds the worker's answer and works out none of it here.
 fn find_harness() -> impl IntoElement {
@@ -42727,7 +42771,7 @@ impl Component for HeldProbe {
     }
 }
 
-/// A text box of each kind: one that declines the chords and one that declines none.
+/// A text box of each kind: a filter's, and one with no keys of its own.
 #[derive(Clone, PartialEq)]
 struct TwoBoxes;
 
@@ -42780,7 +42824,7 @@ fn a_modifier_pressed_in_a_text_box_reaches_the_roots_handler() {
         "the filter box ate the Ctrl: {drawn:?}"
     );
 
-    // The box that declines none, and Alt: the mask carries the Ctrl still held.
+    // The other box, and Alt: the mask carries the Ctrl still held.
     test.click_cursor((50., 60.));
     settle(&mut test);
     key_with(&mut test, Key::Named(NamedKey::Alt), Modifiers::CONTROL);
