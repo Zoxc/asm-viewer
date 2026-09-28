@@ -1027,7 +1027,8 @@ long. `Places::code_at` is a `Positions<Entry, Spot>`, the map generalised over 
 clamp being the one rows-only answer. It holds the placed address at the top of the pane and how
 many rows past that address's own row it was, since the rule over a stretch, the blank under it, its
 header, its labels and its first instruction all sit at one address, and how far into the last
-of them (`Spot::past`, a `TopRow`). A move there carries the whole of where it goes, so a retry
+of them (`Spot::past`, a `TopRow`). A separator and a cut row are named by the row below them,
+which is past them and not before, so each is kept as the row above's place and one row past it. A move there carries the whole of where it goes, so a retry
 issues it at the same offset as the first try. It is forgotten with the rest of `Places`. `use_kept_place` in `src/ui/section_view.rs` is its `use_kept_position`,
 and the differences are the point. The map is **read** and not peeked, so a place written from
 outside while the tab is on top is answered (the run that wakes on its own write finds nothing moved

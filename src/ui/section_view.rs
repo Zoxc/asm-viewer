@@ -1577,13 +1577,24 @@ pub(crate) fn spot_at(rows: &Rows, row: usize) -> Option<Spot> {
 }
 
 /// [`spot_at`] with how far into the row: the place the top of a pane at `top` stands for.
+///
+/// A separator and a cut row are named by the row below them, which is where their
+/// address comes back to, so theirs is counted from the row above: the rows past a place
+/// cannot be fewer than none.
 fn spot_of(rows: &Rows, top: TopRow) -> Option<Spot> {
-    let address = rows.address_of(top.row)?;
-    let first = rows.row_for(address)?;
+    let mut named = top.row;
+    let (address, first) = loop {
+        let address = rows.address_of(named)?;
+        let first = rows.row_for(address)?;
+        if first <= top.row {
+            break (address, first);
+        }
+        named = named.checked_sub(1)?;
+    };
     Some(Spot {
         address,
         past: TopRow {
-            row: top.row.saturating_sub(first),
+            row: top.row - first,
             ..top
         },
     })
