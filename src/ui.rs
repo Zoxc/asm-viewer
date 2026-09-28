@@ -51,6 +51,7 @@ pub(crate) use crate::languages;
 pub(crate) use crate::links;
 pub(crate) use crate::lsp::{self, Lookup};
 pub(crate) use crate::naming::short_name;
+pub(crate) use crate::order::Order;
 pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::positions::{Driven, Positions, Spot, TopRow};
 pub(crate) use crate::process::{self, Ended, OutputLine, RunEvent, RunOutput, Stream};

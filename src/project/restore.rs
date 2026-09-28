@@ -112,7 +112,7 @@ pub struct LeftAt<'a> {
 }
 
 /// What the app noticed that is not a place, as [`Session::from_state`] is handed it: the
-/// agreement to run a language server, what the last build produced, and how the window
+/// agreement to run a language server, what the builds produced, and how the window
 /// was arranged.
 pub struct Noticed<'a> {
     pub trusted: bool,

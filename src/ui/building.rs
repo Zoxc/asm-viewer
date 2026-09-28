@@ -39,6 +39,11 @@ pub(crate) struct Manifest {
     pub(crate) edit_refused: Option<String>,
 }
 
+/// How many paths [`Builds::produced`] keeps. A path is an artifact of the project's own
+/// workspace, so the list outgrows this only over many renamed targets or profiles, and
+/// what it loses then is the oldest of them.
+pub(crate) const MAX_PRODUCED: usize = 500;
+
 /// What the app holds about building the open project.
 #[derive(Clone, Default)]
 pub(crate) struct Builds {
@@ -55,10 +60,13 @@ pub(crate) struct Builds {
     pub(crate) ran_in: Option<PathBuf>,
     /// What the worker's last read of the manifest came back with.
     pub(crate) manifest: Manifest,
-    /// What the build before this one produced. **The set a build replaces**, which is why
-    /// it is saved with the session: a binary the reader opened some other way is left
-    /// alone, and the build before may have been in another run of the app.
-    pub(crate) previous: Vec<PathBuf>,
+    /// Every path a build in this project has produced, newest first. **The set a build
+    /// replaces**, which is why it is saved with the session: a binary the reader opened
+    /// some other way is left alone, and the build that produced one may have been in
+    /// another run of the app. Every build's and not only the last one's, since a build of
+    /// another profile or another member writes elsewhere and leaves the first build's
+    /// binaries open. At most [`MAX_PRODUCED`] of them.
+    pub(crate) produced: Order<PathBuf>,
     /// Of the files [`Builds::diagnostics`] names, the ones the Project view offers as
     /// targets: inside the project's directory, and readable as source. Keyed by the file
     /// as cargo spelled it, to the absolute path the view opens.
@@ -134,39 +142,37 @@ impl Builds {
     /// Answers with the ones this build wrote over, which the hook is to close and open
     /// again.
     ///
-    /// **Only the previous build's artifacts are replaced.** A binary is a path throughout
-    /// the app, so two generations of one file cannot both be in the objects list; but a
-    /// file the reader opened by hand is theirs, even where a build has just written the
-    /// same path. So what is replaced is what the build before listed, this one wrote again,
-    /// and the project has open. cargo lists every artifact, written or up to date, so one it
-    /// calls fresh is left open: its bytes are the same.
+    /// **Only what a build produced is replaced.** A binary is a path throughout the app,
+    /// so two generations of one file cannot both be in the objects list; but a file the
+    /// reader opened by hand is theirs, even where a build has just written the same path.
+    /// So what is replaced is what an earlier build listed, this one wrote again, and the
+    /// project has open. cargo lists every artifact, written or up to date, so one it calls
+    /// fresh is left open: its bytes are the same.
     ///
     /// **A build that failed replaces only what cargo wrote before it stopped.** In a
-    /// workspace the members that compiled are written all the same. The previous list
-    /// stands: it is still what the next build that succeeds replaces.
+    /// workspace the members that compiled are written all the same. What it listed is
+    /// added to what the next build replaces, as a build that succeeded adds its own.
     fn finished(
         &mut self,
         run: cargo::Run,
         sources: HashMap<String, PathBuf>,
         open: &[PathBuf],
     ) -> Vec<PathBuf> {
-        let (artifacts, succeeded) = match &run {
-            cargo::Run::Built { artifacts, .. } => (&artifacts[..], true),
-            cargo::Run::Rejected { artifacts, .. } => (&artifacts[..], false),
-            cargo::Run::NoCargo(_) => (&[][..], false),
+        let artifacts = match &run {
+            cargo::Run::Built { artifacts, .. } | cargo::Run::Rejected { artifacts, .. } => {
+                &artifacts[..]
+            }
+            cargo::Run::NoCargo(_) => &[][..],
         };
         let mut written: Vec<PathBuf> = artifacts
             .iter()
             .filter(|artifact| !artifact.fresh)
             .map(|artifact| artifact.path.clone())
             .collect();
-        if succeeded {
-            let produced = artifacts.iter().map(|artifact| artifact.path.clone());
-            let before = std::mem::replace(&mut self.previous, produced.collect());
-            written.retain(|path| before.contains(path));
-        } else {
-            written.retain(|path| self.previous.contains(path));
-        }
+        written.retain(|path| self.produced.position(path).is_some());
+        let earlier = std::mem::take(&mut self.produced).into_entries();
+        let listed = artifacts.iter().map(|artifact| artifact.path.clone());
+        self.produced = Order::restored_within(listed.chain(earlier), MAX_PRODUCED);
         self.building = false;
         self.built = Some(Arc::new(run));
         self.sources = Arc::new(sources);

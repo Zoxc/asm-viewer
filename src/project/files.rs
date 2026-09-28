@@ -128,10 +128,10 @@ pub struct Cargo {
     pub profile: Profile,
 }
 
-/// What the last build produced, in `session.toml`'s `[cargo]`.
+/// What the project's builds produced, newest first, in `session.toml`'s `[cargo]`.
 ///
-/// Kept for one reason: the next build replaces the artifacts of the build before it, and
-/// the build before it may have been in another run of the app.
+/// Kept for one reason: a build replaces what an earlier build produced, and that build
+/// may have been in another run of the app.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCargo {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -439,7 +439,7 @@ pub struct Session {
     /// How the window was arranged. Absent until something in it is dragged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<SavedUi>,
-    /// What the last build produced, so a build after a restart still replaces it.
+    /// What the builds produced, so a build after a restart still replaces it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cargo: Option<SessionCargo>,
     /// What each opened binary's bytes hashed to when the session was saved, keyed by the

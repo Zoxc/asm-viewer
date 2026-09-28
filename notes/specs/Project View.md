@@ -20,8 +20,8 @@ offers to add them: the button writes line tables into that profile in the works
 and the offer goes once they are there.
 
 What the build produced is listed, one row per artifact cargo named, with the target it came from.
-Clicking a row opens it as a binary, unless it is open already. A build replaces the artifacts of
-the build before it that are still open; a binary opened any other way is left alone.
+Clicking a row opens it as a binary, unless it is open already. A build replaces each open
+binary that it rewrote and an earlier build produced; any other open binary is left alone.
 
 The compiler's output wraps, as the scratchpad's does. A build that succeeded keeps its warnings.
 A build cargo refused before compiling shows what cargo said. A diagnostic's place in a file under

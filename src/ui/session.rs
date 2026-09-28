@@ -213,7 +213,7 @@ fn record_now(states: ProjectStates) {
                 &visits.peek(),
                 Noticed {
                     trusted: about.trusted,
-                    artifacts: &build.peek().previous,
+                    artifacts: build.peek().produced.entries(),
                     ui: SavedUi {
                         sidebar: Some(*arranged.sidebar.peek()),
                         split: Some(*arranged.split.peek()),
@@ -332,14 +332,14 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
     // arranged the way it was left.
     restore_ui(states.arranged, session.ui.as_ref());
 
-    // What the last build produced, which the next build replaces. A project whose
+    // What the builds before produced, which the next build replaces. A project whose
     // binaries are all gone still knows what it built.
     let mut build = states.build;
-    build.write().previous = session
+    let artifacts = session
         .cargo
-        .as_ref()
-        .map(|cargo| cargo.artifacts.clone())
-        .unwrap_or_default();
+        .iter()
+        .flat_map(|cargo| cargo.artifacts.clone());
+    build.write().produced = Order::restored_within(artifacts, MAX_PRODUCED);
 
     let ProjectStates {
         objects,

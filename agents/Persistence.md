@@ -299,9 +299,9 @@ UI knows the id, which is why nothing in the UI can get it wrong.
 
 **Building puts a `[cargo]` section in each file, and which file each half goes in is that same
 line.** The profile is what the reader chose, so it is the project file's and is written the moment
-they choose it, a rename's own timing. The paths the last build produced are what the app noticed,
-so they are the session's. They are saved at all for one reason: a build replaces the artifacts
-of the build *before* it, and the build before it may have been in another run of the app -- without
+they choose it, a rename's own timing. The paths the builds produced are what the app noticed,
+so they are the session's. They are saved at all for one reason: a build replaces what an
+*earlier* build produced, and that build may have been in another run of the app -- without
 them a restart would leave the reader's binaries behind with nothing that could refresh them. Each
 section is a **table of its own and is absent when it has nothing to say**, so a project nobody has
 chosen a profile in and a session nothing was built in each write no section at all. A table also
@@ -562,7 +562,7 @@ with no answer -- goes like any other. A binary that is deleted, being relinked 
 this machine is held all the same: the load hands over an object for every path it reaches, one
 saying why it shows nothing where the file could not be read or is no object
 (`agents/Analysis.md`). So the Objects list shows it, marked, the reader can close it, and a build
-that writes it again replaces it as it does any artifact of the build before (`agents/Sidebar.md`).
+that writes it again replaces it as it does any artifact an earlier build produced (`agents/Sidebar.md`).
 
 **`Saves::stored` is the session file itself**, beside the empty baseline rather than instead
 of it. The baseline answers "has this changed", which needs the boot state; `put_in` asks

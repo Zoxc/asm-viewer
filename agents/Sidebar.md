@@ -647,18 +647,22 @@ it holds no code and a row for it could only ever fail to parse. So is a library
 file, which cargo lists among its files too: a `.pdb` on `*-windows-msvc`, a `.dSYM` directory
 on macOS with packed split debug info.
 
-**A build replaces the artifacts of the build before it, and nothing else.** A binary is a path, so
+**A build replaces what an earlier build produced, and nothing else.** A binary is a path, so
 two generations of one file cannot both be in the objects list -- but narrowed: a file the reader
 opened by hand is theirs even where a build has just written the same path. So the set replaced is
-the *previous* build's list intersected with what this one wrote and with what is open, closed one
-by one and reopened in a single load rather than a close and a spawn each. cargo lists every
-artifact, up to date or not, so "what this one wrote" leaves out the ones it calls `fresh`: their
-bytes are the same. They stay in the list the next build replaces. A build that failed keeps the
-previous list and replaces only what cargo wrote before it stopped: in a workspace the members that
-compiled are still written, so `Run::Rejected` carries its artifacts too. A typo in a one-crate
+what earlier builds listed intersected with what this one wrote and with what is open, closed one
+by one and reopened in a single load rather than a close and a spawn each. Every earlier build's
+list and not only the last one's (`Builds::produced`): a build of another profile or another member
+writes elsewhere, and the next build of the first profile rewrites that one's binaries all the
+same. The list is newest first and capped at `MAX_PRODUCED`; it
+holds only the workspace's own artifacts, so the cap is reached only over many renamed targets.
+cargo lists every artifact, up to date or not, so "what this one wrote" leaves out the ones it
+calls `fresh`: their bytes are the same. They stay in the list. A build that failed replaces only
+what cargo wrote before it stopped: in a workspace the members that compiled are still written, so
+`Run::Rejected` carries its artifacts too, and they join the list. A typo in a one-crate
 package writes nothing, so nothing is closed. The load is begun with the closes and not in the
 task that reads it, or the save observer, woken by the closes, would run first and write a project
-file without those binaries. The previous build's list is saved with the session, which is what
+file without those binaries. The list is saved with the session, which is what
 makes the rule survive a restart (`agents/Persistence.md`). The load is also handed the binaries as
 they were listed before the closes, and each file's placeholder goes back before the first file
 listed after it (`tree::slot`): appended, every rebuild would reorder the project file.

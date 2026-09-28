@@ -35650,7 +35650,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
         "the second press started a second build of the same workspace"
     );
     assert_eq!(states.build.peek().artifacts().len(), 1);
-    assert_eq!(states.build.peek().previous, vec![artifact.clone()]);
+    assert_eq!(states.build.peek().produced.entries(), [artifact.clone()]);
 
     // A row per artifact, naming the file and the target it came from. Nothing is opened
     // until the reader asks for it.
@@ -35933,7 +35933,7 @@ fn a_build_answer_for_a_project_left_is_dropped() {
         build.built.is_none(),
         "the build of the project left is shown in the one open"
     );
-    assert!(build.previous.is_empty());
+    assert_eq!(build.produced.len(), 0);
 }
 
 /// **The manifest is read again for the next project, whatever its directory.** A switch
@@ -36260,7 +36260,7 @@ fn a_build_replaces_what_the_build_before_it_produced() {
 
     // Both files are open, and only one of them is the last build's.
     let mut build = states.build;
-    build.write().previous = vec![artifact.clone()];
+    build.write().produced = Order::from_iter([artifact.clone()]);
     let mut objects = states.objects;
     objects.set(analysis::open_files(vec![artifact.clone(), other.clone()]));
     test.sync_and_update();
@@ -36351,7 +36351,7 @@ fn a_build_registers_its_reopen_before_a_record_can_run() {
     let jobs = asking.peek().clone().expect("the wiring handed one back");
 
     let mut build = states.build;
-    build.write().previous = vec![artifact.clone()];
+    build.write().produced = Order::from_iter([artifact.clone()]);
     let mut objects = states.objects;
     objects.set(analysis::open_files(vec![artifact.clone()]));
     settle(&mut test);

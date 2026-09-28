@@ -18,70 +18,111 @@ fn built(paths: &[&str]) -> cargo::Run {
     }
 }
 
+fn paths(paths: &[&str]) -> Vec<PathBuf> {
+    paths.iter().map(PathBuf::from).collect()
+}
+
+fn produced(paths: &[&str]) -> Order<PathBuf> {
+    paths.iter().map(PathBuf::from).collect()
+}
+
 #[test]
-fn only_the_previous_builds_artifacts_that_are_open_are_reopened() {
+fn only_what_a_build_produced_that_is_open_is_reopened() {
     let mut state = Builds {
         building: true,
-        previous: vec![PathBuf::from("target/debug/viewer")],
+        produced: produced(&["target/debug/viewer"]),
         ..Builds::default()
     };
     // One of the two is open; the other file the reader has never opened, and a third is
     // theirs and was not built.
-    let open = [
-        PathBuf::from("target/debug/viewer"),
-        PathBuf::from("theirs.o"),
-    ];
+    let open = paths(&["target/debug/viewer", "theirs.o"]);
     let reopening = state.finished(
         built(&["target/debug/viewer", "target/debug/other"]),
         HashMap::new(),
         &open,
     );
 
-    assert_eq!(reopening, vec![PathBuf::from("target/debug/viewer")]);
+    assert_eq!(reopening, paths(&["target/debug/viewer"]));
     assert!(!state.building);
     assert_eq!(
-        state.previous,
-        vec![
-            PathBuf::from("target/debug/viewer"),
-            PathBuf::from("target/debug/other")
-        ],
+        state.produced.entries(),
+        paths(&["target/debug/viewer", "target/debug/other"]),
         "what this build made is what the next one replaces"
     );
 }
 
-/// **What is replaced is the previous build's list, not this one's.** A file the build
-/// before did not produce was opened some other way, so it is the reader's even where this
-/// build has just written it; and one the build before produced that this one did not was
-/// not rewritten.
+/// **What is replaced is what an earlier build produced, not what this one did.** A file
+/// no build before produced was opened some other way, so it is the reader's even where
+/// this build has just written it; and one a build before produced that this one did not
+/// was not rewritten.
 #[test]
-fn a_build_replaces_only_what_the_build_before_produced() {
+fn a_build_replaces_only_what_a_build_before_produced() {
     let mut state = Builds {
         building: true,
-        previous: vec![
-            PathBuf::from("target/debug/viewer"),
-            PathBuf::from("target/debug/gone"),
-        ],
+        produced: produced(&["target/debug/viewer", "target/debug/gone"]),
         ..Builds::default()
     };
-    let open = [
-        PathBuf::from("target/debug/viewer"),
-        PathBuf::from("target/debug/gone"),
-        PathBuf::from("target/debug/theirs"),
-    ];
+    let open = paths(&[
+        "target/debug/viewer",
+        "target/debug/gone",
+        "target/debug/theirs",
+    ]);
     let reopening = state.finished(
         built(&["target/debug/viewer", "target/debug/theirs"]),
         HashMap::new(),
         &open,
     );
 
-    assert_eq!(reopening, vec![PathBuf::from("target/debug/viewer")]);
+    assert_eq!(reopening, paths(&["target/debug/viewer"]));
     assert_eq!(
-        state.previous,
-        vec![
-            PathBuf::from("target/debug/viewer"),
-            PathBuf::from("target/debug/theirs")
-        ],
+        state.produced.entries(),
+        paths(&[
+            "target/debug/viewer",
+            "target/debug/theirs",
+            "target/debug/gone"
+        ]),
     );
+}
+
+/// **A build replaces what any build before it produced, not only the last one.** A build
+/// of another profile, or of another member, writes elsewhere: the binary the first build
+/// produced is still open, and the next build of that profile rewrites it.
+#[test]
+fn a_build_of_another_profile_in_between_still_leaves_the_binary_replaced() {
+    let mut state = Builds::default();
+    let debug = PathBuf::from("target/debug/app");
+    state.building = true;
+    state.finished(built(&["target/debug/app"]), HashMap::new(), &[]);
+    let open = [debug.clone()];
+    state.building = true;
+    state.finished(built(&["target/release/app"]), HashMap::new(), &open);
+    state.building = true;
+    let reopening = state.finished(built(&["target/debug/app"]), HashMap::new(), &open);
+    assert_eq!(
+        reopening,
+        vec![debug],
+        "rebuilt debug binary should be reopened"
+    );
+}
+
+/// **What is remembered stops at [`MAX_PRODUCED`] paths**, the oldest dropped first.
+#[test]
+fn what_builds_produced_is_capped() {
+    let mut state = Builds::default();
+    for build in 0..=MAX_PRODUCED {
+        state.building = true;
+        let path = format!("target/debug/app{build}");
+        state.finished(built(&[&path]), HashMap::new(), &[]);
+    }
+    assert_eq!(state.produced.len(), MAX_PRODUCED);
+    assert_eq!(
+        state.produced.first(),
+        Some(&PathBuf::from(format!("target/debug/app{MAX_PRODUCED}")))
+    );
+    assert!(state
+        .produced
+        .position(&PathBuf::from("target/debug/app0"))
+        .is_none());
 }
 
 /// **An artifact cargo found up to date is not reopened.** cargo lists it all the same,
@@ -89,31 +130,28 @@ fn a_build_replaces_only_what_the_build_before_produced() {
 /// still in the list the next build replaces.
 #[test]
 fn an_artifact_cargo_did_not_write_is_not_reopened() {
+    let open = paths(&["target/debug/viewer", "target/debug/libanalysis.rlib"]);
     let mut state = Builds {
         building: true,
-        previous: vec![
-            PathBuf::from("target/debug/viewer"),
-            PathBuf::from("target/debug/libanalysis.rlib"),
-        ],
+        produced: open.iter().cloned().collect(),
         ..Builds::default()
     };
-    let open = state.previous.clone();
     let mut run = built(&["target/debug/viewer", "target/debug/libanalysis.rlib"]);
     if let cargo::Run::Built { artifacts, .. } = &mut run {
         artifacts[1].fresh = true;
     }
     let reopening = state.finished(run, HashMap::new(), &open);
 
-    assert_eq!(reopening, vec![PathBuf::from("target/debug/viewer")]);
-    assert_eq!(state.previous, open);
+    assert_eq!(reopening, paths(&["target/debug/viewer"]));
+    assert_eq!(state.produced.entries(), open);
 }
 
 #[test]
-fn a_failed_build_reopens_nothing_and_leaves_the_previous_list_standing() {
-    let previous = vec![PathBuf::from("target/debug/viewer")];
+fn a_failed_build_reopens_nothing_and_keeps_what_was_produced() {
+    let open = paths(&["target/debug/viewer"]);
     let mut state = Builds {
         building: true,
-        previous: previous.clone(),
+        produced: open.iter().cloned().collect(),
         ..Builds::default()
     };
     let run = cargo::Run::Rejected {
@@ -121,25 +159,22 @@ fn a_failed_build_reopens_nothing_and_leaves_the_previous_list_standing() {
         diagnostics: Vec::new(),
         message: "no".to_owned(),
     };
-    let reopening = state.finished(run, HashMap::new(), &previous);
+    let reopening = state.finished(run, HashMap::new(), &open);
 
     assert!(reopening.is_empty(), "a failed build wrote over nothing");
-    assert_eq!(state.previous, previous);
+    assert_eq!(state.produced.entries(), open);
     assert!(!state.building);
 }
 
 /// **A failed build replaces what cargo wrote before it stopped.** In a workspace the
 /// members that compiled are written all the same, and the objects open for them would
-/// show code that is no longer on disk. The previous list stands.
+/// show code that is no longer on disk. What it wrote joins the list; nothing leaves it.
 #[test]
 fn a_failed_build_reopens_what_it_wrote() {
-    let previous = vec![
-        PathBuf::from("target/debug/libcore.rlib"),
-        PathBuf::from("target/debug/app"),
-    ];
+    let open = paths(&["target/debug/app", "target/debug/libcore.rlib"]);
     let mut state = Builds {
         building: true,
-        previous: previous.clone(),
+        produced: open.iter().cloned().collect(),
         ..Builds::default()
     };
     let cargo::Run::Built { artifacts, .. } = built(&["target/debug/libcore.rlib"]) else {
@@ -150,10 +185,13 @@ fn a_failed_build_reopens_what_it_wrote() {
         diagnostics: Vec::new(),
         message: "could not compile `app`".to_owned(),
     };
-    let reopening = state.finished(run, HashMap::new(), &previous);
+    let reopening = state.finished(run, HashMap::new(), &open);
 
-    assert_eq!(reopening, vec![PathBuf::from("target/debug/libcore.rlib")]);
-    assert_eq!(state.previous, previous);
+    assert_eq!(reopening, paths(&["target/debug/libcore.rlib"]));
+    assert_eq!(
+        state.produced.entries(),
+        paths(&["target/debug/libcore.rlib", "target/debug/app"])
+    );
 }
 
 /// **A clone of the state shares the build rather than copying it.** The cargo section
