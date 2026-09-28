@@ -246,7 +246,7 @@ fn qualifier(segment: &str) -> Option<&str> {
     let mut pending = vec![segment];
     let mut opened = 0;
     while let Some(text) = pending.pop() {
-        let segments = split_path(text);
+        let segments = split_path(referent(text));
         let Some(&last) = segments.last() else {
             continue;
         };
@@ -275,6 +275,41 @@ fn qualifier(segment: &str) -> Option<&str> {
         }
     }
     None
+}
+
+/// A type with the reference or pointer it is reached through taken off the front: `str`
+/// in `&str` and `&'a str`, `[u8]` in `&mut &[u8]`, `T` in `*const T`.
+fn referent(text: &str) -> &str {
+    let mut text = text.trim_start();
+    loop {
+        let rest = if let Some(rest) = text.strip_prefix('&') {
+            // A lifetime is one word, after the `&` alone.
+            match rest.strip_prefix('\'') {
+                Some(lifetime) => lifetime.trim_start_matches(is_lifetime_char),
+                None => rest,
+            }
+        } else if let Some(rest) = text.strip_prefix('*') {
+            rest
+        } else if let Some(rest) = ["mut", "const"]
+            .into_iter()
+            .find_map(|word| keyword(text, word))
+        {
+            rest
+        } else {
+            return text;
+        };
+        text = rest.trim_start();
+    }
+}
+
+/// What follows a keyword at the front of `text`, when a space ends it there.
+fn keyword<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    text.strip_prefix(word)
+        .filter(|rest| rest.starts_with(|c: char| c.is_ascii_whitespace()))
+}
+
+fn is_lifetime_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
 /// What a group holds: its opening bracket off the front, and its closing one off the end

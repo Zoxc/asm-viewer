@@ -52,6 +52,14 @@ fn an_impl_qualifier_is_named_after_the_type_it_is_on() {
         ),
         "AncillaryIter::spec_fold"
     );
+    // A shared reference as well as a mutable one, and a pointer. Written by hand.
+    assert_eq!(short_name("<&str as core::fmt::Display>::fmt"), "str::fmt");
+    assert_eq!(short_name("<&'a T as Foo>::bar"), "T::bar");
+    assert_eq!(short_name("<*const T as Foo>::bar"), "T::bar");
+    // With nothing named behind the reference, the trait is what is left.
+    assert_eq!(short_name("<&[u8] as core::fmt::Debug>::fmt"), "Debug::fmt");
+    assert_eq!(short_name("<&(A, B) as Foo>::bar"), "Foo::bar");
+    assert_eq!(short_name("<&mut &[u8] as Foo>::bar"), "Foo::bar");
 }
 
 /// A tuple, a slice or an array has no name of its own, and `::default` alone would not
