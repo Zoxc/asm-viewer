@@ -117,8 +117,8 @@ impl Hover {
         pushed || !same
     }
 
-    /// When the wait runs out, for the task waiting it out. [`None`] with no name under
-    /// the pointer, which is what stops that task.
+    /// When the wait runs out, for the task waiting it out. [`None`] with no name held,
+    /// which is what stops that task.
     pub(crate) fn until(&self) -> Option<Instant> {
         self.about.as_ref().map(|about| about.until)
     }
@@ -151,10 +151,11 @@ impl Hover {
         held
     }
 
-    /// The place a wait is owed for: a name is hovered, nothing held answers it, none is
-    /// already on its way in this run, and none is already being waited out.
+    /// The place a wait is owed for: the pointer is on a name, nothing held answers it,
+    /// none is already on its way in this run, and none is already being waited out.
     pub(crate) fn resting(&self, run: u64) -> Option<&Lookup> {
-        let armed = self.about.as_ref()?.resting;
+        let about = self.about.as_ref()?;
+        let armed = about.resting || !about.on_name;
         let at = self.pending(run)?;
         (!armed).then_some(at)
     }
@@ -177,7 +178,21 @@ impl Hover {
     pub(crate) fn rested(&self, at: &Lookup) -> bool {
         self.about
             .as_ref()
-            .is_some_and(|about| about.resting && about.pointed.at == *at)
+            .is_some_and(|about| about.on_name && about.resting && about.pointed.at == *at)
+    }
+
+    /// The wait for `at` ran out with the pointer off the name, so nothing was asked. It
+    /// is over, and the pointer coming back arms one of its own. Whether anything changed,
+    /// so the caller writes only then.
+    pub(crate) fn gave_up(&mut self, at: &Lookup) -> bool {
+        let Some(about) = &mut self.about else {
+            return false;
+        };
+        if about.on_name || !about.resting || about.pointed.at != *at {
+            return false;
+        }
+        about.resting = false;
+        true
     }
 
     /// The place a question is owed for: a name is hovered, nothing held answers it, and
@@ -338,7 +353,11 @@ pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs:
                     Timer::after(left).await;
                 }
                 let started = language.peek().started();
-                if !started || !hover.peek().rested(&at) {
+                let rested = hover.peek().rested(&at);
+                if !rested {
+                    write_if(hover, |waiting| waiting.gave_up(&at));
+                }
+                if !started || !rested {
                     return;
                 }
                 let Some(ticket) = ask_hover(language, &jobs, at.clone()) else {

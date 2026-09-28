@@ -10311,6 +10311,77 @@ fn a_refused_hover_is_asked_again_when_the_pointer_rests_once_more() {
     assert_eq!(hover.resting(1), None, "an empty answer was asked again");
 }
 
+/// Mount the linking harness over [`calling_file`] with a server that answers no hover,
+/// the file on screen and every job the mount sent taken off `asks`.
+fn mount_hover(
+    name: &str,
+) -> (
+    TestingRunner,
+    async_channel::Receiver<AskedOfServer>,
+    Seeded,
+) {
+    let (file, directory) = calling_file(name);
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+    while next_job(&asks).is_some() {}
+    (test, asks, directory)
+}
+
+/// Every hover the server was asked about once a wait has had time to run out.
+fn wait_hovers(
+    test: &mut TestingRunner,
+    asks: &async_channel::Receiver<AskedOfServer>,
+) -> Vec<Lookup> {
+    let until = std::time::Instant::now() + HOVER_DELAY + Duration::from_millis(200);
+    while std::time::Instant::now() < until {
+        settle(test);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    settle(test);
+    std::iter::from_fn(|| next_job(asks))
+        .filter_map(|job| match job {
+            AskedOfServer::Hover(at) => Some(at),
+            _ => None,
+        })
+        .collect()
+}
+
+/// **A wait the pointer left the name during asks nothing.** The pointer crossing a name
+/// and stopping just past it has not asked about the name, and an answer asked for then
+/// would later draw the box with no wait at all.
+#[test]
+fn a_pointer_resting_off_every_name_asks_nothing() {
+    let (mut test, asks, _directory) = mount_hover("restoff");
+    let helper = word_point(&test, "helper");
+    test.move_cursor(helper);
+    settle(&mut test);
+    // Past the end of the line's text, on the same row.
+    test.move_cursor((helper.0 + 150.0, helper.1));
+    settle(&mut test);
+    assert_eq!(
+        wait_hovers(&mut test, &asks),
+        vec![],
+        "a name left was asked about"
+    );
+
+    // And coming back to the name waits afresh and asks.
+    test.move_cursor(helper);
+    settle(&mut test);
+    assert_eq!(
+        wait_hovers(&mut test, &asks).len(),
+        1,
+        "the name came back to was not asked about"
+    );
+}
+
 /// A name for the pointer to be on: the same place drawn in the same box, so two calls
 /// with the same column are the same name.
 fn hovered_name(column: usize) -> Pointed {
