@@ -472,8 +472,9 @@ impl ListPane {
         let modifiers = chords::held(e.modifiers);
         let plain = modifiers.is_empty();
         let command = modifiers == Modifiers::ctrl_or_meta();
-        // A screen is the rows the box shows whole, as a code pane works its page out.
-        let page = (*self.viewport.peek() / list_row_height()).floor().max(0.0) as isize;
+        // A screen is the rows the box shows whole, as a code pane works its page out,
+        // and never less than one: a page of none sent Page Down with no pick to the end.
+        let page = (*self.viewport.peek() / list_row_height()).floor().max(1.0) as isize;
         let moved = match &e.key {
             // The way out, and the far end of the way in: a chord puts the keyboard in
             // a panel, Escape in its box puts it on the rows, and Escape here hands it

@@ -40567,6 +40567,48 @@ fn the_list_keys_reach_both_ends_and_step_a_screen() {
     );
 }
 
+/// **A page is never less than a row.** A list squeezed shorter than one row shows no
+/// row whole, and a page worked out as none sent Page Down with no pick to the far end.
+#[test]
+fn a_page_in_a_list_shorter_than_a_row_is_a_row() {
+    let (_path, listed) = fixture_objects(1);
+    let height = text_box_height() + list_row_height() / 2.0;
+    let (mut test, (states, picks, mut alt)) = TestingRunner::new(
+        symbols_harness,
+        (300., height).into(),
+        |runner: &mut _| {
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.states.picks, roots.keys.alt)
+        },
+        1.,
+    );
+    let mut all = states.objects;
+    all.set(listed);
+    settle(&mut test);
+    // The keyboard on the rows, and then no pick at all.
+    alt.set(true);
+    settle(&mut test);
+    press_at(
+        &mut test,
+        (150.0, (text_box_height() + list_row_height() / 4.0) as f64),
+    );
+    settle(&mut test);
+    alt.set(false);
+    let mut picks_now = picks;
+    picks_now.write().clear();
+    settle(&mut test);
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::PageDown),
+        Modifiers::empty(),
+    );
+    assert_eq!(
+        picked_place(picks, Panel::Symbols),
+        Some(0),
+        "Page Down with no pick went to the far end"
+    );
+}
+
 /// **A pick the list has moved out from under is asked at a place the list no longer
 /// has**, and every one of the three closures must say so rather than index past its
 /// own rows: End puts the pick on the last row, a pattern typed after it leaves a list
