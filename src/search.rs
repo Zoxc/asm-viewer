@@ -26,7 +26,7 @@ use std::{
 };
 
 /// The most hits a search reports. A pattern like `.` matches every line of every file, so
-/// the walk stops here and the panel says that there are more.
+/// the walk stops at the hit after this many and the panel says that there are more.
 pub const MAX_HITS: usize = 10_000;
 
 /// What a search is asked for: where to look, and what to look for.
@@ -72,12 +72,15 @@ pub enum SearchEvent {
     /// same `Arc` the rows are built from ([`crate::grouped`]), so no path is copied on
     /// the way.
     Hit(Arc<Path>, Hit),
-    /// The walk is over, whether it ended, was capped, or found nothing.
+    /// The walk is over, whether it found something or nothing.
     Finished,
+    /// The walk found a hit past [`MAX_HITS`], left it out and stopped: it is over, as
+    /// with `Finished`, and there are more hits than were reported.
+    Capped,
 }
 
-/// Search `query`, handing each hit to `emit` as it is found and `Finished` when the walk
-/// is over. `emit` answering [`ControlFlow::Break`] stops the walk where it stands, and
+/// Search `query`, handing each hit to `emit` as it is found and `Finished` or `Capped`
+/// when the walk is over. `emit` answering [`ControlFlow::Break`] stops the walk where it stands, and
 /// nothing is emitted after it.
 ///
 /// `&mut dyn` rather than a generic, so that this is exactly the shape the UI's worker
@@ -123,8 +126,14 @@ pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlF
 
     // A capped search is a search that ended, and the panel must stop saying that it is
     // running; a stopped one is a search nobody is listening to any more.
-    if progress.ended != Some(Ended::Stopped) {
-        let _ = emit(SearchEvent::Finished);
+    match progress.ended {
+        Some(Ended::Stopped) => {}
+        Some(Ended::Capped) => {
+            let _ = emit(SearchEvent::Capped);
+        }
+        None => {
+            let _ = emit(SearchEvent::Finished);
+        }
     }
 }
 
@@ -134,8 +143,8 @@ enum Ended {
     /// The callback said to stop. Nobody is listening, so nothing more is emitted --
     /// `Finished` included.
     Stopped,
-    /// [`MAX_HITS`] was reached. A search that ended, so `Finished` is emitted and the
-    /// panel stops saying that it is running.
+    /// A hit was found past [`MAX_HITS`]. A search that ended, so `Capped` is emitted and
+    /// the panel stops saying that it is running.
     Capped,
 }
 
@@ -171,6 +180,12 @@ impl Sink for Hits<'_> {
         let borrowed = self.path;
         let path = Arc::clone(self.shared.get_or_insert_with(|| Arc::from(borrowed)));
         for (offset, line) in matched.lines().enumerate() {
+            // Asked of the hit after the last one reported, and not of the last one, so a
+            // search with exactly `MAX_HITS` hits is not said to have more.
+            if self.progress.sent >= MAX_HITS {
+                self.progress.ended = Some(Ended::Capped);
+                return Ok(false);
+            }
             let number = first.saturating_add(offset as u64);
             let hit = hit_from(self.matcher, line, number);
             if (self.emit)(SearchEvent::Hit(Arc::clone(&path), hit)).is_break() {
@@ -178,10 +193,6 @@ impl Sink for Hits<'_> {
                 return Ok(false);
             }
             self.progress.sent += 1;
-            if self.progress.sent >= MAX_HITS {
-                self.progress.ended = Some(Ended::Capped);
-                return Ok(false);
-            }
         }
         Ok(true)
     }
@@ -234,11 +245,6 @@ fn trim_terminator(line: &[u8]) -> &[u8] {
 /// them in, so the list only ever grows at its end and nothing a reader is looking at
 /// moves.
 pub type SearchHits = Grouped<Hit>;
-
-/// Whether the cap was reached, so the panel can say that there are more.
-pub fn capped(hits: &SearchHits) -> bool {
-    hits.count() >= MAX_HITS
-}
 
 #[cfg(test)]
 mod tests;

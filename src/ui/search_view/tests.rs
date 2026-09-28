@@ -47,3 +47,20 @@ fn the_batches_of_the_search_that_is_on_are_taken_and_its_end_stops_it() {
     assert!(!state.running);
     assert!((state.hits.count(), state.hits.files()) == (2, 1));
 }
+
+/// Only a search that said it stopped at the cap is headed as the first of more, however
+/// many hits it holds.
+#[test]
+fn only_a_capped_end_says_there_are_more() {
+    let mut state = Searched {
+        id: 2,
+        running: true,
+        ..Searched::default()
+    };
+    assert!(state.take(2, vec![hit(1), SearchEvent::Finished]));
+    assert!(heading(state.summary()) == "1 match in 1 file");
+    state.running = true;
+    assert!(state.take(2, vec![SearchEvent::Capped]));
+    assert!(!state.running);
+    assert!(heading(state.summary()) == "First 1 match in 1 file");
+}

@@ -15,7 +15,7 @@
 //! binary loader (`take_load`, `ui/loading.rs`) is stopped by the same line.
 
 use super::*;
-use crate::search::{self, SearchEvent, SearchHits, SearchQuery};
+use crate::search::{SearchEvent, SearchHits, SearchQuery};
 use std::ops::ControlFlow;
 
 /// What has been searched for and what it came to, shared through context.
@@ -26,11 +26,11 @@ pub(crate) struct Searching(pub(crate) State<Searched>);
 ///
 /// `id` numbers the searches so that a hit can say which one it belongs to: the answer
 /// arrives long after the question, and a reader who asked again is not waiting for the
-/// first. There is no `capped` field beside the hits: [`search::capped`] answers that
-/// off the count.
+/// first.
 ///
-/// **Not [`Clone`]**: this holds every hit a search found, up to [`search::MAX_HITS`] of
-/// them, and everything that draws them reads what it needs under the guard.
+/// **Not [`Clone`]**: this holds every hit a search found, up to
+/// [`MAX_HITS`](crate::search::MAX_HITS) of them, and everything that draws them reads what
+/// it needs under the guard.
 #[derive(Default)]
 pub(crate) struct Searched {
     /// Which search is on: bumped by every ask, and what a running task compares itself
@@ -40,6 +40,8 @@ pub(crate) struct Searched {
     pub(crate) asked: Option<SearchQuery>,
     /// Whether the walk is still going.
     pub(crate) running: bool,
+    /// Whether the walk stopped at [`MAX_HITS`](crate::search::MAX_HITS) with more to find.
+    pub(crate) capped: bool,
     pub(crate) hits: SearchHits,
 }
 
@@ -62,7 +64,7 @@ impl Searched {
             running: self.running,
             hits: self.hits.count(),
             files: self.hits.files(),
-            capped: search::capped(&self.hits),
+            capped: self.capped,
         }
     }
 
@@ -81,6 +83,10 @@ impl Searched {
             match event {
                 SearchEvent::Hit(path, hit) => self.hits.push(&path, hit),
                 SearchEvent::Finished => self.running = false,
+                SearchEvent::Capped => {
+                    self.running = false;
+                    self.capped = true;
+                }
             }
         }
         true
@@ -107,6 +113,7 @@ pub(crate) fn start_search(
         id,
         asked: Some(query),
         running: true,
+        capped: false,
         hits: SearchHits::default(),
     });
     raise_panel(dock, Panel::Search);

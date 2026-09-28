@@ -23,21 +23,28 @@ fn filter(pattern: &str) -> Filter {
 }
 
 fn hits(root: &Path, filter: Filter) -> Vec<(Arc<Path>, Hit)> {
+    let (hits, capped) = ended(root, filter);
+    assert!(!capped, "no search here reaches the cap");
+    hits
+}
+
+/// Every hit, and whether the search said it was capped.
+fn ended(root: &Path, filter: Filter) -> (Vec<(Arc<Path>, Hit)>, bool) {
     let query = SearchQuery {
         root: root.to_path_buf(),
         filter,
     };
     let mut hits = Vec::new();
-    let mut finished = false;
+    let mut end = None;
     search(&query, &mut |event| {
         match event {
             SearchEvent::Hit(path, hit) => hits.push((path, hit)),
-            SearchEvent::Finished => finished = true,
+            SearchEvent::Finished => end = Some(false),
+            SearchEvent::Capped => end = Some(true),
         }
         ControlFlow::Continue(())
     });
-    assert!(finished, "a search that ends says so");
-    hits
+    (hits, end.expect("a search that ends says so"))
 }
 
 /// Each hit as `path:line`, the path relative to the root, which is what the order
@@ -405,7 +412,7 @@ fn a_break_stops_the_walk_where_it_stands() {
     search(&query, &mut |event| {
         match event {
             SearchEvent::Hit(..) => seen += 1,
-            SearchEvent::Finished => finished = true,
+            SearchEvent::Finished | SearchEvent::Capped => finished = true,
         }
         if seen == 2 {
             return ControlFlow::Break(());
@@ -418,20 +425,18 @@ fn a_break_stops_the_walk_where_it_stands() {
 }
 
 /// The search stops at the cap, and says it ended: a capped search is over, where a
-/// search whose reader has gone is not worth saying anything to.
+/// search whose reader has gone is not worth saying anything to. Exactly as many hits as
+/// the cap is not capped, since there are no more.
 #[test]
 fn the_search_stops_at_the_cap() {
     let root = Temporary::fresh_directory("search-cap");
-    let lines = "needle\n".repeat(MAX_HITS + 5);
-    write(&root.join("many.rs"), &lines);
-
-    let hits = found(&root, "needle");
-
+    write(&root.join("many.rs"), &"needle\n".repeat(MAX_HITS + 5));
+    let (hits, capped) = ended(&root, filter("needle"));
     assert!(hits.len() == MAX_HITS);
+    assert!(capped);
 
-    let mut held = SearchHits::default();
-    for (path, hit) in hits {
-        held.push(&path, hit);
-    }
-    assert!(capped(&held));
+    write(&root.join("many.rs"), &"needle\n".repeat(MAX_HITS));
+    let (hits, capped) = ended(&root, filter("needle"));
+    assert!(hits.len() == MAX_HITS);
+    assert!(!capped);
 }
