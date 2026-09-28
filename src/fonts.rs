@@ -347,8 +347,10 @@ mod desktop {
     }
 
     /// Ask KDE for a key in the `[General]` group of `kdeglobals`. Going through
-    /// `kreadconfig` rather than reading the file matters: neither `font` nor `fixed` is
-    /// written out until it is changed, and only KDE knows its own defaults.
+    /// `kreadconfig` rather than reading the file matters: it reads the whole cascade, the
+    /// user's file and then each system one, where a distribution may set the fonts.
+    /// Plasma's built-in defaults are in none of them, so a font never set anywhere prints
+    /// an empty line, and Gnome is asked next.
     fn kde(which: Which) -> Option<Spec> {
         let key = which.facts().kde;
 
