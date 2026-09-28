@@ -470,6 +470,13 @@ tab, and the ask a chip makes reads it back (`use_keyboard_left`, `src/ui/keyboa
 covers the two code panes only, not a find bar under one. A focus group with a "focus it
 again" call would do it.
 
+**A `ResizablePanel` with a maximum size.** It takes a `min_size` and nothing else
+(`resizable_container.rs:374`); `apply_resize` clamps a panel to that and to 100 for a share,
+or to `f32::MAX` for pixels (`:61`, `:197`, `:211`). So a panel dragged by its handle can grow
+until the one beside it hits its own minimum. What the app does instead: `Split::use_follow`
+(`src/ui/split.rs`) writes a size past the split's ceiling back into the context as the drag
+lands, one render late. A `max_size` beside `min_size` would do it.
+
 **A menu the keyboard can walk.** `Menu` answers one key, the Escape that closes it
 (`menu.rs:154`), and neither it nor `MenuItem` takes a focusable box, so the arrows move
 nothing in a menu and Enter presses nothing. Everything a menu offers is a pointer's alone.

@@ -894,7 +894,10 @@ of the app's three splits is: the document's (`DocumentSplit`), the Scratchpad's
 the sidebar's (`SidebarSplit`) -- that last one in pixels where the other two are percentages,
 since its panel is a literal width. A `Split` carries the bounds it is dragged within, so
 `use_follow()` writes the drag back and `panel_size()`/`rest()` hand the two panels their sizes:
-three consumers and no clamp restated at any of them. `use_follow` is a hook, called
+three consumers and no clamp restated at any of them. `use_follow` bounds the drag itself, writing
+the clamped size back into the context, because freya bounds a panel only by its own `min_size`: a
+sidebar dragged past its ceiling stayed there and snapped back at the next mount
+(`the_sidebar_is_dragged_no_wider_than_its_ceiling`). `use_follow` is a hook, called
 unconditionally and above any early return; `panel_size` `peek`s and never `read`s, `initial_size` being consulted
 once in the panel's own `use_hook`, so a `read` there would subscribe to nothing and loop with the
 effect. It is one number for the app and not one per

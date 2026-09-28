@@ -905,6 +905,48 @@ fn a_switch_lays_the_sidebar_out_at_the_new_projects_width() {
     );
 }
 
+/// **The sidebar is dragged no wider than its ceiling.** freya bounds a panel by its own
+/// `min_size` alone, so the split's bounds applied only when the panel next mounted: a
+/// sidebar dragged past 900 px stayed there, was saved there, and snapped back at the next
+/// project switch.
+///
+/// Fails with the bounds kept out of `use_follow`.
+#[test]
+fn the_sidebar_is_dragged_no_wider_than_its_ceiling() {
+    let (mut test, (states, split)) = TestingRunner::new(
+        body_harness,
+        (1600., 600.).into(),
+        |runner: &mut _| {
+            runner
+                .provide_root_context(|| (test_roots().states, consume_context::<SidebarSplit>().0))
+        },
+        1.,
+    );
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/src/a.avproj")),
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+
+    // What a drag on the handle does, 800 px to the right.
+    let mut context = split.context;
+    context.write().apply_resize(1, 800.0, 1600.0);
+    settle(&mut test);
+
+    let drawn = split.context.peek().panels.first().map(|panel| panel.size);
+    assert_eq!(
+        drawn,
+        Some(900.0),
+        "the sidebar was dragged past its ceiling"
+    );
+    assert_eq!(
+        *states.arranged.sidebar.peek(),
+        900.0,
+        "past the ceiling was kept"
+    );
+}
+
 /// Settings and the Scratchpad are nobody's project's, so they open with none -- as ordinary
 /// tabs, which brings the bar back for them. The screen is what there is when the strip is
 /// empty, so closing the last one takes the bar away and puts the screen back.

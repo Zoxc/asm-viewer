@@ -93,16 +93,31 @@ impl Split {
     /// The effect reads the context, which is what subscribes it to the drag, and
     /// `set_if_modified` keeps the panels' registration at mount from waking anything.
     ///
+    /// **The bounds are applied here, to the drag**: freya bounds a panel by its own
+    /// `min_size` alone, so a split bounded only as it mounts ([`Split::panel_size`]) was
+    /// dragged past its ceiling and snapped back at the next mount. A share given back is
+    /// given to the panel that follows, so the two still add up to the whole; a literal
+    /// width needs nothing more, the panel beside it taking whatever is left.
+    ///
     /// **A hook**, so every caller calls it while rendering and calls it unconditionally,
     /// above whatever early return it has: the document's split here, the Scratchpad's
     /// (`src/ui/pad_view.rs`) and the sidebar's (`src/ui/no_project.rs`).
     pub(crate) fn use_follow(self) {
-        let (context, mut size) = (self.context, self.size);
+        let (mut context, mut size) = (self.context, self.size);
         use_side_effect(move || {
             let live = context.read().panels.first().map(|panel| panel.size);
-            if let Some(live) = live {
-                size.set_if_modified(live);
+            let Some(live) = live else {
+                return;
+            };
+            let bounded = live.clamp(self.floor, self.ceiling);
+            if bounded != live {
+                let mut context = context.write();
+                context.panels[0].size = bounded;
+                if let (Unit::Percent, Some(follows)) = (self.unit, context.panels.get_mut(1)) {
+                    follows.size += live - bounded;
+                }
             }
+            size.set_if_modified(bounded);
         });
     }
 
