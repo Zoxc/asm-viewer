@@ -115,7 +115,7 @@ impl Component for EntryRow {
                     // share `close_menu` -- keep the one item they had. A project file is the one
                     // kind of file this view knows something more about than "it is a file".
                     let menu = menu
-                        .maybe(project::is_project_file(&path), |menu| {
+                        .maybe(fold.is_none() && project::is_project_file(&path), |menu| {
                             let path = path.clone();
                             menu.child(
                                 MenuButton::new()

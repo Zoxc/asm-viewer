@@ -27938,20 +27938,22 @@ fn an_object_row_opens_from_its_menu() {
 }
 
 /// A directory's row has a menu of its own, and its one item is the file manager's: a
-/// folder is as showable as a file, and there is no object inside one to open.
+/// folder is as showable as a file, and there is no object inside one to open. Nor is it a
+/// project file, whatever it is named.
 #[test]
 fn a_directory_row_offers_the_file_manager_alone() {
     let (mut test, _states, directory) = files_over();
-    std::fs::create_dir_all(directory.join("a")).expect("creating the test directory");
+    std::fs::create_dir_all(directory.join("a.avproj")).expect("creating the test directory");
     press(&mut test, "project");
     press(&mut test, "project");
 
-    let row = centre_of(&test, "a");
+    let row = centre_of(&test, "a.avproj");
     right_click(&mut test, row);
     settle(&mut test);
 
     assert!(label_area(&test, "Show in file manager").is_some());
     assert!(label_area(&test, "Open file").is_none());
+    assert!(label_area(&test, "Open as project").is_none());
 }
 
 /// A project file's row offers one more thing than any other file's: it is the one kind of
