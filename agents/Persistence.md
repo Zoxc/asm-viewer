@@ -45,7 +45,9 @@ file at this moment. The copy is synced before the original goes, for the atomic
 reason below. The original is **removed** rather than copied, since nothing writes over
 `settings.toml` until a setting changes and a file left in place would be rescued again on every
 launch. Through a symlink it is the file the link names that goes, and the link stays: the
-next write lands through it, where removing the link made that write a plain file in its place.
+next write lands through it, where removing the link made that write a plain file in its place. And
+it goes only if it still holds the bytes that were read: it is renamed out of the way and put
+back if not, since a second copy of the app may have saved a good file there since the read.
 
 **A project file is never moved aside, and that is now the rule and not an exception.** It may be
 the reader's own file, sitting in their tree beside the code, and the app has no business taking one

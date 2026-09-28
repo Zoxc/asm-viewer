@@ -351,10 +351,12 @@ impl Store {
         )?;
         // The file a link names, and not the link: the next write goes through it.
         let path = &through_links(path);
-        if let Err(error) = fs::remove_file(path) {
+        match take_away(path, data) {
+            Ok(true) => {}
+            Ok(false) => log::warn!("{} changed since it was read, so it stays", path.display()),
             // The copy is what matters, and it is already made. A file still here is one
             // more copy on the next run, which is the harmless half of this going wrong.
-            log::warn!("could not remove {}: {error}", path.display());
+            Err(error) => log::warn!("could not remove {}: {error}", path.display()),
         }
         Some(moved)
     }
@@ -448,6 +450,23 @@ pub fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     written
+}
+
+/// Remove the file at `path` if it still holds `data`, and answer whether it did.
+///
+/// Not a plain remove by name: a second copy of the app can put a good file there between
+/// the read and the removal, and that save would be lost. So the file is renamed out of the
+/// way first, which takes whatever is there in one step, and one that is not what was read
+/// is put back.
+fn take_away(path: &Path, data: &[u8]) -> std::io::Result<bool> {
+    let taken = temporary_beside(path);
+    fs::rename(path, &taken)?;
+    if fs::read(&taken).is_ok_and(|now| now == data) {
+        fs::remove_file(&taken)?;
+        return Ok(true);
+    }
+    fs::rename(&taken, path)?;
+    Ok(false)
 }
 
 /// The file `path` names once every symlink at its last component is followed, which is

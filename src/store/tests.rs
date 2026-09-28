@@ -338,6 +338,22 @@ fn a_file_moved_aside_through_a_symlink_keeps_the_link() {
     );
 }
 
+/// A file is taken away only if it still holds what was read: one a second copy of the app
+/// wrote since is a good save, and stays.
+#[test]
+fn only_the_bytes_that_were_read_are_taken_away() {
+    let base = Temporary::fresh_directory("store-test");
+    let path = base.join("recents.toml");
+
+    written(&path, b"entries = []\n");
+    assert!(!take_away(&path, b"{ not toml").expect("the file is there"));
+    assert_eq!(fs::read(&path).expect("it stays"), b"entries = []\n");
+
+    assert!(take_away(&path, b"entries = []\n").expect("the file is there"));
+    assert!(!path.exists(), "the file was left");
+    assert_eq!(temporaries(&base), Vec::<PathBuf>::new());
+}
+
 /// A file the system will not hand over is not written over while it cannot be read: the
 /// read answers the default, and the next write would have replaced the reader's file with
 /// it -- a rename needs no permission on the file. Once it reads again, it is written.
