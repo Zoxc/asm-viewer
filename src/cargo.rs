@@ -476,11 +476,14 @@ pub fn debug_lines(profiles: &Path, profile: Profile) -> bool {
 
 /// Whether a profile's `debug`, read in the three spellings cargo accepts, asks for line
 /// tables. `false`, `0`, `"none"`, `"false"` and `"0"` mean none; anything else cargo
-/// accepts -- `1`, `2`, `"limited"`, `"full"` -- carries lines.
+/// accepts -- `1`, `2`, `"line-tables-only"`, `"limited"`, `"full"` -- carries lines.
+///
+/// Except `"line-directives-only"`: it emits `.debug_line` with no `.debug_info`, and line
+/// programs are found through the units `.debug_info` holds, so the source side gets none.
 fn carries_lines(on: Option<bool>, level: Option<i64>, name: Option<&str>) -> bool {
     on == Some(true)
         || level.is_some_and(|level| level > 0)
-        || name.is_some_and(|name| !matches!(name, "none" | "false" | "0"))
+        || name.is_some_and(|name| !matches!(name, "none" | "false" | "0" | "line-directives-only"))
 }
 
 /// Whether a profile's `strip`, read as a bool or as a string, takes the debug information

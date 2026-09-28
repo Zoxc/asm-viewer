@@ -413,6 +413,7 @@ fn debug_information_is_read_however_it_is_spelled() {
     assert!(!says("false"));
     assert!(!says("0"));
     assert!(!says("\"none\""));
+    assert!(!says("\"line-directives-only\""));
 }
 
 /// The write is an edit of the reader's own file, so what it must not do is reformat it:

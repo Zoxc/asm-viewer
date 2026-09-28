@@ -693,7 +693,9 @@ default profile, since a reader inspecting a binary is usually asking what the o
 cargo's own default for release is *no* debug information -- which is a binary with no source side,
 the app's whole other half. So the view says so where the profile is chosen and offers to fix it,
 writing `debug = "line-tables-only"` into that profile: exactly what the source side reads, and the
-cheapest to build. **A profile that strips has no lines**, whatever `debug` says: `strip = true`
+cheapest to build. `"line-directives-only"` counts as no lines: it writes `.debug_line` without
+the `.debug_info` units a line program is found through, so the source side gets nothing from it.
+**A profile that strips has no lines**, whatever `debug` says: `strip = true`
 (or `"symbols"`, or `"debuginfo"`) has the linker take the debug information out, so the read
 answers no and the write sets `strip = "none"`. It sets `debug` only when that carries no lines
 either, so a profile that asked for full debug information keeps it. Taking the offer used to leave
