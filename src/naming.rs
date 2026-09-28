@@ -251,6 +251,11 @@ fn qualifier(segment: &str) -> Option<&str> {
         if keyword(text, "fn").is_some() || text.starts_with("fn(") {
             continue;
         }
+        // A trait object is named by its first bound: `Any` in `dyn Any + Send`.
+        let text = match top_level(text).find(|(_, top)| matches!(top, Top::Byte(b'+'))) {
+            Some((plus, _)) => &text[..plus],
+            None => text,
+        };
         let segments = split_path(text);
         let Some(&last) = segments.last() else {
             continue;

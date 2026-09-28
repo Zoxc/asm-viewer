@@ -62,6 +62,24 @@ fn an_impl_qualifier_is_named_after_the_type_it_is_on() {
     assert_eq!(short_name("<&mut &[u8] as Foo>::bar"), "Foo::bar");
 }
 
+/// A trait object with more than one bound is named after the first: the others are
+/// auto traits, as often as not. Written by hand.
+#[test]
+fn a_trait_object_is_named_after_its_first_bound() {
+    assert_eq!(
+        short_name("<dyn core::any::Any + core::marker::Send>::downcast"),
+        "Any::downcast"
+    );
+    assert_eq!(
+        short_name("<dyn core::error::Error + core::marker::Send + core::marker::Sync>::downcast"),
+        "Error::downcast"
+    );
+    assert_eq!(
+        short_name("<dyn core::any::Any + core::marker::Send as core::fmt::Debug>::fmt"),
+        "Any::fmt"
+    );
+}
+
 /// A function pointer is a type with no name of its own too. Written by hand.
 #[test]
 fn a_function_pointer_falls_back_to_the_trait() {
