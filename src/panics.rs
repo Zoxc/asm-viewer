@@ -517,15 +517,16 @@ fn trim_path(path: &str) -> &str {
     const REGISTRY: &str = "/registry/src/";
     const LIBRARY: &str = "/library/";
 
-    if let Some(at) = path.rfind(LIBRARY) {
-        return &path[at + 1..];
-    }
+    // The registry first: a crate of its own can have a `library` directory in it.
     // Past the index directory as well as the marker: it is a hash and names nothing.
     if let Some(at) = path.find(REGISTRY) {
         let rest = &path[at + REGISTRY.len()..];
         if let Some(slash) = rest.find('/') {
             return &rest[slash + 1..];
         }
+    }
+    if let Some(at) = path.rfind(LIBRARY) {
+        return &path[at + 1..];
     }
     path
 }

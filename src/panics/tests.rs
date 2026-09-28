@@ -404,6 +404,11 @@ fn a_frame_is_drawn_without_the_bytes_that_say_nothing() {
         shorten_path(registry),
         "             at freya-core-0.4.3/src/lifecycle/base.rs:87:53"
     );
+    // A crate's own `library` directory is not the standard library's.
+    assert_eq!(
+        shorten_path("             at /home/j/.cargo/registry/src/index.crates.io-1949cf/foo-1.2.3/src/library/mod.rs:10:5"),
+        "             at foo-1.2.3/src/library/mod.rs:10:5"
+    );
     // Both spellings of a standard library path, the compiler's and rustup's.
     assert_eq!(
         shorten_path("             at /rustc/17fd5b8a/library/core/src/option.rs:2262:5"),
