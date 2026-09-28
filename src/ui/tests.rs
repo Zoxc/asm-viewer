@@ -10969,6 +10969,15 @@ fn a_key_takes_the_box_down_and_a_bare_modifier_does_not() {
         hover_box(&test).is_some(),
         "reaching for Ctrl took the box away"
     );
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::CapsLock),
+        Modifiers::empty(),
+    );
+    assert!(
+        hover_box(&test).is_some(),
+        "reaching for a Caps Lock made into Ctrl took the box away"
+    );
 
     key_with(&mut test, Key::Character("j".into()), Modifiers::empty());
     assert!(hover_box(&test).is_none(), "a key left the box up");

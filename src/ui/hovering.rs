@@ -289,11 +289,18 @@ pub(crate) fn hover_gone(hover: State<Hover>) {
 /// Ctrl is held to open a link's definition in a tab of its own, and Alt to select the
 /// name rather than follow it, so both are struck with the pointer resting on the very
 /// name the box is about; taking the box away as the reader reaches for the modifier
-/// would be answering them with a flinch.
+/// would be answering them with a flinch. Caps Lock counts as one, being the Ctrl on a
+/// desktop that makes it one ([`ModifierKeys`]).
 pub(crate) fn hover_struck(hover: State<Hover>, key: &Key) {
     if matches!(
         key,
-        Key::Named(NamedKey::Control | NamedKey::Shift | NamedKey::Alt | NamedKey::Meta)
+        Key::Named(
+            NamedKey::Control
+                | NamedKey::Shift
+                | NamedKey::Alt
+                | NamedKey::Meta
+                | NamedKey::CapsLock
+        )
     ) {
         return;
     }
