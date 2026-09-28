@@ -90,12 +90,14 @@ pub(crate) fn reveal_row(
 /// The offset a `ScrollController` is set to for `top` to be at the top of a pane of rows
 /// `height` tall, held to `extent`: negative, the view counting down from zero, and
 /// rounded, so the offset read back is the `top` it was worked out from
-/// ([`TopRow::of_offset`]). The one conversion both code panes' kept places make.
+/// ([`TopRow::of_offset`]). Held after the rounding, to the extent cut to a whole pixel
+/// as [`held_scroll_i32`] cuts it, or the rounding could carry it a pixel past. The one
+/// conversion both code panes' kept places make.
 pub(crate) fn scroll_y(top: TopRow, height: f64, extent: f64) -> i32 {
     -(top
         .offset(height)
-        .min(extent)
         .round()
+        .min(extent.floor())
         .min(f64::from(i32::MAX)) as i32)
 }
 

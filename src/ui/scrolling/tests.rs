@@ -82,3 +82,11 @@ fn the_first_run_writes_nothing_down_for_a_tab_it_is_putting_back() {
         "a `0` is left alone rather than scrolled to"
     );
 }
+
+#[test]
+fn an_offset_held_to_the_extent_is_not_rounded_past_it() {
+    let extent = 100.0 * 20.0 - 999.4;
+    let y = scroll_y(TopRow::at(99), 20.0, extent);
+    assert_eq!(y, -1000, "rounded a pixel past the extent");
+    assert_eq!(held_scroll_i32(y, extent as f32), y);
+}
