@@ -25,7 +25,7 @@
 
 mod common;
 
-use analysis::{Architecture, Gap, GapKind, LoadMessage, MadeUp};
+use analysis::{Architecture, ByteSlice, Gap, GapKind, LoadMessage, MadeUp};
 use common::{
     at, committed_fixture, eh_frame_section, elf_image, elf_shared_object, listing_of, named,
     names, parse, pe_image, ElfImage, ExportedSymbol, ImageSection, PeDll, SharedObject,
@@ -131,7 +131,7 @@ fn unwind_entries_are_symbols_where_nothing_names_them() {
         "and it says which of ours"
     );
     assert_eq!(
-        second.section.as_ref().map(|s| s.name.as_str()),
+        second.section.as_ref().map(|s| s.name.to_str().unwrap()),
         Some(".text")
     );
     let assembly = second.assembly(&object).expect("it decodes");
@@ -539,7 +539,7 @@ fn an_elfs_fdes_are_symbols_where_nothing_names_them() {
     assert_eq!(second.size, Some(2), "the FDE's length");
     assert_eq!(second.demangled, None);
     assert_eq!(
-        second.section.as_ref().map(|s| s.name.as_str()),
+        second.section.as_ref().map(|s| s.name.to_str().unwrap()),
         Some(".text")
     );
     let assembly = second.assembly(&object).expect("it decodes");

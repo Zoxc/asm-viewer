@@ -47,8 +47,9 @@
 //! `drop_in_place` — answers with **9 374** of `viewer-sample`'s symbols.
 
 use super::intervals::Intervals;
-use super::DebugInfo;
+use super::{shared_name, DebugInfo};
 use crate::{Object, PlacedAddress, SymbolData};
+use bstr::BStr;
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -64,7 +65,7 @@ use std::sync::Arc;
 /// in and nothing has to be recovered to answer one. Both are good for the object's life:
 /// [`Object::new`] builds `placed` once and nothing rewrites it.
 pub(super) struct SourceIndex {
-    files: HashMap<Arc<str>, Vec<(u32, u32)>>,
+    files: HashMap<Arc<BStr>, Vec<(u32, u32)>>,
     /// Whether every row was read into it: `false` where the walk ran over the budget or
     /// did not finish, and the index holds only the rows read before that.
     pub(super) whole: bool,
@@ -81,7 +82,7 @@ impl SourceIndex {
     fn build(ranges: &Intervals<PlacedAddress, u32>, debug: &DebugInfo) -> SourceIndex {
         // Keyed by the name each row spells, allocated once per distinct file: the visitor is
         // handed a borrow that ends with the call, so the key cannot be the borrow itself.
-        let mut files: HashMap<Arc<str>, Vec<(u32, u32)>> = HashMap::new();
+        let mut files: HashMap<Arc<BStr>, Vec<(u32, u32)>> = HashMap::new();
 
         // What the walk has cost against what it is allowed ([`budget`]). Sticky, and no
         // backend's walk can be cut short, so past the budget a row is attributed to nothing.
@@ -102,9 +103,9 @@ impl SourceIndex {
                 return;
             }
 
-            let entry = match files.get_mut(file) {
+            let entry = match files.get_mut(BStr::new(file)) {
                 Some(entry) => entry,
-                None => files.entry(Arc::from(file)).or_default(),
+                None => files.entry(shared_name(file)).or_default(),
             };
             // Usually one symbol, occasionally two: a symbol aliasing another, or a
             // `DW_AT_high_pc` reaching over an assembler label.
@@ -133,8 +134,8 @@ impl SourceIndex {
     /// The `(line, position)` pairs for one file over `first..=last`, in line order. Inclusive
     /// at the top so that a single line is a range this cannot fail to express, `u32::MAX`
     /// included.
-    fn lookup(&self, file: &str, first: u32, last: u32) -> &[(u32, u32)] {
-        let Some(entries) = self.files.get(file) else {
+    fn lookup(&self, file: &[u8], first: u32, last: u32) -> &[(u32, u32)] {
+        let Some(entries) = self.files.get(BStr::new(file)) else {
             return &[];
         };
         let start = entries.partition_point(|(line, _)| *line < first);
@@ -218,9 +219,10 @@ impl Object {
     /// searches.
     pub fn symbols_from_lines(
         &self,
-        file: &str,
+        file: impl AsRef<[u8]>,
         lines: RangeInclusive<u32>,
     ) -> Vec<Arc<SymbolData>> {
+        let file = file.as_ref();
         let (first, last) = (*lines.start(), *lines.end());
         if first > last {
             return Vec::new();
@@ -262,7 +264,8 @@ impl Object {
     ///
     /// Empty for [`symbols_from_lines`]'s reasons, and worker-thread work for its reason
     /// too: the first call against an object builds the index.
-    pub fn lines_from_source(&self, file: &str) -> Vec<u32> {
+    pub fn lines_from_source(&self, file: impl AsRef<[u8]>) -> Vec<u32> {
+        let file = file.as_ref();
         let Some(index) = self.source_index() else {
             return Vec::new();
         };
@@ -291,12 +294,12 @@ impl Object {
     ///
     /// Empty for [`symbols_from_lines`](Self::symbols_from_lines)'s reasons, and worker-thread
     /// work for its reason too: the first call against an object builds the index.
-    pub fn source_files(&self) -> Vec<Arc<str>> {
+    pub fn source_files(&self) -> Vec<Arc<BStr>> {
         let Some(index) = self.source_index() else {
             return Vec::new();
         };
 
-        let mut files: Vec<Arc<str>> = index.files.keys().cloned().collect();
+        let mut files: Vec<Arc<BStr>> = index.files.keys().cloned().collect();
         files.sort_unstable();
         files
     }

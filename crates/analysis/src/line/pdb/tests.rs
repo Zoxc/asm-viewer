@@ -89,7 +89,7 @@ fn the_source_index_walks_the_module_list_once() {
         .collect();
     let object = crate::Object::preloaded(
         path,
-        "line_fixture_public.dll".to_string(),
+        "line_fixture_public.dll".into(),
         object::BinaryFormat::Pe,
         object::Architecture::X86_64,
         symbols,

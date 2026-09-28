@@ -12,7 +12,7 @@
 //! or a relocation will not apply, the object's DWARF counts as one part skipped
 //! ([`Dwarf::load`]).
 
-use super::{recovered, LineBackend, RowCollector, Skipped};
+use super::{recovered, LineBackend, RowCollector, Skipped, VisitRow};
 use crate::parse::symbol_address;
 use crate::sections::{bias_of, runtime_endian, section_biases, section_data};
 use crate::{Bias, PlacedAddress, SectionAddress};
@@ -147,7 +147,7 @@ impl LineBackend for Dwarf {
             // DWARF 5 can record a file's MD5 too, but `addr2line` renders the name and
             // keeps nothing of the entry behind it, so no hash travels with it for now
             // (`notes/upstream/addr2line.md`).
-            let file = location.file.map(|file| rows.file(file, None));
+            let file = location.file.map(|file| rows.file(file.as_bytes(), None));
 
             // Pushed as `addr2line` handed it over: the clip to the query, and the bias
             // that comes off after it, are the collector's (`RowCollector::push`).
@@ -189,7 +189,7 @@ impl LineBackend for Dwarf {
 
     /// Every row of every line program that names a file and a line, handed to `visit` under
     /// the context's lock — so `visit` must not ask this object anything.
-    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
+    fn each_row(&self, visit: &mut VisitRow<'_>) {
         let context = recovered(&self.context);
 
         // The whole address space in one pass. Safe where `extent` had to decline `u64::MAX`:
@@ -202,7 +202,7 @@ impl LineBackend for Dwarf {
             let (Some(file), Some(line)) = (location.file, location.line) else {
                 continue;
             };
-            visit(range, file, line);
+            visit(range, file.as_bytes(), line);
         }
     }
 

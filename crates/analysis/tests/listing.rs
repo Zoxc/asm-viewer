@@ -5,8 +5,8 @@
 mod common;
 
 use analysis::{
-    parse_object, Architecture, Bias, CodeListing, Extent, GapKind, Listing, LoadMessage, Object,
-    Section, SectionAddress, Severity, SymbolData,
+    parse_object, Architecture, Bias, ByteSlice, CodeListing, Extent, GapKind, Listing,
+    LoadMessage, Object, Section, SectionAddress, Severity, SymbolData,
 };
 use common::{
     at, caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
@@ -223,7 +223,7 @@ fn labels(listing: &Listing) -> Vec<Vec<&str>> {
             stretch
                 .symbols
                 .iter()
-                .map(|symbol| symbol.name.as_str())
+                .map(|symbol| symbol.name.to_str().unwrap())
                 .collect()
         })
         .collect()
@@ -729,7 +729,7 @@ fn two_sections() -> Vec<u8> {
 fn placed_names(code: &CodeListing) -> Vec<&str> {
     code.sections()
         .iter()
-        .map(|placed| placed.listing.section().name.as_str())
+        .map(|placed| placed.listing.section().name.to_str().unwrap())
         .collect()
 }
 
@@ -1004,7 +1004,7 @@ fn a_section_near_the_top_of_the_address_space_is_a_load_error() {
     assert_eq!(
         object.messages,
         [LoadMessage::CodeSectionsOverlap {
-            section: ".text.high".to_owned(),
+            section: ".text.high".into(),
             address: u64::MAX - 4,
         }]
     );
@@ -1040,7 +1040,7 @@ fn a_section_the_layout_has_no_room_for_stays_where_the_file_put_it() {
     assert_eq!(
         object.messages,
         [LoadMessage::CodeSectionsOverlap {
-            section: ".text.high".to_owned(),
+            section: ".text.high".into(),
             address: 0xffff_ffff_ffff_ff00,
         }]
     );
@@ -1156,12 +1156,12 @@ fn an_address_under_another_section_is_not_named_by_its_symbol() {
         call.symbol().map(|symbol| symbol.name.clone())
     };
     assert_eq!(callee("a1"), None);
-    assert_eq!(callee("b").as_deref(), Some("b"));
+    assert_eq!(callee("b"), Some("b".into()));
 
     let name_at = |at| {
         object
             .symbol_at_placed(placed_at(at))
-            .map(|symbol| &*symbol.name)
+            .map(|symbol| symbol.name.to_str().unwrap())
     };
     assert_eq!(name_at(0x1000), Some("a1"));
     assert_eq!(name_at(0x1004), None);

@@ -8,6 +8,7 @@
 //! [`DEMANGLE_STACK`], and a thread that big is not something to create per object. Hence a
 //! [`Pool`]: a fixed, process-wide set of them, started once and handed work.
 
+use bstr::{BString, ByteSlice};
 use std::{
     ops::Range,
     sync::{
@@ -58,18 +59,18 @@ const MAX_THREADS: usize = 8;
 /// Shared rather than borrowed, because the pool's threads outlive any one batch and a job
 /// handed to them cannot borrow the caller's frame. Nothing is copied to make it: [`batch`]
 /// moves the caller's names in here and hands them back out afterwards.
-type Names = Arc<Vec<String>>;
+type Names = Arc<Vec<BString>>;
 
 /// Demangle a whole object's names, and hand them back. The answer is the names as they came
 /// in and what each demangled to, one entry per name in the same order, whatever it was
 /// demangled by and wherever it was demangled.
 ///
-/// [`None`] out means no demangler recognised the name, it was longer than
+/// [`None`] out means no demangler recognised the name, it was not UTF-8, it was longer than
 /// [`MAX_MANGLED_NAME`], or the demangler panicked — all of which display as the file wrote
 /// it, which is what an unrecognised name already did.
-pub(crate) fn batch(names: Vec<String>) -> (Vec<String>, Vec<Option<String>>) {
+pub(crate) fn batch(names: Vec<BString>) -> (Vec<BString>, Vec<Option<String>>) {
     // The deepest any of them can recurse is the longest of them.
-    let deepest = names.iter().map(String::len).max();
+    let deepest = names.iter().map(|name| name.len()).max();
     match deepest {
         None | Some(0) => {
             let demangled = vec![None; names.len()];
@@ -96,19 +97,21 @@ pub(crate) fn batch(names: Vec<String>) -> (Vec<String>, Vec<Option<String>>) {
     (names, demangled)
 }
 
-/// One name, or [`None`] where nothing is to be made of it.
+/// One name, or [`None`] where nothing is to be made of it. Every demangler reads text, and
+/// every mangling scheme spells a name in ASCII, so a name that is not UTF-8 is none of theirs.
 ///
 /// The `catch_unwind` is not general defensiveness: a demangler panicking on a name out of a
 /// string table would otherwise take out the parse, or a pool thread with it.
-fn demangle_one(name: &str) -> Option<String> {
+fn demangle_one(name: &[u8]) -> Option<String> {
     let name = Some(name).filter(|name| name.len() <= MAX_MANGLED_NAME)?;
+    let name = name.to_str().ok()?;
     crate::guard::guard(|| symbolic_common::Name::from(name).demangle(DemangleOptions::complete()))
         .flatten()
 }
 
 /// A run of the batch, demangled in place order. The one definition of what a chunk of work
 /// is, so the parallel path and the sequential one cannot answer differently.
-fn demangle_range(names: &[String], range: Range<usize>) -> Vec<Option<String>> {
+fn demangle_range(names: &[BString], range: Range<usize>) -> Vec<Option<String>> {
     names[range].iter().map(|name| demangle_one(name)).collect()
 }
 

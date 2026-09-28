@@ -388,7 +388,10 @@ fn an_object_lands_in_its_placeholders_place() {
     place(&mut objects, object("/tmp/a.a", "one.o"), &[]);
     place(&mut objects, object("/tmp/a.a", "two.o"), &[]);
 
-    let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+    let names: Vec<&str> = objects
+        .iter()
+        .map(|object| object.name.to_str().unwrap())
+        .collect();
     assert_eq!(names, ["one.o", "two.o", "b.o"]);
     assert!(objects.iter().all(|object| !object.is_placeholder()));
 }

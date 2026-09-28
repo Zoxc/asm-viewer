@@ -202,9 +202,10 @@ impl Component for ObjectRow {
         let at = self.at;
         let object = self.object.clone();
         let path = self.object.path.clone();
+        let name = self.object.name.to_str_lossy().into_owned();
 
         let tooltip = if self.member {
-            self.object.name.clone()
+            name.clone()
         } else {
             self.object.path.display().to_string()
         };
@@ -217,7 +218,7 @@ impl Component for ObjectRow {
 
         name_tooltip(
             fitted.cut(),
-            &self.object.name,
+            &name,
             tooltip,
             list_row(hovering, picking.drawn(&pick, self.selected))
                 // What pressing an object opens is all of its code as one listing --
@@ -245,12 +246,7 @@ impl Component for ObjectRow {
                     chevron_width()
                 })))
                 .child(tag_label(object_tag(&self.object)))
-                .child(tree_name_fitted(
-                    fitted,
-                    self.object.name.clone(),
-                    false,
-                    &self.marks,
-                ))
+                .child(tree_name_fitted(fitted, name.clone(), false, &self.marks))
                 .maybe_child(load_mark(self.object.worst(), &told)),
         )
     }
@@ -386,8 +382,8 @@ impl Component for SymbolRow {
         let at = self.at;
         let symbol = self.symbols[self.index].clone();
         let pick = Pick::Symbol(symbol.clone());
-        let name = symbol.data.display().to_owned();
-        let object = symbol.object.name.clone();
+        let name = symbol.data.display().to_str_lossy().into_owned();
+        let object = symbol.object.name.to_str_lossy().into_owned();
         let document = Document::Symbol(symbol.clone());
         // One tooltip over both texts, so it is shown where either of them was cut.
         let whole = match press.about() {
@@ -442,7 +438,9 @@ pub(crate) fn use_filtered_symbols(
     use_memo(move || {
         let symbols = symbols();
         let marking = marking.read();
-        Filtered::new(symbols, marking.matcher(), |symbol| symbol.data.display())
+        Filtered::new(symbols, marking.matcher(), |symbol| {
+            symbol.data.display().to_str_lossy()
+        })
     })
 }
 
@@ -495,7 +493,7 @@ pub(crate) fn symbol_rows(
                 index,
                 selected: selected.as_ref() == Some(symbol),
                 at: row,
-                marks: marking.marks(symbol.data.display()),
+                marks: marking.marks(&symbol.data.display().to_str_lossy()),
                 press: press.clone(),
                 states,
                 key: DiffKey::None,
@@ -774,7 +772,7 @@ impl Component for ObjectsPanel {
                             member: *member,
                             skipped: object.debug_info_skipped(),
                             at: row,
-                            marks: marking.marks(&object.name),
+                            marks: marking.marks(&object.name.to_str_lossy()),
                             states,
                             key: DiffKey::None,
                         }

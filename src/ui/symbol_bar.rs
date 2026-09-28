@@ -139,7 +139,7 @@ fn facts(heading: &Heading) -> Vec<Element> {
                 fact(
                     "Section",
                     match &data.section {
-                        Some(section) => section.name.clone(),
+                        Some(section) => section.name.to_str_lossy().into_owned(),
                         None => "none".to_owned(),
                     },
                 )
@@ -163,7 +163,7 @@ fn facts(heading: &Heading) -> Vec<Element> {
                     },
                 )
                 .into_element(),
-                fact("Object", symbol.object.name.clone()).into_element(),
+                fact("Object", symbol.object.name.to_str_lossy().into_owned()).into_element(),
             ]
         }
         Heading::Object(object) => vec![
@@ -254,14 +254,14 @@ impl Component for SymbolBar {
                 let data = &symbol.data;
                 std::iter::once(
                     NameRow {
-                        text: data.display().to_owned(),
+                        text: data.display().to_str_lossy().into_owned(),
                         dim: false,
                     }
                     .into(),
                 )
                 .chain(data.demangled.is_some().then(|| {
                     NameRow {
-                        text: data.name.clone(),
+                        text: data.name.to_str_lossy().into_owned(),
                         dim: true,
                     }
                     .into()
@@ -269,7 +269,7 @@ impl Component for SymbolBar {
                 .collect()
             }
             Heading::Object(object) => vec![NameRow {
-                text: object.name.clone(),
+                text: object.name.to_str_lossy().into_owned(),
                 dim: false,
             }
             .into()],

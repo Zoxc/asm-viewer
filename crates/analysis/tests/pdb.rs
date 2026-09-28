@@ -87,7 +87,7 @@
 
 mod common;
 
-use analysis::{parse_object, LineInfo, Object, SourceDigests, SourceHash};
+use analysis::{parse_object, BString, ByteSlice, LineInfo, Object, SourceDigests, SourceHash};
 use common::{
     at, committed_fixture, committed_fixture_path, names, pe_image, symbol, CodeViewRecord,
     ExportedSymbol, PeDll,
@@ -297,7 +297,7 @@ fn every_row_of_the_three_functions_verbatim() {
 fn the_file_is_named_verbatim_and_carries_the_compilers_md5() {
     let object = parse();
     let info = line_info(&object, "add");
-    let files: Vec<&str> = info.files().map(|file| &**file).collect();
+    let files: Vec<&str> = info.files().map(|file| file.to_str().unwrap()).collect();
     assert_eq!(files, [SOURCE]);
     assert_eq!(common::file_of(&info, &info.rows()[0]), Some(SOURCE));
 
@@ -383,7 +383,7 @@ fn the_rows_hold_the_invariants() {
 #[test]
 fn a_line_maps_back_to_the_symbol_compiled_from_it() {
     let object = parse();
-    let names_at = |line: u32| -> Vec<String> {
+    let names_at = |line: u32| -> Vec<BString> {
         object
             .symbols_from_lines(SOURCE, line..=line)
             .iter()
@@ -395,12 +395,12 @@ fn a_line_maps_back_to_the_symbol_compiled_from_it() {
     assert_eq!(names_at(35), ["sum_to"]);
     assert_eq!(
         names_at(25),
-        Vec::<String>::new(),
+        Vec::<BString>::new(),
         "a blank line compiled into nothing"
     );
     assert_eq!(names_at(23).len(), 1);
 
-    let all: Vec<String> = object
+    let all: Vec<BString> = object
         .symbols_from_lines(SOURCE, 1..=99)
         .iter()
         .map(|symbol| symbol.name.clone())
@@ -419,7 +419,7 @@ fn a_line_maps_back_to_the_symbol_compiled_from_it() {
         for row in info.rows() {
             let line = row.line.expect("every row here names a line");
             assert!(
-                names_at(line).contains(&name.to_string()),
+                names_at(line).contains(&BString::from(name)),
                 "{name}'s line {line} does not answer with {name}"
             );
         }
@@ -687,7 +687,7 @@ fn procedures_are_symbols_where_the_image_names_none() {
     assert_eq!(rows(&line_info(&object, "twice")).len(), 5);
     assert_eq!(rows(&line_info(&object, "sum_to")).len(), 14);
 
-    let at_23: Vec<String> = object
+    let at_23: Vec<BString> = object
         .symbols_from_lines(SOURCE, 23..=23)
         .iter()
         .map(|symbol| symbol.name.clone())

@@ -410,7 +410,7 @@ pub(crate) fn source_side(
                 .and_then(|picked| picked.file.as_ref())
                 .filter(|file| {
                     lines.info.as_ref().is_some_and(|info| {
-                        info.files().any(|named| Path::new(&**named) == &***file)
+                        info.files().any(|named| named.to_path_lossy() == ***file)
                     })
                 });
             let file = picked.cloned().or_else(|| lines.file.clone())?;

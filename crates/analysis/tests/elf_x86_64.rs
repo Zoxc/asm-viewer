@@ -3,7 +3,7 @@
 
 mod common;
 
-use analysis::{Bias, Operand, SpanKind};
+use analysis::{Bias, ByteSlice, Operand, SpanKind};
 use common::{
     at, branch_to_data, call_to_import, call_to_weak_external, caller_and_target, elf_x86_64,
     elf_x86_64_absolute, goes_to, indirect_caller_and_target, names, parse,
@@ -28,6 +28,31 @@ fn both_text_symbols_parse() {
     assert_eq!(section.address, at(0));
     assert_eq!(caller.address, at(0));
     assert_eq!(target.address, at(6));
+}
+
+/// A name is the file's bytes, and bytes that are not UTF-8 are kept as they are.
+#[test]
+fn a_name_that_is_not_utf8_keeps_its_bytes() {
+    let mut data = elf_x86_64(
+        &[TextSymbol {
+            name: "not_utf8",
+            bytes: &[0xC3],
+        }],
+        &[],
+    );
+    let at = data
+        .windows(8)
+        .position(|window| window == b"not_utf8")
+        .expect("the name is in the string table");
+    data[at + 3] = 0xFF;
+
+    let object = parse(&data);
+    let [symbol] = &object.symbols_sorted[..] else {
+        panic!("one symbol");
+    };
+    assert_eq!(symbol.name, &b"not\xFFutf8"[..]);
+    assert_eq!(symbol.demangled, None);
+    assert_eq!(object.symbols_named(b"not\xFFutf8").len(), 1);
 }
 
 #[test]
@@ -349,7 +374,7 @@ fn every_relocation_in_the_instruction_is_named() {
     let names = call
         .names()
         .iter()
-        .map(|name| (name.symbol.name.as_str(), name.span.is_some()))
+        .map(|name| (name.symbol.name.to_str().unwrap(), name.span.is_some()))
         .collect::<Vec<_>>();
     assert_eq!(names, [("other", true), ("target", false)]);
     assert!(Arc::ptr_eq(&call.names()[1].symbol, &target));
@@ -386,7 +411,7 @@ fn two_relocations_at_one_address_are_both_named() {
     let names = assembly.instructions[0]
         .names()
         .iter()
-        .map(|name| (name.symbol.name.as_str(), name.span.is_some()))
+        .map(|name| (name.symbol.name.to_str().unwrap(), name.span.is_some()))
         .collect::<Vec<_>>();
     assert_eq!(names, [("first", true), ("second", false)]);
 }
@@ -584,7 +609,7 @@ fn each_relocated_field_names_its_own_operand() {
         .iter()
         .map(|name| {
             let span = name.span.and_then(|span| span_at(mov, span));
-            (name.symbol.name.as_str(), span)
+            (name.symbol.name.to_str().unwrap(), span)
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -624,7 +649,11 @@ fn a_call_to_an_import_is_a_placeholder() {
     // and not a symbol, and the call relocated against it names nothing to open.
     let object = parse(&call_to_import());
     assert_eq!(names(&object), ["caller"]);
-    let imports: Vec<_> = object.imports.iter().map(|i| i.name.as_str()).collect();
+    let imports: Vec<_> = object
+        .imports
+        .iter()
+        .map(|i| i.name.to_str().unwrap())
+        .collect();
     assert_eq!(imports, ["printf"]);
     assert_eq!(object.imports[0].address, None);
 
@@ -644,7 +673,11 @@ fn a_call_to_a_weak_external_is_a_placeholder() {
     let object = parse(&call_to_weak_external());
     assert_eq!(object.format, Some(analysis::BinaryFormat::Coff));
     assert_eq!(names(&object), ["caller"]);
-    let imports: Vec<_> = object.imports.iter().map(|i| i.name.as_str()).collect();
+    let imports: Vec<_> = object
+        .imports
+        .iter()
+        .map(|i| i.name.to_str().unwrap())
+        .collect();
     assert_eq!(imports, ["hook"]);
 
     let assembly = symbol(&object, "caller")
@@ -761,7 +794,7 @@ fn a_name_replaces_the_whole_number_on_any_operand() {
         let assembly = probe.assembly(&object).expect("probe disassembles");
         let first = &assembly.instructions[0];
 
-        assert_eq!(first.symbol().map(|g| g.name.as_str()), Some("g"));
+        assert_eq!(first.symbol().map(|g| g.name.to_str().unwrap()), Some("g"));
         assert_eq!(text(first).trim_end(), printed);
     }
 }
@@ -1424,7 +1457,7 @@ fn only_the_text_section_is_code_and_it_is_not_moved() {
             .sections
             .iter()
             .filter(|section| section.code().is_some() == code)
-            .map(|section| section.name.as_str())
+            .map(|section| section.name.to_str().unwrap())
             .collect();
         names.sort_unstable();
         names

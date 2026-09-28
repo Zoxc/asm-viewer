@@ -188,6 +188,7 @@ name = "analysis"
 version = "0.1.0"
 dependencies = [
  "addr2line",
+ "bstr",
  "gimli",
  "iced-x86",
  "libc",

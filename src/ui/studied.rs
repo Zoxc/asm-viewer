@@ -556,19 +556,19 @@ impl Studied {
     pub(crate) fn position(&self, index: usize) -> Option<LinePos> {
         let (file, line) = self.named_at(index)?;
         Some(LinePos {
-            file: Arc::from(Path::new(file)),
+            file: Arc::from(&*file.to_path_lossy()),
             line,
         })
     }
 
     /// [`position`](Self::position) as the debug info names it, which costs no copy of
     /// the path: what a question asked of every row wants.
-    fn named_at(&self, index: usize) -> Option<(&str, u32)> {
+    fn named_at(&self, index: usize) -> Option<(&BStr, u32)> {
         let lines = self.lines.info.as_ref()?;
         // `get` and not an index: a row's neighbour below can be past the listing.
         let address = self.assembly.as_ref()?.instructions.get(index)?.address;
         let row = lines.row_at(address)?;
-        Some((lines.file(row.file?)?, row.line?))
+        Some((&**lines.file(row.file?)?, row.line?))
     }
 
     /// Whether the instruction at `index` is the same place as a line of the source pane's
@@ -582,7 +582,7 @@ impl Studied {
         let Some((file, line)) = self.named_at(index) else {
             return false;
         };
-        pair.file.as_deref() == Some(Path::new(file))
+        pair.file.as_deref() == Some(&*file.to_path_lossy())
             && (line as usize)
                 .checked_sub(1)
                 .is_some_and(|row| pair.chars.contains_row(row))
@@ -674,7 +674,7 @@ impl SymbolLines {
             .as_ref()
             .and_then(|info| info.opening(symbol.data.address));
         let (file, line) = match opening {
-            Some((file, line)) => (Some(Arc::from(Path::new(&**file))), line),
+            Some((file, line)) => (Some(Arc::from(&*file.to_path_lossy())), line),
             None => (None, None),
         };
 
@@ -690,7 +690,7 @@ impl SymbolLines {
             || self
                 .info
                 .as_ref()
-                .is_some_and(|info| info.files().any(|named| Path::new(&**named) == file))
+                .is_some_and(|info| info.files().any(|named| named.to_path_lossy() == file))
     }
 
     /// The checksum the debug info recorded for `file`, one of the files these rows name, or
@@ -698,7 +698,7 @@ impl SymbolLines {
     /// the pane is showing rather than carried per file, so a landed run's file and the
     /// symbol's own are answered the same way.
     pub(crate) fn hash_for(&self, file: &Path) -> Option<analysis::SourceHash> {
-        self.info.as_ref()?.hash_for(file.to_str()?)
+        self.info.as_ref()?.hash_for(Vec::from_path_lossy(file))
     }
 }
 

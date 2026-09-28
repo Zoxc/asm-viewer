@@ -8,6 +8,7 @@ use crate::disasm::Code;
 use crate::extent::ExtentCache;
 use crate::line::{DebugInfo, DebugInfoCache};
 use crate::{Assembly, Bias, MadeUp, PlacedAddress, SectionAddress};
+use bstr::{BStr, BString};
 use object::{Architecture, BinaryFormat, Endianness, Relocation, SectionIndex, SymbolIndex};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -20,7 +21,9 @@ use std::{
 
 pub struct Object {
     pub path: PathBuf,
-    pub name: String,
+    /// The archive member's name, or the file's own; as the archive or the file system
+    /// spells it, which need not be UTF-8.
+    pub name: BString,
     /// [`None`] for a file that is not an object at all, shown only to say why
     /// ([`messages`](Self::messages)): a file that could not be read, one that is no object
     /// this reader can parse, or an archive with none of its members shown. It has no
@@ -85,7 +88,7 @@ pub struct Object {
 pub enum LoadMessage {
     /// The code sections could not all be placed apart, because `section` states `address`,
     /// the highest any code section states, near the top of the address space.
-    CodeSectionsOverlap { section: String, address: u64 },
+    CodeSectionsOverlap { section: BString, address: u64 },
     /// `count` functions or entry points were left out because the descriptor naming their
     /// code could not be read.
     UnreadableDescriptors { count: usize },
@@ -703,7 +706,7 @@ impl Object {
     /// sorted, and it starts `debug_info` empty, to be built on its first use.
     pub fn new(
         path: PathBuf,
-        name: String,
+        name: impl Into<BString>,
         format: BinaryFormat,
         architecture: Architecture,
         symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
@@ -712,7 +715,7 @@ impl Object {
     ) -> Object {
         Object::preloaded(
             path,
-            name,
+            name.into(),
             format,
             architecture,
             symbols,
@@ -729,7 +732,7 @@ impl Object {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn preloaded(
         path: PathBuf,
-        name: String,
+        name: BString,
         format: BinaryFormat,
         architecture: Architecture,
         symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
@@ -788,7 +791,7 @@ impl Object {
     /// it: no format, no sections and no symbols. `archive` is whether the file is one.
     pub(crate) fn unread(
         path: PathBuf,
-        name: String,
+        name: BString,
         data: ObjectData,
         archive: bool,
         messages: Vec<LoadMessage>,
@@ -840,10 +843,11 @@ impl Object {
     /// Two binary searches over [`symbols_sorted`](Self::symbols_sorted). It depends on
     /// that field's order, so it lives beside the sort that makes it rather than in the
     /// app that asks: a saved place finds its symbol this way.
-    pub fn symbols_named(&self, name: &str) -> &[Arc<SymbolData>] {
+    pub fn symbols_named(&self, name: impl AsRef<[u8]>) -> &[Arc<SymbolData>] {
+        let name = name.as_ref();
         let all = &self.symbols_sorted;
-        let start = all.partition_point(|data| data.name.as_str() < name);
-        let end = all.partition_point(|data| data.name.as_str() <= name);
+        let start = all.partition_point(|data| data.name.as_slice() < name);
+        let end = all.partition_point(|data| data.name.as_slice() <= name);
         &all[start..end.max(start)]
     }
 
@@ -1050,7 +1054,8 @@ pub struct Section {
     /// later pass that re-reads that file — an address on its own is not a key in a
     /// relocatable object where every section starts at 0.
     pub index: SectionIndex,
-    pub name: String,
+    /// As the file spells it, which need not be UTF-8.
+    pub name: BString,
     pub address: SectionAddress,
 
     /// What the parse read of this section, and the one thing that says whether it holds
@@ -1098,7 +1103,7 @@ impl Section {
     /// ranges.
     pub fn text(
         index: SectionIndex,
-        name: String,
+        name: impl Into<BString>,
         data: Vec<u8>,
         address: SectionAddress,
         relocations: BTreeMap<SectionAddress, Vec<Relocation>>,
@@ -1106,7 +1111,7 @@ impl Section {
     ) -> Section {
         Section {
             index,
-            name,
+            name: name.into(),
             address,
             code: Some(CodeSection {
                 data,
@@ -1118,10 +1123,14 @@ impl Section {
     }
 
     /// A section holding no code: no bytes, no relocations, no unwind ranges and no bias.
-    pub fn other(index: SectionIndex, name: String, address: SectionAddress) -> Section {
+    pub fn other(
+        index: SectionIndex,
+        name: impl Into<BString>,
+        address: SectionAddress,
+    ) -> Section {
         Section {
             index,
-            name,
+            name: name.into(),
             address,
             code: None,
         }
@@ -1252,8 +1261,8 @@ impl Section {
 /// [`Object::imports`].
 #[derive(Debug)]
 pub struct Import {
-    /// The file's own spelling, not demangled.
-    pub name: String,
+    /// The file's own spelling, not demangled, which need not be UTF-8.
+    pub name: BString,
     /// The address the file states for it, where it states one: a non-PIE executable's ELF
     /// import is at its PLT slot. [`None`] where the file states 0.
     pub address: Option<SectionAddress>,
@@ -1261,7 +1270,9 @@ pub struct Import {
 
 #[derive(Debug)]
 pub struct SymbolData {
-    pub name: String,
+    /// The file's own spelling, which need not be UTF-8, or the one the app made up.
+    pub name: BString,
+    /// What a demangler made of `name`: text, whatever `name` was.
     pub demangled: Option<String>,
     /// Which name the app made up, where `name` is one of those and not the file's own.
     pub made_up: Option<MadeUp>,
@@ -1280,13 +1291,13 @@ impl SymbolData {
     /// A symbol as the file states it. Its [`extent`](Self::extent) is worked out on the
     /// first ask.
     pub fn new(
-        name: String,
+        name: impl Into<BString>,
         demangled: Option<String>,
         address: SectionAddress,
         section: Option<Arc<Section>>,
         size: Option<u64>,
     ) -> SymbolData {
-        SymbolData::parsed(name, demangled, None, address, section, size)
+        SymbolData::parsed(name.into(), demangled, None, address, section, size)
     }
 
     /// A symbol the parse would have named itself, spelled as it spells `made_up`.
@@ -1296,13 +1307,13 @@ impl SymbolData {
         section: Option<Arc<Section>>,
         size: Option<u64>,
     ) -> SymbolData {
-        let name = made_up.to_string();
+        let name = BString::from(made_up.to_string());
         SymbolData::parsed(name, None, Some(made_up), address, section, size)
     }
 
     /// [`new`](Self::new) with `made_up` saying which name the parse made up, if it did.
     pub(crate) fn parsed(
-        name: String,
+        name: BString,
         demangled: Option<String>,
         made_up: Option<MadeUp>,
         address: SectionAddress,
@@ -1320,10 +1331,14 @@ impl SymbolData {
         }
     }
 
-    /// What to call this symbol on screen. The disassembler substitutes this for a relocated
-    /// operand, so anything rendering a relocation target has to use the same rule.
-    pub fn display(&self) -> &str {
-        self.demangled.as_deref().unwrap_or(&self.name)
+    /// What to call this symbol on screen: the demangled name, or else the file's own
+    /// bytes, which the caller turns into text. The disassembler substitutes this for a
+    /// relocated operand, so anything rendering a relocation target has to use the same rule.
+    pub fn display(&self) -> &BStr {
+        match &self.demangled {
+            Some(demangled) => BStr::new(demangled),
+            None => self.name.as_ref(),
+        }
     }
 
     /// `address`, one of this symbol's own, placed by the section it is in

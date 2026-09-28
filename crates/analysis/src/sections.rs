@@ -5,6 +5,7 @@
 
 use crate::made_up::UnnamedSection;
 use crate::{Bias, LoadMessage};
+use bstr::BString;
 use object::{
     CompressedData, CompressionFormat, Object as _, ObjectKind, ObjectSection, SectionIndex,
     SectionKind,
@@ -124,10 +125,10 @@ fn out_of_room(highest: &object::Section<'_, '_>) -> LoadMessage {
 
 /// What `section` is called: the file's own name, or, as the `Err`, the one made up for it
 /// where that will not read ([`UnnamedSection`]).
-pub(crate) fn section_name(section: &object::Section<'_, '_>) -> Result<String, String> {
+pub(crate) fn section_name(section: &object::Section<'_, '_>) -> Result<BString, BString> {
     match section.name_bytes() {
-        Ok(name) => Ok(String::from_utf8_lossy(name).into_owned()),
-        Err(_) => Err(UnnamedSection(section.index()).to_string()),
+        Ok(name) => Ok(BString::from(name)),
+        Err(_) => Err(UnnamedSection(section.index()).to_string().into()),
     }
 }
 

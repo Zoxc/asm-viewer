@@ -4,7 +4,9 @@
 
 mod common;
 
-use analysis::{open_data_streaming, open_files, open_files_streaming, FileDigest, Progress};
+use analysis::{
+    open_data_streaming, open_files, open_files_streaming, BString, ByteSlice, FileDigest, Progress,
+};
 use common::{archive, caller_and_target, Scratch};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
@@ -12,7 +14,7 @@ use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Event {
-    Parsed(String),
+    Parsed(BString),
     Finished(PathBuf),
 }
 
@@ -114,7 +116,7 @@ fn a_path_that_cannot_be_read_is_still_finished() {
     assert_eq!(
         events(vec![missing.clone()]),
         [
-            Event::Parsed(missing.file_name().unwrap().to_string_lossy().into()),
+            Event::Parsed(missing.file_name().unwrap().to_str().unwrap().into()),
             Event::Finished(missing)
         ]
     );
@@ -149,11 +151,11 @@ fn collecting_the_stream_is_what_open_files_returns() {
     let second = scratch.write("plain.o", &member);
     let paths = vec![first, second, scratch.0.join("was-never-here")];
 
-    let collected: Vec<String> = open_files(paths.clone())
+    let collected: Vec<BString> = open_files(paths.clone())
         .iter()
         .map(|object| object.name.clone())
         .collect();
-    let streamed: Vec<String> = events(paths)
+    let streamed: Vec<BString> = events(paths)
         .into_iter()
         .filter_map(|event| match event {
             Event::Parsed(name) => Some(name),
@@ -265,7 +267,10 @@ fn an_archive_whose_members_stop_early_says_so_on_the_last_object_shown() {
     // A GNU name past the end of the `//` table, and a BSD name longer than its member.
     for name in [b"/999            ", b"#1/9999         "] {
         let objects = objects_of(archive_with_bad_middle_name(name));
-        let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+        let names: Vec<&str> = objects
+            .iter()
+            .map(|object| object.name.to_str().unwrap())
+            .collect();
         assert_eq!(names, ["first.o"]);
         assert_eq!(
             objects[0].messages,
@@ -341,7 +346,10 @@ fn an_archive_counts_the_members_that_are_not_objects() {
         ("imported.dll", &short_import),
         ("last.o", &caller_and_target()),
     ]));
-    let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+    let names: Vec<&str> = objects
+        .iter()
+        .map(|object| object.name.to_str().unwrap())
+        .collect();
     assert_eq!(names, ["first.o", "last.o"]);
     assert!(objects[0].messages.is_empty());
     assert_eq!(
@@ -398,7 +406,10 @@ fn a_member_past_the_end_of_the_file_cuts_the_archive_short() {
     ]);
     bytes.truncate(bytes.len() - 1);
     let objects = objects_of(bytes);
-    let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+    let names: Vec<&str> = objects
+        .iter()
+        .map(|object| object.name.to_str().unwrap())
+        .collect();
     assert_eq!(names, ["first.o"]);
     assert_eq!(
         objects[0].messages,
@@ -485,7 +496,10 @@ fn an_archive_passes_over_wrapped_metadata() {
             ("renamed.o", &wrapped_metadata(format, b".rmeta", false)),
             ("beside.o", &wrapped_metadata(format, b".rmeta", true)),
         ]));
-        let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+        let names: Vec<&str> = objects
+            .iter()
+            .map(|object| object.name.to_str().unwrap())
+            .collect();
         assert_eq!(names, ["first.o", "beside.o"], "{format:?}");
         assert_eq!(objects[1].symbols.len(), 1, "{format:?}");
         assert_eq!(objects[1].messages, [], "{format:?}");

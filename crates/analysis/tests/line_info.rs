@@ -1,12 +1,12 @@
 //! Line info read back out of DWARF written by `gimli::write`.
 
 mod common;
-use analysis::{LineInfo, SectionAddress};
+use analysis::{ByteSlice, LineInfo, SectionAddress};
 use common::{
     at, elf_x86_64_with_dwarf, parse, symbol, DwarfFixture, DwarfRow, DwarfSection, TextSymbol,
     UnitRanges,
 };
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ const COMP_DIR: &str = "/src";
 
 /// The files the rows name, as plain strings.
 fn files(info: &LineInfo) -> Vec<&str> {
-    info.files().map(|file| &**file).collect()
+    info.files().map(|file| file.to_str().unwrap()).collect()
 }
 
 /// `first` at 0 with two lines from `main.c`, `second` at 6 with one from `other.c`.
@@ -360,7 +360,7 @@ fn line_info_is_usable_from_several_threads_at_once() {
     for thread in threads {
         let (rows, files) = thread.join().expect("no panic on a worker thread");
         assert_eq!(rows, 2);
-        assert_eq!(files, [Arc::from("/src/main.c")]);
+        assert_eq!(files, [analysis::shared_name(b"/src/main.c")]);
     }
 }
 
@@ -484,7 +484,7 @@ fn a_section_that_would_not_read_keeps_its_rows_off_another() {
         .sections
         .iter()
         .filter(|section| section.code().is_some())
-        .map(|section| section.name.as_str())
+        .map(|section| section.name.to_str().unwrap())
         .collect();
     assert_eq!(sections, [".text.first"]);
 
@@ -566,7 +566,7 @@ fn a_symbol_beginning_in_a_gap_between_two_sequences_is_answered_from_the_later_
         ),
         (at(6), Some(0x10))
     );
-    let named: Vec<String> = object
+    let named: Vec<analysis::BString> = object
         .symbols_from_lines("/src/other.c", 42..=42)
         .iter()
         .map(|symbol| symbol.name.clone())

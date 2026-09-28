@@ -25,6 +25,7 @@
 use crate::model::covering;
 use crate::parse::Name;
 use crate::{Bias, Object, PlacedAddress, Section, SectionAddress, SymbolData};
+use bstr::BStr;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::Path;
@@ -97,6 +98,10 @@ enum Backend {
     Unreadable(Unreadable),
 }
 
+/// What a walk over every row hands each one to: its range, the file it names as the debug
+/// info spells it, and its line.
+pub(super) type VisitRow<'a> = dyn FnMut(Range<PlacedAddress>, &[u8], u32) + 'a;
+
 /// A debug file that is the image's own but whose tables will not read. It answers nothing
 /// and counts as one part skipped, so the reader is told rather than shown an object with no
 /// debug info.
@@ -109,7 +114,7 @@ impl LineBackend for Unreadable {
         None
     }
 
-    fn each_row(&self, _: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {}
+    fn each_row(&self, _: &mut VisitRow<'_>) {}
 
     fn skipped(&self) -> usize {
         1
@@ -149,7 +154,7 @@ trait LineBackend {
 
     /// Every row that names a file and a line, handed to `visit` as `(range, file, line)`.
     /// A backend may hold its own lock for the whole walk; see [`DebugInfo::each_row`].
-    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32));
+    fn each_row(&self, visit: &mut VisitRow<'_>);
 
     /// How many parts of the debug info the backend has so far read only in part, or not at
     /// all, because something in them would not read ([`Skipped`]).
@@ -292,7 +297,7 @@ impl DebugInfo {
     /// Whether the walk finished: `false` when a backend panicked part way, after `visit` may
     /// already have been handed some of the rows. Not under [`net`](Self::net): the index
     /// counts a walk that did not finish itself.
-    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) -> bool {
+    fn each_row(&self, visit: &mut VisitRow<'_>) -> bool {
         without_panicking(|| self.backend().each_row(visit)).is_some()
     }
 
@@ -414,13 +419,13 @@ struct RowCollector {
     bias: Bias,
     rows: Vec<LineRow>,
     files: Vec<FileEntry>,
-    indices: HashMap<Arc<str>, usize>,
+    indices: HashMap<Arc<BStr>, usize>,
 }
 
-/// One source file that rows name: its name as the debug info spells it, and the checksum
-/// the debug info recorded for it, where it did.
+/// One source file that rows name: its name as the debug info spells it, which need not be
+/// UTF-8, and the checksum the debug info recorded for it, where it did.
 struct FileEntry {
-    name: Arc<str>,
+    name: Arc<BStr>,
     hash: Option<SourceHash>,
 }
 
@@ -446,11 +451,11 @@ impl RowCollector {
 
     /// The index a file name will have in [`LineInfo::files`], interning it on first sight
     /// along with the hash recorded for it — the first hash seen for a name is the one kept.
-    fn file(&mut self, name: &str, hash: Option<SourceHash>) -> usize {
-        match self.indices.get(name) {
+    fn file(&mut self, name: &[u8], hash: Option<SourceHash>) -> usize {
+        match self.indices.get(BStr::new(name)) {
             Some(index) => *index,
             None => {
-                let name: Arc<str> = Arc::from(name);
+                let name = shared_name(name);
                 let index = self.files.len();
                 self.files.push(FileEntry {
                     name: name.clone(),
@@ -543,6 +548,11 @@ impl RowCollector {
     }
 }
 
+/// A source file's name in an [`Arc`] of its own, as [`LineInfo`] holds one.
+pub fn shared_name(name: &[u8]) -> Arc<BStr> {
+    Arc::from(Box::<BStr>::from(Box::<[u8]>::from(name)))
+}
+
 /// One run of instructions and the source position the debug info gives it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LineRow {
@@ -581,7 +591,10 @@ impl LineInfo {
     /// below the way a backend's rows are, or [`None`] when no row covers anything. Each
     /// row's `file` indexes `files` as given. For code that has line info to stand in for
     /// what a backend would have said — a test of the app's panes, say — and nothing else.
-    pub fn new(rows: Vec<LineRow>, files: Vec<(Arc<str>, Option<SourceHash>)>) -> Option<LineInfo> {
+    pub fn new(
+        rows: Vec<LineRow>,
+        files: Vec<(Arc<BStr>, Option<SourceHash>)>,
+    ) -> Option<LineInfo> {
         let mut collector = RowCollector::whole();
         let indices: Vec<usize> = files
             .iter()
@@ -616,28 +629,29 @@ impl LineInfo {
 
     /// The source files these rows touch, deduplicated, in the order they were first seen.
     /// [`LineRow::file`] is a position in this order, read with [`file`](Self::file).
-    pub fn files(&self) -> impl Iterator<Item = &Arc<str>> {
+    pub fn files(&self) -> impl Iterator<Item = &Arc<BStr>> {
         self.files.iter().map(|entry| &entry.name)
     }
 
     /// The file at this index of [`files`](Self::files), or [`None`] when the index is not a
     /// file's.
-    pub fn file(&self, index: usize) -> Option<&Arc<str>> {
+    pub fn file(&self, index: usize) -> Option<&Arc<BStr>> {
         self.files.get(index).map(|entry| &entry.name)
     }
 
     /// The checksum the debug info recorded for the file of this name, or [`None`] where it
     /// recorded none (DWARF, as read here) or these rows name no such file.
-    pub fn hash_for(&self, file: &str) -> Option<SourceHash> {
+    pub fn hash_for(&self, file: impl AsRef<[u8]>) -> Option<SourceHash> {
+        let file = file.as_ref();
         self.files
             .iter()
-            .find(|entry| *entry.name == *file)
+            .find(|entry| entry.name.as_ref() == file)
             .and_then(|entry| entry.hash)
     }
 
     /// The file at this index and its checksum, for a backend that passes these rows on
     /// through a [`RowCollector`] of its own.
-    fn file_with_hash(&self, index: usize) -> Option<(&str, Option<SourceHash>)> {
+    fn file_with_hash(&self, index: usize) -> Option<(&[u8], Option<SourceHash>)> {
         let entry = self.files.get(index)?;
         Some((&entry.name, entry.hash))
     }
@@ -660,7 +674,7 @@ impl LineInfo {
     /// [`None`] where no file is named at all. Where no row names one but these rows came
     /// with a file anyway — every row that named it was clipped away — that file is the
     /// answer and no line comes with it.
-    pub fn opening(&self, address: SectionAddress) -> Option<(&Arc<str>, Option<u32>)> {
+    pub fn opening(&self, address: SectionAddress) -> Option<(&Arc<BStr>, Option<u32>)> {
         let opening = self
             .row_at(address)
             .filter(|row| row.file.is_some())

@@ -7,6 +7,7 @@
 
 use super::RowCollector;
 use crate::{Bias, LineInfo, PlacedAddress, SectionAddress};
+use bstr::BStr;
 use std::ops::Range;
 
 /// A row as a backend hands it over, in the placed space it reads in.
@@ -55,7 +56,7 @@ fn a_row_below_the_query_is_dropped_rather_than_wrapped() {
 }
 
 /// What [`LineInfo::opening`] says, as a pair that is easy to write down.
-fn opening(info: &LineInfo, address: u64) -> Option<(&str, Option<u32>)> {
+fn opening(info: &LineInfo, address: u64) -> Option<(&BStr, Option<u32>)> {
     info.opening(SectionAddress::new(address))
         .map(|(file, line)| (&**file, line))
 }
@@ -65,16 +66,16 @@ fn opening(info: &LineInfo, address: u64) -> Option<(&str, Option<u32>)> {
 #[test]
 fn the_opening_file_and_line_are_one_rows() {
     let mut rows = RowCollector::whole();
-    let file = rows.file("a.c", None);
+    let file = rows.file(b"a.c", None);
     rows.push(placed(0..4), None, None, None);
     rows.push(placed(4..8), Some(file), Some(7), None);
     let info = rows.finish().unwrap();
 
     // The prologue names no file, so the first row that does answers both.
-    assert_eq!(opening(&info, 0), Some(("a.c", Some(7))));
-    assert_eq!(opening(&info, 4), Some(("a.c", Some(7))));
+    assert_eq!(opening(&info, 0), Some((BStr::new("a.c"), Some(7))));
+    assert_eq!(opening(&info, 4), Some((BStr::new("a.c"), Some(7))));
     // Past every row, the same fallback.
-    assert_eq!(opening(&info, 0x100), Some(("a.c", Some(7))));
+    assert_eq!(opening(&info, 0x100), Some((BStr::new("a.c"), Some(7))));
 }
 
 /// A file the query clipped every row of is still the opening file, and no line comes with
@@ -82,12 +83,12 @@ fn the_opening_file_and_line_are_one_rows() {
 #[test]
 fn a_file_no_surviving_row_names_opens_with_no_line() {
     let mut rows = RowCollector::over(placed(0x10..0x20), Bias::NONE);
-    let file = rows.file("a.c", None);
+    let file = rows.file(b"a.c", None);
     rows.push(placed(0..0x10), Some(file), Some(3), None);
     rows.push(placed(0x10..0x18), None, None, None);
     let info = rows.finish().unwrap();
 
-    assert_eq!(opening(&info, 0x10), Some(("a.c", None)));
+    assert_eq!(opening(&info, 0x10), Some((BStr::new("a.c"), None)));
 }
 
 /// Rows that name no file at all open nowhere.

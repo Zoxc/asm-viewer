@@ -10,6 +10,7 @@ use crate::{
     Import, LoadMessage, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress,
     SymbolData,
 };
+use bstr::BString;
 use object::pe;
 use object::read::macho::{MachHeader, MachOFile};
 use object::read::pe::{ImageNtHeaders, ImageOptionalHeader as _, PeFile};
@@ -30,11 +31,11 @@ use std::{
 /// [`Name::Symbol`] is offered to the demanglers.
 pub(crate) enum Name {
     /// The file's own spelling, or a debug file's decorated one: offered to the demanglers.
-    Symbol(String),
+    Symbol(BString),
     /// A debug file's name that is already fit to show, which no demangler has anything to
     /// say about.
-    Informative(String),
-    /// One of ours, rendered to a `String` only when the symbol is built, which keeps it
+    Informative(BString),
+    /// One of ours, rendered to bytes only when the symbol is built, which keeps it
     /// too ([`SymbolData::made_up`]).
     MadeUp(MadeUp),
 }
@@ -164,7 +165,7 @@ fn declared_code(
     };
 
     // An import the symbol table already named is not listed twice.
-    let mut imported: HashSet<String> = imports.named.iter().map(|i| i.name.clone()).collect();
+    let mut imported: HashSet<BString> = imports.named.iter().map(|i| i.name.clone()).collect();
     // The stated addresses of the dynamic functions whose code is somewhere else.
     let mut moved = HashSet::new();
     // The defined ones whose names will not read. Like the symbol table's, each is called by
@@ -181,7 +182,7 @@ fn declared_code(
         if symbol.is_undefined() {
             match name {
                 Ok(name) => {
-                    let name = String::from_utf8_lossy(name).into_owned();
+                    let name = BString::from(name);
                     if imported.insert(name.clone()) {
                         let address = addresses.import(symbol.address());
                         imports.named.push(import(name, address));
@@ -204,11 +205,7 @@ fn declared_code(
         }
         let address = SectionAddress::new(code.address);
         match name {
-            Ok(name) => take(
-                Name::Symbol(String::from_utf8_lossy(name).into_owned()),
-                address,
-                code.size,
-            ),
+            Ok(name) => take(Name::Symbol(BString::from(name)), address, code.size),
             Err(_) => unnamed.push((address, code.size)),
         }
     }
@@ -258,7 +255,7 @@ fn declared_code(
             continue;
         }
         take(
-            Name::Symbol(String::from_utf8_lossy(name).into_owned()),
+            Name::Symbol(BString::from(name)),
             SectionAddress::new(addresses.export(address)),
             None,
         );
@@ -742,9 +739,9 @@ fn read_word(
 /// same function twice. It is dropped, and its size, which is the code's where `foo`'s
 /// was the descriptor's, goes to `foo`.
 fn drop_dot_names(named: &mut Vec<Pending>) {
-    fn spelled(pending: &Pending) -> Option<&str> {
+    fn spelled(pending: &Pending) -> Option<&[u8]> {
         match &pending.name {
-            Name::Symbol(name) => Some(name),
+            Name::Symbol(name) => Some(name.as_slice()),
             _ => None,
         }
     }
@@ -752,7 +749,7 @@ fn drop_dot_names(named: &mut Vec<Pending>) {
         .iter()
         .enumerate()
         .filter_map(|(index, pending)| {
-            let name = spelled(pending)?.strip_prefix('.')?;
+            let name = spelled(pending)?.strip_prefix(b".")?;
             Some(((name, pending.address, pending.section), index))
         })
         .collect();
@@ -802,15 +799,19 @@ fn code_sections(
 /// Parse `data` as a single object file. `name` is the display name (an archive member name
 /// or the file name) and `path` the file it came from. Anything that fails to parse yields
 /// [`None`]. `data` is kept in the returned [`Object`]; see [`ObjectData`].
-pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc<Object>> {
-    parse_unshared(data, name, path).ok().map(Arc::new)
+pub fn parse_object(
+    data: ObjectData,
+    name: impl Into<BString>,
+    path: PathBuf,
+) -> Option<Arc<Object>> {
+    parse_unshared(data, name.into(), path).ok().map(Arc::new)
 }
 
 /// [`parse_object`] before the [`Arc`], for a caller with a message to add, and with what
 /// `object` said when the file would not parse.
 pub(crate) fn parse_unshared(
     data: ObjectData,
-    name: String,
+    name: BString,
     path: PathBuf,
 ) -> Result<Object, object::Error> {
     let file = object::File::parse(data.bytes())?;
@@ -1024,7 +1025,7 @@ fn symbol_table(file: &object::File<'_>, addresses: &CodeAddresses<'_, '_>) -> S
             let imports = &mut table.imports;
             match symbol.name_bytes() {
                 Ok(name) => {
-                    let name = String::from_utf8_lossy(name).into_owned();
+                    let name = BString::from(name);
                     let address = addresses.import(symbol.address());
                     imports.named.push(import(name, address));
                 }
@@ -1056,9 +1057,7 @@ fn symbol_table(file: &object::File<'_>, addresses: &CodeAddresses<'_, '_>) -> S
             section: code.section,
         };
         match symbol.name_bytes() {
-            Ok(name) => table.named.push(pending(Name::Symbol(
-                String::from_utf8_lossy(name).into_owned(),
-            ))),
+            Ok(name) => table.named.push(pending(Name::Symbol(BString::from(name)))),
             Err(_) => table
                 .unnamed
                 .push(pending(Name::MadeUp(MadeUp::Function(address)))),
@@ -1081,7 +1080,7 @@ fn weak_external(file: &object::File<'_>, symbol: &object::Symbol<'_, '_>) -> bo
 }
 
 /// An import named `name` at the address a symbol table states for it, where one does.
-fn import(name: String, address: u64) -> Import {
+fn import(name: BString, address: u64) -> Import {
     Import {
         name,
         address: (address != 0).then(|| SectionAddress::new(address)),
@@ -1164,7 +1163,7 @@ fn symbol_data(
             Name::Informative(name) => build(index, name, None, None, address, size, section),
             Name::MadeUp(made_up) => build(
                 index,
-                made_up.to_string(),
+                made_up.to_string().into(),
                 None,
                 Some(made_up),
                 address,

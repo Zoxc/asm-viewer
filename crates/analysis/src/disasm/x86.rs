@@ -2,6 +2,7 @@
 
 use super::{Code, Disassembler, Instruction, Operand, SpanKind, SymbolName};
 use crate::{SectionAddress, SymbolData};
+use bstr::ByteSlice;
 use iced_x86::Formatter;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -390,7 +391,9 @@ impl iced_x86::SymbolResolver for RelocationResolver {
                     .position(|pending| pending.field.is_none())
             })?;
         let symbol = armed.pending.remove(at).symbol;
-        let name = symbol.display().to_owned();
+        // The formatter writes text, so a name that is not UTF-8 is written lossily here;
+        // `SymbolName::symbol` still has the bytes.
+        let name = symbol.display().to_str_lossy().into_owned();
         armed.taken.push(symbol);
         // The symbol's address has to be the one asked about: the formatter prints the
         // difference between the two after the name.

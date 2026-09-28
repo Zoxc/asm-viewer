@@ -52,15 +52,15 @@ enum Piece {
 
 /// An instruction's links, in the order [`doors_of`] gives their doors: the span of
 /// `format` each replaces, or [`None`] for one appended after the row, and what it says.
-/// A relocation's link says the target's own name -- what [`SymbolData::display`] says,
-/// the rule the disassembler substituted the operand by -- and a branch's or a call's the
-/// number the formatter printed. A row has a name for each operand a relocation named,
+/// A relocation's link says the target's own name as text -- what [`SymbolData::display`]
+/// says, the rule the disassembler substituted the operand by -- and a branch's or a
+/// call's the number the formatter printed. A row has a name for each operand a relocation named,
 /// and one number at most.
 ///
 /// The crate records a span into `format`'s own length, so the bounds only guard a
 /// listing built by hand: a name whose span is past the end is appended, and a number
 /// whose span is past it is no link.
-fn links(instruction: &Instruction) -> Vec<(Option<usize>, &str)> {
+fn links(instruction: &Instruction) -> Vec<(Option<usize>, Cow<'_, str>)> {
     let format = &instruction.format;
     match &instruction.operand {
         Some(Operand::Names(names)) => names
@@ -68,13 +68,13 @@ fn links(instruction: &Instruction) -> Vec<(Option<usize>, &str)> {
             .map(|name| {
                 (
                     name.span.filter(|&i| i < format.len()),
-                    name.symbol.display(),
+                    name.symbol.display().to_str_lossy(),
                 )
             })
             .collect(),
         Some(Operand::Branch { span, .. } | Operand::Call { span, .. }) => format
             .get(*span)
-            .map(|(text, _)| (Some(*span), text.as_str()))
+            .map(|(text, _)| (Some(*span), Cow::Borrowed(text.as_str())))
             .into_iter()
             .collect(),
         Some(Operand::Placeholder) | None => Vec::new(),
@@ -90,7 +90,7 @@ fn links(instruction: &Instruction) -> Vec<(Option<usize>, &str)> {
 /// **The one walk both halves of a row are built from**: the line it copies
 /// ([`text_of`]) and the spans it draws ([`instruction_text`]), so a column into one is a
 /// column into the other.
-fn pieces(instruction: &Instruction) -> Vec<(&str, Piece)> {
+fn pieces(instruction: &Instruction) -> Vec<(Cow<'_, str>, Piece)> {
     let links = links(instruction);
     let mut pieces = instruction
         .format
@@ -98,15 +98,15 @@ fn pieces(instruction: &Instruction) -> Vec<(&str, Piece)> {
         .enumerate()
         .map(
             |(i, (text, kind))| match links.iter().position(|&(at, _)| at == Some(i)) {
-                Some(link) => (links[link].1, Piece::Link(link)),
-                None => (text.as_str(), Piece::Span(*kind)),
+                Some(link) => (links[link].1.clone(), Piece::Link(link)),
+                None => (Cow::Borrowed(text.as_str()), Piece::Span(*kind)),
             },
         )
         .collect::<Vec<_>>();
-    for (link, &(at, text)) in links.iter().enumerate() {
+    for (link, (at, text)) in links.iter().enumerate() {
         if at.is_none() {
-            pieces.push((" ", Piece::Span(SpanKind::Other)));
-            pieces.push((text, Piece::Link(link)));
+            pieces.push((Cow::Borrowed(" "), Piece::Span(SpanKind::Other)));
+            pieces.push((text.clone(), Piece::Link(link)));
         }
     }
     pieces
@@ -123,7 +123,7 @@ fn text_of(instruction: &Instruction) -> (Line, Vec<(usize, Range<usize>)>) {
     let mut links = Vec::new();
     for (piece, kind) in pieces(instruction) {
         let start = text.len();
-        text.push_str(piece);
+        text.push_str(&piece);
         if let Piece::Link(link) = kind {
             links.push((link, start..text.len()));
         }
@@ -1125,7 +1125,7 @@ fn instruction_text(
                 ),
                 Piece::Link(link) => (rest(link), FontWeight::NORMAL),
             };
-            Span::new(text.to_owned())
+            Span::new(text.into_owned())
                 .color(colour)
                 .font_weight(weight)
                 .assembly_font()

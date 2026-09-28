@@ -11,7 +11,7 @@ use std::{
     sync::Arc,
 };
 
-use analysis::{Object, PlacedAddress, SectionAddress, Symbol, SymbolData};
+use analysis::{BStr, Object, PlacedAddress, SectionAddress, Symbol, SymbolData};
 
 use crate::counter;
 use crate::docs::{DocId, Entry};
@@ -221,7 +221,7 @@ struct Loaded<'a> {
 enum Lookup<'a> {
     /// Indexed by the file and member name a saved place names an object by: what a
     /// restore builds, one pass for the many lookups that follow.
-    Index(HashMap<(&'a Path, &'a str), &'a Arc<Object>>),
+    Index(HashMap<(&'a Path, &'a BStr), &'a Arc<Object>>),
     /// The list itself, scanned. What a **single** lookup uses, since building the index
     /// would cost more than the one scan it saves: [`SavedDocument::resolve_by_name`],
     /// asked per bookmark and again per drawn row.
@@ -240,7 +240,7 @@ impl<'a> Loaded<'a> {
         for object in objects.iter().filter(|object| !object.is_placeholder()) {
             // First in the list wins both, which is where a scan of it stopped.
             index
-                .entry((object.path.as_path(), object.name.as_str()))
+                .entry((object.path.as_path(), object.name.as_ref()))
                 .or_insert(object);
             first.entry(object.path.as_path()).or_insert(object);
         }
@@ -448,7 +448,7 @@ impl SavedDocument {
     /// function they never opened.
     fn find_symbol<'a>(
         object: &'a Object,
-        name: &str,
+        name: &[u8],
         address: SectionAddress,
         rebuilt: bool,
     ) -> Option<&'a Arc<SymbolData>> {

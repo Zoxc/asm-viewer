@@ -4,7 +4,7 @@
 
 mod common;
 
-use analysis::{LineInfo, LineRow, SectionAddress, SourceDigests, SourceHash};
+use analysis::{shared_name, BStr, LineInfo, LineRow, SectionAddress, SourceDigests, SourceHash};
 use std::sync::Arc;
 
 fn hex(text: &str) -> Vec<u8> {
@@ -40,8 +40,10 @@ fn the_three_digests_are_the_published_vectors_for_abc() {
 #[test]
 fn line_info_built_by_hand_holds_the_invariants() {
     let md5 = SourceHash::Md5([7; 16]);
-    let files: Vec<(Arc<str>, Option<SourceHash>)> =
-        vec![(Arc::from("a.c"), Some(md5)), (Arc::from("b.c"), None)];
+    let files: Vec<(Arc<BStr>, Option<SourceHash>)> = vec![
+        (shared_name(b"a.c"), Some(md5)),
+        (shared_name(b"b.c"), None),
+    ];
     let row = |start, end, file, line| LineRow {
         range: SectionAddress::new(start)..SectionAddress::new(end),
         file: Some(file),

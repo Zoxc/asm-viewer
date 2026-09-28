@@ -16,7 +16,7 @@ use std::{
     sync::Arc,
 };
 
-use analysis::{BinaryFormat, Object, Severity};
+use analysis::{BinaryFormat, ByteSlice, Object, Severity};
 
 use crate::filter::Matcher;
 use crate::shared::Shared;
@@ -282,7 +282,7 @@ fn file(
     }
 
     if let ([object], false) = (group, loading) {
-        if !matcher.matches(&object.name) {
+        if !matcher.matches(&object.name.to_str_lossy()) {
             return Vec::new();
         }
         return vec![TreeRow::Object {
@@ -295,7 +295,7 @@ fn file(
     let whole = matcher.matches(&name);
     let members: Vec<&Arc<Object>> = group
         .iter()
-        .filter(|object| whole || matcher.matches(&object.name))
+        .filter(|object| whole || matcher.matches(&object.name.to_str_lossy()))
         .collect();
     if members.is_empty() {
         return Vec::new();

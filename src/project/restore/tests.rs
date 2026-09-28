@@ -56,7 +56,7 @@ fn with_symbols(
 ) -> Arc<Object> {
     let section = Arc::new(Section::text(
         SectionIndex(0),
-        ".text".into(),
+        ".text",
         vec![0xC3; code],
         SectionAddress::new(0),
         BTreeMap::new(),
@@ -1705,7 +1705,7 @@ fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
     ] {
         let found = find(name, address, &unchanged).expect(name);
         assert_eq!(
-            (found.name.as_str(), found.address),
+            (std::str::from_utf8(&found.name).unwrap(), found.address),
             (name, SectionAddress::new(address))
         );
     }

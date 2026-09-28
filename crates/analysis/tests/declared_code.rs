@@ -6,7 +6,7 @@
 
 mod common;
 
-use analysis::LoadMessage;
+use analysis::{ByteSlice, LoadMessage};
 use common::{
     at, elf_image, elf_shared_object, macho_arm_executable, macho_executable, named, parse, pe_dll,
     ElfImage, ExportedSymbol, ImageSection, ImageSymbol, SharedObject, MACHO_ARM_TEXT,
@@ -66,7 +66,7 @@ fn a_shared_object_with_no_symbol_table_still_lists_its_exports() {
     let mut names: Vec<&str> = object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| symbol.name.to_str().unwrap())
         .collect();
     names.sort_unstable();
     // `a_global` is an `STT_OBJECT` in `.data`: declared, exported, and not code.
@@ -82,7 +82,10 @@ fn a_shared_object_with_no_symbol_table_still_lists_its_exports() {
     // Each of them landed in `.text`, which is what gives them bytes at all.
     for symbol in &object.symbols_sorted {
         assert_eq!(
-            symbol.section.as_ref().map(|section| section.name.as_str()),
+            symbol
+                .section
+                .as_ref()
+                .map(|section| section.name.to_str().unwrap()),
             Some(".text"),
         );
     }
@@ -95,7 +98,7 @@ fn a_dll_with_no_coff_symbol_table_still_lists_its_exports() {
     let mut names: Vec<&str> = object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| symbol.name.to_str().unwrap())
         .collect();
     names.sort_unstable();
     // The PE export table says nothing about kind, so `a_global` is dropped purely
@@ -119,7 +122,7 @@ fn an_image_declaring_no_entry_point_grows_no_entry_symbol() {
         let names: Vec<&str> = object
             .symbols_sorted
             .iter()
-            .map(|symbol| symbol.name.as_str())
+            .map(|symbol| symbol.name.to_str().unwrap())
             .collect();
         assert!(
             !names.contains(&"<entry point>"),
@@ -185,7 +188,7 @@ fn an_entry_point_on_an_exported_function_is_one_symbol_not_two() {
     let names: Vec<&str> = object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| symbol.name.to_str().unwrap())
         .collect();
     assert_eq!(names.len(), 2, "{names:?}");
     assert!(!names.contains(&"<entry point>"), "{names:?}");
@@ -267,7 +270,7 @@ fn a_relocatable_object_declares_no_entry_point_however_the_header_reads() {
     let mut names: Vec<&str> = object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| symbol.name.to_str().unwrap())
         .collect();
     names.sort_unstable();
     assert_eq!(names, ["caller", "target"]);
@@ -302,7 +305,7 @@ fn an_export_that_is_already_a_symbol_table_entry_is_not_listed_twice() {
     let mut names: Vec<&str> = object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| symbol.name.to_str().unwrap())
         .collect();
     names.sort_unstable();
     assert_eq!(names, ["first_internal", "second"]);
@@ -452,7 +455,7 @@ fn a_pe_export_whose_name_will_not_read_is_skipped_and_counted() {
     let mut names: Vec<&str> = object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| symbol.name.to_str().unwrap())
         .collect();
     names.sort_unstable();
     assert_eq!(names, ["second"], "`first` is named by nothing else");

@@ -17,7 +17,7 @@ use super::*;
 pub(crate) fn stop_text(stop: &Stop) -> String {
     match stop.place() {
         Place::Code(object, address) => match object.symbol_at_placed(address) {
-            Some(symbol) => short_name(symbol.display()),
+            Some(symbol) => short_name(&symbol.display().to_str_lossy()),
             None => Names::of(&stop.document).text,
         },
         Place::Source(line) => format!("{}:{line}", Names::of(&stop.document).text),
@@ -51,17 +51,21 @@ impl Names {
     pub(crate) fn of(entry: &Document) -> Names {
         match entry {
             Document::Symbol(symbol) => {
-                let whole = symbol.data.display().to_owned();
+                let whole = symbol.data.display().to_str_lossy().into_owned();
                 Names {
                     text: short_name(&whole),
                     tooltip: whole.clone(),
                     whole,
                 }
             }
-            Document::Object(object) => Names::whole_of(object.name.clone(), object.name.clone()),
-            Document::Code(object) => {
-                Names::whole_of(object.name.clone(), object.path.display().to_string())
+            Document::Object(object) => {
+                let name = object.name.to_str_lossy().into_owned();
+                Names::whole_of(name.clone(), name)
             }
+            Document::Code(object) => Names::whole_of(
+                object.name.to_str_lossy().into_owned(),
+                object.path.display().to_string(),
+            ),
             Document::Source(file) => {
                 Names::whole_of(source::name_of(file), file.display().to_string())
             }

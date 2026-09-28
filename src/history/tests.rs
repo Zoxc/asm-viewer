@@ -354,7 +354,7 @@ fn restoring_collapses_duplicates_before_capping() {
 /// [`Document::in_file`], which is `project.rs`'s to test.
 fn named(entry: &Document) -> &str {
     match entry {
-        Document::Object(object) => &object.name,
+        Document::Object(object) => std::str::from_utf8(&object.name).unwrap(),
         _ => unreachable!("the entries here are all objects"),
     }
 }

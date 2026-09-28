@@ -8,7 +8,7 @@
 
 mod common;
 
-use analysis::{Object, SymbolData};
+use analysis::{shared_name, BString, Object, SymbolData};
 use common::{
     elf_x86_64_with_dwarf, parse, DwarfFixture, DwarfRow, DwarfSection, TextSymbol, UnitRanges,
 };
@@ -19,11 +19,11 @@ const MAIN: &str = "/src/main.c";
 const OTHER: &str = "/src/other.c";
 
 /// The names a query answers with, which is what the expectations are written in.
-fn at(object: &Object, file: &str, line: u32) -> Vec<String> {
+fn at(object: &Object, file: &str, line: u32) -> Vec<BString> {
     named(object.symbols_from_lines(file, line..=line))
 }
 
-fn named(symbols: Vec<Arc<SymbolData>>) -> Vec<String> {
+fn named(symbols: Vec<Arc<SymbolData>>) -> Vec<BString> {
     symbols.iter().map(|symbol| symbol.name.clone()).collect()
 }
 
@@ -374,13 +374,13 @@ fn an_object_names_every_file_its_code_came_from() {
     // Both files, and each said once however many symbols it names.
     assert_eq!(
         object.source_files(),
-        [Arc::<str>::from(MAIN), Arc::from(OTHER)]
+        [shared_name(MAIN.as_bytes()), shared_name(OTHER.as_bytes())]
     );
 
     // Every name it hands out answers the questions beside it.
     for file in object.source_files() {
         assert!(
-            !object.lines_from_source(&file).is_empty(),
+            !object.lines_from_source(&*file).is_empty(),
             "{file} names no line"
         );
     }
@@ -401,7 +401,7 @@ fn a_files_name_is_the_comp_dir_joined_onto_it() {
     let object = parse(&shared_line());
 
     // `files: &["main.c", "other.c"]` under `comp_dir: "/src"`.
-    assert_eq!(object.source_files()[0], Arc::<str>::from("/src/main.c"));
+    assert_eq!(object.source_files()[0], shared_name(b"/src/main.c"));
     // And the joined name is the only one the questions answer to.
     assert_eq!(at(&object, "/src/main.c", 10), ["first", "second"]);
     assert!(object.symbols_from_lines("main.c", 10..=10).is_empty());
@@ -451,9 +451,9 @@ fn the_files_are_in_name_order() {
     assert_eq!(
         object.source_files(),
         [
-            Arc::<str>::from("/src/a.c"),
-            Arc::from("/src/m.c"),
-            Arc::from("/src/z.c")
+            shared_name(b"/src/a.c"),
+            shared_name(b"/src/m.c"),
+            shared_name(b"/src/z.c")
         ]
     );
 }

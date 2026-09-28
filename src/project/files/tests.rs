@@ -120,7 +120,7 @@ pub(in crate::project) fn session_with(selection: Option<&str>) -> Session {
 pub(in crate::project) fn saved_object(name: &str) -> SavedDocument {
     SavedDocument::Object {
         path: PathBuf::from("/tmp/lib.a"),
-        object_name: name.to_owned(),
+        object_name: name.into(),
         shown: SavedShown::Symbols,
     }
 }
@@ -132,8 +132,8 @@ pub(in crate::project) fn saved_symbol(
 ) -> SavedDocument {
     SavedDocument::Symbol {
         path: PathBuf::from("/tmp/lib.a"),
-        object_name: object_name.to_owned(),
-        symbol_name: SavedName::File(symbol_name.to_owned()),
+        object_name: object_name.into(),
+        symbol_name: SavedName::File(symbol_name.into()),
         address,
     }
 }
@@ -182,6 +182,22 @@ fn toml_round_trips() {
     let text = round_trip(&session);
     // The externally tagged enum is a table named after its variant.
     assert!(text.contains("[active.Symbol]"), "{text}");
+}
+
+/// A name the file states need not be UTF-8, and a place on one comes back as it went.
+#[test]
+fn a_name_that_is_not_utf8_is_written_as_its_bytes() {
+    let session = Session {
+        active: Some(SavedDocument::Symbol {
+            path: PathBuf::from("/tmp/lib.a"),
+            object_name: (&b"b\xFF.o"[..]).into(),
+            symbol_name: SavedName::File((&b"call\xFFer"[..]).into()),
+            address: 0x1234,
+        }),
+        history: SavedHistory::default(),
+        ..Session::default()
+    };
+    round_trip(&session);
 }
 
 #[test]

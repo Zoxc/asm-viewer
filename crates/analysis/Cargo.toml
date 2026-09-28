@@ -8,6 +8,10 @@ object = "0.40.0"
 symbolic-demangle = "13.9.0"
 symbolic-common = "13.9.0"
 iced-x86 = "1.20.0"
+# The names a file states, which are bytes and not always UTF-8: `BString` keeps them as the
+# file spelled them, and prints them lossily. Not a new crate in the build: `ignore` and
+# `grep` already compile this version with the same feature.
+bstr = { version = "1.13", default-features = false, features = ["std"] }
 # DWARF line info. 0.27 is the `addr2line` release that pairs with `object` 0.40 and
 # `gimli` 0.34, and the four move together: `addr2line` names `gimli` and `object` by exact
 # minor, and `object` names `ruzstd`. Check with `cargo tree -p analysis -d` after touching

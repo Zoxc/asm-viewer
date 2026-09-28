@@ -169,17 +169,13 @@ pub(crate) fn answer(question: Question) -> Answer {
             query,
         },
         Question::Marks { file, objects } => Answer::Marked {
-            lines: Arc::new(
-                // A path that is not UTF-8 is no name the debug info says.
-                file.to_str()
-                    .into_iter()
-                    .flat_map(|named| {
-                        objects
-                            .iter()
-                            .flat_map(|object| object.lines_from_source(named))
-                    })
-                    .collect(),
-            ),
+            lines: Arc::new({
+                let named = Vec::from_path_lossy(&file);
+                objects
+                    .iter()
+                    .flat_map(|object| object.lines_from_source(&named))
+                    .collect()
+            }),
             over: object_ids(&objects),
             file,
         },

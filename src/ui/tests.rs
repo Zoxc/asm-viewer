@@ -5284,7 +5284,7 @@ fn two_loads_at_once_keep_a_file_to_one_row() {
 #[test]
 fn an_object_with_a_load_error_is_marked_on_its_row() {
     let wrong = LoadMessage::CodeSectionsOverlap {
-        section: ".text".to_owned(),
+        section: ".text".into(),
         address: 0x1000,
     };
     let mark = |object: &mut Arc<Object>| {
@@ -5993,18 +5993,19 @@ fn a_line_of(symbol: &Symbol) -> LinePos {
         .expect("sum_to's rows name a place");
 
     LinePos {
-        file: Arc::from(Path::new(
-            &**info
+        file: Arc::from(
+            &*info
                 .file(row.file.expect("filtered"))
-                .expect("a row names a file of its own"),
-        )),
+                .expect("a row names a file of its own")
+                .to_path_lossy(),
+        ),
         line: row.line.expect("filtered"),
     }
 }
 
 /// `file` as the debug info names one, for a `LineInfo` built by hand.
-fn named(file: &Path) -> Arc<str> {
-    Arc::from(file.to_str().expect("a utf-8 fixture path"))
+fn named(file: &Path) -> Arc<BStr> {
+    analysis::shared_name(&Vec::from_path_lossy(file))
 }
 
 /// A run of the one row `row` of `file`, picked out in the source pane with `owed` yet to
@@ -6099,7 +6100,7 @@ fn two_lines_of(symbol: &Symbol) -> (LinePos, LinePos) {
         .expect("the fixture has DWARF");
     let mut named = info.rows().iter().filter_map(|row| {
         Some(LinePos {
-            file: Arc::from(Path::new(&**info.file(row.file?)?)),
+            file: Arc::from(&*info.file(row.file?)?.to_path_lossy()),
             line: row.line?,
         })
     });
@@ -6842,7 +6843,7 @@ fn a_lines_locations_come_back_from_every_open_object() {
         .symbols()
         .expect("symbols")
         .iter()
-        .map(|symbol| symbol.data.name.as_str())
+        .map(|symbol| symbol.data.name.to_str().unwrap())
         .collect();
     assert_eq!(names, ["sum_to", "sum_to"]);
     assert!(Arc::ptr_eq(
@@ -9025,7 +9026,7 @@ fn an_instance_query_answers_each_symbol_once() {
         .symbols()
         .expect("symbols")
         .iter()
-        .map(|symbol| symbol.data.name.as_str())
+        .map(|symbol| symbol.data.name.to_str().unwrap())
         .collect();
     assert_eq!(names, ["add", "twice", "sum_to"]);
 
@@ -14781,7 +14782,7 @@ fn the_assembly_pane_names_the_symbol_in_both_spellings() {
         drawn.contains(&symbol.data.demangled.clone().expect("it is demangled")),
         "{drawn:?}"
     );
-    assert!(drawn.contains(&symbol.data.name), "{drawn:?}");
+    assert!(drawn.contains(&symbol.data.name.to_string()), "{drawn:?}");
 }
 
 /// **The bar names what the pane is drawing and not what is selected.** The two disagree
@@ -14812,9 +14813,12 @@ fn the_bar_names_the_drawn_symbol_and_not_the_tab() {
     settle(&mut test);
 
     let drawn = labels(&test);
-    assert!(drawn.contains(&drawn_symbol.data.name), "{drawn:?}");
     assert!(
-        !drawn.contains(&elsewhere.data.name),
+        drawn.contains(&drawn_symbol.data.name.to_string()),
+        "{drawn:?}"
+    );
+    assert!(
+        !drawn.contains(&elsewhere.data.name.to_string()),
         "the bar named the tab's symbol and not the drawn one: {drawn:?}"
     );
 }
@@ -14840,7 +14844,7 @@ fn an_object_tab_is_named_by_its_object() {
     settle(&mut test);
 
     let drawn = labels(&test);
-    assert!(drawn.contains(&object.name), "{drawn:?}");
+    assert!(drawn.contains(&object.name.to_string()), "{drawn:?}");
     // The body still says there is no listing, which is the other half of the answer.
     assert!(
         drawn.contains(&"No symbol selected".to_owned()),
@@ -14938,8 +14942,8 @@ fn the_expanded_section_says_what_the_info_pane_said() {
         .as_ref()
         .expect("sum_to is in a section")
         .name
-        .clone();
-    let object = sum_to.object.name.clone();
+        .to_string();
+    let object = sum_to.object.name.to_string();
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
         studied: Studied::new(sum_to.clone()),
@@ -19829,10 +19833,10 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
         .cloned()
         .expect("the fixture names its source");
     let line = *object
-        .lines_from_source(&file)
+        .lines_from_source(&*file)
         .first()
         .expect("the fixture has code from it");
-    let opening = compiled::lowest_placed(&object, &object.symbols_from_lines(&file, line..=line))
+    let opening = compiled::lowest_placed(&object, &object.symbols_from_lines(&*file, line..=line))
         .expect("an address");
 
     // The program the build already read, told which file is the pad's own: the fixture's
@@ -19842,7 +19846,7 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
     {
         let mut pads = pad.write();
         let program = pads.state_mut().program.as_mut().expect("a program");
-        program.file = Some(Arc::from(Path::new(&*file)));
+        program.file = Some(Arc::from(&*file.to_path_lossy()));
         program.opening = Some(opening);
     }
     // A buffer with room for that line in it, the cursor being bounded by the rope.
@@ -24362,7 +24366,7 @@ fn calling_into_the_middle() -> (Arc<Object>, PlacedAddress) {
     text.push(0xC3);
     let section = Arc::new(Section::text(
         SectionIndex(1),
-        ".text".into(),
+        ".text",
         text.clone(),
         SectionAddress::new(0),
         std::collections::BTreeMap::new(),
@@ -24504,7 +24508,7 @@ fn under_another_section() -> Symbol {
     let section = |index, name: &str, address, bytes: &[u8]| {
         Arc::new(Section::text(
             SectionIndex(index),
-            name.into(),
+            name,
             bytes.to_vec(),
             SectionAddress::new(address),
             std::collections::BTreeMap::new(),
@@ -27065,7 +27069,7 @@ fn the_arrows_onto_a_dead_bookmark_leave_it_picked_out() {
         bookmark_of(&Document::Symbol(symbols[0].clone())),
     ]));
     settle(&mut test);
-    let dead = label_area(&test, &symbols[0].data.name)
+    let dead = label_area(&test, &symbols[0].data.name.to_string())
         .expect("the dead bookmark is drawn")
         .origin
         .y;
@@ -27293,7 +27297,7 @@ fn a_symbol_row_names_its_object_in_the_locations_list_and_not_in_the_symbols_li
         .into_iter()
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
-    let object = wanted.object.name.clone();
+    let object = wanted.object.name.to_string();
 
     let (mut test, states) = TestingRunner::new(
         symbols_harness,
@@ -28409,7 +28413,7 @@ fn a_sweep_selects_across_a_link_and_a_press_still_opens_it() {
     let target = instruction.symbol().cloned().expect("a target");
     let row = lanes.row_of(index);
     let line = instruction_line(&assembly, index);
-    let name = target.display();
+    let name = &*target.display().to_str_lossy();
     let start = line
         .to_string()
         .rfind(name)
@@ -28595,7 +28599,7 @@ fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
     let mut alt = alt;
     alt.set(true);
     settle(&mut test);
-    let link = link_area(&test, target.display()).expect("the link is drawn");
+    let link = link_area(&test, &target.display().to_str_lossy()).expect("the link is drawn");
 
     // The whole gesture, down on the link and up on it: without Alt the down alone opens
     // the symbol (`a_sweep_selects_across_a_link_and_a_press_still_opens_it`).
@@ -28669,7 +28673,7 @@ fn shift_held_reaches_the_run_out_to_a_link_rather_than_following_it() {
 
     shift.set(true);
     settle(&mut test);
-    let link = link_area(&test, target.display()).expect("the link is drawn");
+    let link = link_area(&test, &target.display().to_str_lossy()).expect("the link is drawn");
     press_at(&mut test, inside(link));
     settle(&mut test);
 
@@ -33511,7 +33515,10 @@ fn a_step_on_a_bar_with_no_listing_is_left_where_it_is() {
 #[test]
 fn ctrl_f_reaches_the_filter_box_only_from_the_list_under_it() {
     let symbols = fixture_symbols();
-    let names: Vec<&str> = symbols.iter().map(|symbol| symbol.data.display()).collect();
+    let names: Vec<&str> = symbols
+        .iter()
+        .map(|symbol| symbol.data.display().to_str().unwrap())
+        .collect();
     assert!(names.contains(&"sum_to"));
     let other = names
         .iter()

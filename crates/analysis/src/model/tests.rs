@@ -162,7 +162,7 @@ fn first_covering_answers_what_find_would() {
 #[test]
 fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
     let overlap = LoadMessage::CodeSectionsOverlap {
-        section: ".text.high".to_owned(),
+        section: ".text.high".into(),
         address: 0xffff_fffb,
     };
     assert_eq!(overlap.severity(), Severity::Error);

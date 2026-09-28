@@ -12,6 +12,7 @@
 //! (`src/search.rs`). Its builder is here beside this one, so the two cannot drift apart
 //! unnoticed.
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
@@ -273,17 +274,17 @@ impl<T> PartialEq for Filtered<T> {
 
 impl<T> Filtered<T> {
     /// Filters on the name `name` gives each element -- for a symbol the one the row
-    /// shows, demangled where it has one -- and orders what is left by
+    /// shows, demangled where it has one, as the row draws it -- and orders what is left by
     /// its [`Rank`], the list's own order breaking ties, so the sort is deterministic and
     /// `sort_unstable` is safe.
-    pub fn new(list: Shared<T>, matcher: &Matcher, name: impl Fn(&T) -> &str) -> Self {
+    pub fn new(list: Shared<T>, matcher: &Matcher, name: impl Fn(&T) -> Cow<'_, str>) -> Self {
         let matches = match matcher {
             Matcher::Everything => None,
             matcher => {
                 let mut ranked: Vec<(Rank, usize)> = list
                     .iter()
                     .enumerate()
-                    .filter_map(|(index, item)| Some((matcher.rank(name(item))?, index)))
+                    .filter_map(|(index, item)| Some((matcher.rank(&name(item))?, index)))
                     .collect();
                 ranked.sort_unstable();
                 Some(

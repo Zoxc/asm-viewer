@@ -17,7 +17,7 @@
 
 mod common;
 
-use analysis::{parse_object, LineInfo, Object};
+use analysis::{parse_object, ByteSlice, LineInfo, Object};
 use analysis::{Bias, Section};
 use common::{at, committed_fixture, symbol};
 use object::{Object as _, ObjectKind, ObjectSection, SectionKind};
@@ -455,7 +455,9 @@ fn split_sections_are_each_given_a_place_of_their_own() {
     // gcc leaves the ordinary `.text` in too, empty; a zero-length section still takes an
     // address of its own, so that two of them are two places.
     assert_eq!(
-        code.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        code.iter()
+            .map(|s| s.name.to_str().unwrap())
+            .collect::<Vec<_>>(),
         [".text", ".text.add", ".text.twice", ".text.sum_to"]
     );
     assert!(code[0].code().is_some_and(|code| code.data.is_empty()));

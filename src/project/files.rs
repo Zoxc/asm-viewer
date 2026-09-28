@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use analysis::{MadeUp, SectionAddress, SymbolData};
+use analysis::{BStr, BString, MadeUp, SectionAddress, SymbolData};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::bookmarks::Bookmark;
@@ -540,20 +540,23 @@ pub struct SavedHistory {
 /// plain object — and is needed because one path can contribute many `Object`s, so `path`
 /// alone is ambiguous. [`SavedDocument::Source`]'s `path` is written by [`any_path`] and
 /// not as serde writes a `PathBuf`, which refuses one that is not UTF-8 and so would stop
-/// the whole file being written for one tab.
+/// the whole file being written for one tab. A name the file states is written by
+/// [`any_bytes`], since it need not be UTF-8 either.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SavedDocument {
     /// The whole of an object, shown one of the two ways it can be.
     Object {
         path: PathBuf,
-        object_name: String,
+        #[serde(with = "any_bytes")]
+        object_name: BString,
         /// Which of the two ([`SavedShown`]): the path and the name say both, and this
         /// is all that tells them apart.
         shown: SavedShown,
     },
     Symbol {
         path: PathBuf,
-        object_name: String,
+        #[serde(with = "any_bytes")]
+        object_name: BString,
         address: u64,
         symbol_name: SavedName,
     },
@@ -606,6 +609,35 @@ mod any_path {
     }
 }
 
+/// Bytes as a project file spells them: as text where they are UTF-8, and otherwise as an
+/// array of numbers, as [`any_path`] writes a path.
+mod any_bytes {
+    use analysis::BString;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &BString, serializer: S) -> Result<S::Ok, S::Error> {
+        match std::str::from_utf8(bytes) {
+            Ok(text) => serializer.serialize_str(text),
+            Err(_) => serializer.collect_seq(bytes.iter()),
+        }
+    }
+
+    /// The two ways bytes are written.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Spelled {
+        Text(String),
+        Bytes(Vec<u8>),
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BString, D::Error> {
+        Ok(match Spelled::deserialize(deserializer)? {
+            Spelled::Text(text) => text.into(),
+            Spelled::Bytes(bytes) => bytes.into(),
+        })
+    }
+}
+
 /// Which of the two ways the whole of an object is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SavedShown {
@@ -631,7 +663,7 @@ pub enum SavedShown {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SavedName {
     /// The file's own name, spelled as the file spells it.
-    File(String),
+    File(#[serde(with = "any_bytes")] BString),
     /// A name the app made up: which one, the spelling being a function of that and the
     /// address ([`SavedMadeUp`]).
     MadeUp(SavedMadeUp),
@@ -683,10 +715,10 @@ impl SavedName {
     /// The name a symbol at `address` carries now: the file's own as it was saved, or a
     /// made-up one spelled the way the app spells it today. What the symbol is looked up
     /// by.
-    pub fn text(&self, address: SectionAddress) -> Cow<'_, str> {
+    pub fn text(&self, address: SectionAddress) -> Cow<'_, [u8]> {
         match self {
             SavedName::File(name) => Cow::Borrowed(name),
-            SavedName::MadeUp(made_up) => Cow::Owned(made_up.at(address).to_string()),
+            SavedName::MadeUp(made_up) => Cow::Owned(made_up.at(address).to_string().into()),
         }
     }
 
@@ -734,14 +766,14 @@ impl SavedDocument {
     /// The object this names: its file, and the name it is known in that file by.
     /// `None` for a source file, which names no binary. One question, so nothing that
     /// wants the object answers for a source file as well.
-    pub(super) fn binary(&self) -> Option<(&Path, &str)> {
+    pub(super) fn binary(&self) -> Option<(&Path, &BStr)> {
         match self {
             SavedDocument::Object {
                 path, object_name, ..
             }
             | SavedDocument::Symbol {
                 path, object_name, ..
-            } => Some((path, object_name)),
+            } => Some((path, object_name.as_ref())),
             SavedDocument::Source { .. } => None,
         }
     }

@@ -3,7 +3,7 @@
 
 mod common;
 
-use analysis::{open_data_streaming, parse_object, FileDigest, ObjectData, Progress};
+use analysis::{open_data_streaming, parse_object, ByteSlice, FileDigest, ObjectData, Progress};
 use common::{archive, caller_and_target, dwarf_fixture, parse, symbol};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ fn a_member_is_the_slice_of_the_file_it_lives_in() {
 
     assert_eq!(data.bytes(), &member[..]);
 
-    let object = parse_object(data, "member.o".into(), PathBuf::from("/lib.a"))
+    let object = parse_object(data, "member.o", PathBuf::from("/lib.a"))
         .expect("the member parses on its own");
     assert_eq!(object.data.bytes(), &member[..]);
     assert_eq!(object.symbols_sorted.len(), 2);
@@ -72,7 +72,7 @@ fn a_member_carries_the_digest_of_the_file_it_lives_in() {
     assert_eq!(data.digest(), file.digest());
     assert_ne!(data.digest(), FileDigest::of(&member));
 
-    let object = parse_object(data, "member.o".into(), PathBuf::from("/lib.a"))
+    let object = parse_object(data, "member.o", PathBuf::from("/lib.a"))
         .expect("the member parses on its own");
     assert_eq!(object.data.digest(), FileDigest::of(&bytes));
 }
@@ -147,8 +147,8 @@ fn only_a_code_section_keeps_its_bytes() {
     let debug: Vec<&str> = object
         .sections
         .iter()
-        .filter(|section| section.name.starts_with(".debug_"))
-        .map(|section| section.name.as_str())
+        .filter(|section| section.name.starts_with(b".debug_"))
+        .map(|section| section.name.to_str().unwrap())
         .collect();
     assert!(debug.contains(&".debug_info"), "sections: {debug:?}");
     assert!(symbol(&object, "second").line_info(&object).is_some());

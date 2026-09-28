@@ -4,6 +4,7 @@
 //! under this one begins `use super::*;`. Each `mod x;` is followed by a
 //! `pub(crate) use x::*;`, so a name means the same thing wherever it is written.
 pub(crate) use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
     ops::{ControlFlow, Range, RangeInclusive},
@@ -29,8 +30,9 @@ pub(crate) use freya::text_edit::TextEditor;
 pub(crate) use rfd::AsyncFileDialog;
 
 pub(crate) use analysis::{
-    open_files_streaming, Assembly, Bias, CodeListing, Instruction, LineInfo, Object, Operand,
-    PlacedAddress, Progress, SectionAddress, Severity, SpanKind, Symbol, SymbolData,
+    open_files_streaming, Assembly, BStr, Bias, ByteSlice, ByteVec, CodeListing, Instruction,
+    LineInfo, Object, Operand, PlacedAddress, Progress, SectionAddress, Severity, SpanKind, Symbol,
+    SymbolData,
 };
 
 pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};

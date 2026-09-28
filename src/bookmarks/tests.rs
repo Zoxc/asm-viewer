@@ -13,7 +13,7 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
     let bytes = vec![0xC3; symbols.len()];
     let section = Arc::new(Section::text(
         SectionIndex(0),
-        ".text".into(),
+        ".text",
         bytes,
         SectionAddress::new(0),
         BTreeMap::new(),

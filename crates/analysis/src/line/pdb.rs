@@ -54,9 +54,11 @@
 use super::intervals::Intervals;
 use super::{
     recovered, Declared, LineBackend, LineInfo, RowCollector, Skipped, SourceHash, Unreadable,
+    VisitRow,
 };
 use crate::parse::Name;
 use crate::{open_regular, Bias, Links, PlacedAddress, Regular, SectionAddress};
+use bstr::BString;
 use object::Object as _;
 use pdb2::{
     AddressMap, DebugInformation, FallibleIterator, PdbInternalRva, PdbInternalSectionOffset,
@@ -233,7 +235,7 @@ impl Pdb {
             };
             declared.extend(self.procedures_in(index, &info).into_iter().map(
                 |(address, procedure)| Declared {
-                    name: Name::Informative(procedure.name.to_string().into_owned()),
+                    name: Name::Informative(BString::from(procedure.name.as_bytes())),
                     address,
                     len: Some(u64::from(procedure.len)),
                 },
@@ -288,7 +290,7 @@ impl Pdb {
                 }
             };
             declared.push(Declared {
-                name: Name::Symbol(public.name.to_string().into_owned()),
+                name: Name::Symbol(BString::from(public.name.as_bytes())),
                 address,
                 len: None,
             });
@@ -585,7 +587,7 @@ impl Pdb {
             self.skipped.note(index as u64);
             None
         });
-        Some(rows.file(&name.to_string(), hash))
+        Some(rows.file(name.as_bytes(), hash))
     }
 }
 
@@ -635,7 +637,7 @@ impl LineBackend for Pdb {
     /// one walk of the module list and visited from the table after. Each is loaded under
     /// the PDB's lock and visited once it is released; the `modules` lock is held for no
     /// longer than a lookup.
-    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
+    fn each_row(&self, visit: &mut VisitRow<'_>) {
         let count = self.every_module();
         // That walk remembered every module, so each is only looked up here.
         for module in (0..count).filter_map(|index| self.remembered(index).flatten()) {

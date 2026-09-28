@@ -293,7 +293,7 @@ fn names() -> Shared<String> {
 }
 
 fn filtered(list: Shared<String>, filter: &Filter) -> Filtered<String> {
-    Filtered::new(list, &filter.matcher(), String::as_str)
+    Filtered::new(list, &filter.matcher(), |name| Cow::Borrowed(name.as_str()))
 }
 
 /// Nothing typed leaves the list in its own order, and does it by keeping no indices at

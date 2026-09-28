@@ -15,6 +15,7 @@ use std::{
     sync::{LazyLock, Mutex, MutexGuard},
 };
 
+use analysis::{BStr, ByteSlice};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::cargo;
@@ -65,8 +66,13 @@ pub fn ends_in_source_file(file: &str) -> bool {
 /// arbitrary (`compiled::pick`'s tie-break in a second place): a generated package with
 /// one binary in it has one `src/main.rs`, and a dependency of the pad's that happens to
 /// have one of its own is a program the reader is not asking about.
-pub fn own_source<'a>(files: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
-    files.into_iter().find(|file| ends_in_source_file(file))
+///
+/// Each name is read lossily, which is safe: the test looks only at its end, which is
+/// ASCII.
+pub fn own_source<'a>(files: impl IntoIterator<Item = &'a BStr>) -> Option<&'a BStr> {
+    files
+        .into_iter()
+        .find(|file| ends_in_source_file(&file.to_str_lossy()))
 }
 
 /// Pinned rather than left to cargo's default, so a scratchpad written today still

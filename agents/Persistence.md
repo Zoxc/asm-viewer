@@ -369,7 +369,8 @@ where it is not (`any_path`), which TOML writes as an array of numbers. serde's 
 refuses such a path, and that refusal stops the whole file being written, so one tab or bookmark
 on a file with such a name would have ended every save until it fell off the record. On Windows
 the bytes are not the platform's, so such a path is written lossily and names no file on the
-way back.
+way back. An object's name and a symbol's own spelling are the file's bytes, so they are written
+the same way (`any_bytes`), and a place on a name that is not UTF-8 finds it again.
 
 **One `tabs` list of every kind, not a `tabs` and a `sources` beside it**, because there is one
 bar. An object's whole code is saved by its object's path and name exactly as the object's own tab

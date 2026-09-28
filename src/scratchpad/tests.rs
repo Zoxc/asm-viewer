@@ -593,11 +593,18 @@ fn the_pads_own_file_is_the_one_ending_in_it() {
         "/rustc/1.83.0/library/std/src/rt.rs",
         "/registry/anyhow-1.0.95/src/lib.rs",
         "/pads/pad-3/src/main.rs",
-    ];
-    assert_eq!(own_source(files), Some("/pads/pad-3/src/main.rs"));
+    ]
+    .map(BStr::new);
+    assert_eq!(
+        own_source(files),
+        Some(BStr::new("/pads/pad-3/src/main.rs"))
+    );
 
     // A program naming none of them, and one naming nothing at all.
-    assert_eq!(own_source(["/registry/anyhow-1.0.95/src/lib.rs"]), None);
+    assert_eq!(
+        own_source([BStr::new("/registry/anyhow-1.0.95/src/lib.rs")]),
+        None
+    );
     assert_eq!(own_source([]), None);
 }
 

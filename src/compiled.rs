@@ -17,28 +17,26 @@ use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::Arc;
 
-use analysis::{Object, PlacedAddress, Symbol, SymbolData};
+use analysis::{ByteVec, Object, PlacedAddress, Symbol, SymbolData};
 
 /// Every symbol in `objects` holding code compiled from `file` over `lines`, object by
 /// object and, within one, in the crate's own order: by placed address. A symbol holding
 /// code from several of the lines is one hit; one line is `line..=line`.
 ///
-/// `file` is matched exactly, on the string the debug info said: two objects whose
+/// `file` is matched exactly, on the bytes the debug info said: two objects whose
 /// `DW_AT_comp_dir` disagree do not join, and nothing here asks the filesystem about a
-/// path. A path that is not UTF-8 is no string the debug info says, so it finds nothing.
+/// path.
 pub fn compiled_from(
     objects: &[Arc<Object>],
     file: &Path,
     lines: RangeInclusive<u32>,
 ) -> Vec<Symbol> {
-    let Some(file) = file.to_str() else {
-        return Vec::new();
-    };
+    let file = Vec::from_path_lossy(file);
     objects
         .iter()
         .flat_map(|object| {
             object
-                .symbols_from_lines(file, lines.clone())
+                .symbols_from_lines(&file, lines.clone())
                 .into_iter()
                 .map(|data| Symbol {
                     object: object.clone(),

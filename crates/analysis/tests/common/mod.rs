@@ -4,8 +4,8 @@
 #![allow(dead_code)]
 
 use analysis::{
-    parse_object, CodeListing, Instruction, LineInfo, LineRow, Listing, Object, Operand, Placed,
-    PlacedAddress, Section, SectionAddress, SymbolData,
+    parse_object, ByteSlice, CodeListing, Instruction, LineInfo, LineRow, Listing, Object, Operand,
+    Placed, PlacedAddress, Section, SectionAddress, SymbolData,
 };
 use object::write;
 use object::{
@@ -20,8 +20,7 @@ use std::sync::Arc;
 /// every one of them: nothing asserts on either, and a fixture is identified by what it
 /// holds rather than by what it is called.
 pub fn parse(data: &[u8]) -> Arc<Object> {
-    parse_object(data.into(), "fixture.o".into(), PathBuf::from("/fixture.o"))
-        .expect("the fixture parses")
+    parse_object(data.into(), "fixture.o", PathBuf::from("/fixture.o")).expect("the fixture parses")
 }
 
 /// An address in a section's own terms, written as the number a test means by it: what a
@@ -38,7 +37,7 @@ pub fn placed_at(address: u64) -> PlacedAddress {
 
 /// The file a row of `info` names, as a string to compare against.
 pub fn file_of<'a>(info: &'a LineInfo, row: &LineRow) -> Option<&'a str> {
-    info.file(row.file?).map(|name| &**name)
+    info.file(row.file?).map(|name| name.to_str().unwrap())
 }
 
 /// Every text symbol's name, in the sorted order the object lists them.
@@ -46,7 +45,7 @@ pub fn names(object: &Object) -> Vec<&str> {
     object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| symbol.name.to_str().unwrap())
         .collect()
 }
 
@@ -168,7 +167,7 @@ pub fn parse_and_walk(data: &[u8]) -> Option<Arc<Object>> {
 /// [`parse_and_walk`] with the object placed at `path`, which is where a PE's `.pdb` is
 /// looked for: the one way the walk reaches the PDB backend.
 pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
-    let object = parse_object(data.into(), "fuzz".into(), path)?;
+    let object = parse_object(data.into(), "fuzz", path)?;
 
     for symbol in &object.symbols_sorted {
         let _ = symbol.estimate_size(&object);
@@ -285,7 +284,7 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
             continue;
         };
 
-        for found in object.symbols_from_lines(&file, line..=line) {
+        for found in object.symbols_from_lines(&**file, line..=line) {
             assert!(
                 object
                     .symbols_sorted
@@ -295,8 +294,8 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
             );
         }
         // A range holding the line answers with everything the line does.
-        let range = object.symbols_from_lines(&file, line..=line.saturating_add(1));
-        for found in object.symbols_from_lines(&file, line..=line) {
+        let range = object.symbols_from_lines(&**file, line..=line.saturating_add(1));
+        for found in object.symbols_from_lines(&**file, line..=line) {
             assert!(range.iter().any(|known| Arc::ptr_eq(known, &found)));
         }
     }

@@ -4,7 +4,7 @@
 
 mod common;
 
-use analysis::{Operand, SpanKind};
+use analysis::{ByteSlice, Operand, SpanKind};
 use common::{
     at, elf_image, elf_shared_object, elf_x86_64, goes_to, parse, pe_dll, symbol, text, ElfImage,
     ExportedSymbol, ImageSection, ImageSymbol, SharedObject, TextSymbol, TEXT_ADDRESS,
@@ -121,7 +121,7 @@ fn a_call_to_two_names_takes_the_first_by_name() {
     let assembly = f.assembly(&object).expect("f disassembles");
     let call = &assembly.instructions[0];
     assert_eq!(
-        call.symbol().map(|symbol| symbol.name.as_str()),
+        call.symbol().map(|symbol| symbol.name.to_str().unwrap()),
         Some("alpha")
     );
 }

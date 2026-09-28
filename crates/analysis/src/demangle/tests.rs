@@ -5,7 +5,7 @@ use super::*;
 
 /// A batch big enough to be split, of names that are all safe on the caller's own stack, so
 /// a test can compute the same answer sequentially to compare against.
-fn mixed_batch(len: usize) -> Vec<String> {
+fn mixed_batch(len: usize) -> Vec<BString> {
     (0..len)
         .map(|index| match index % 4 {
             // Nothing to demangle: an empty name.
@@ -16,6 +16,7 @@ fn mixed_batch(len: usize) -> Vec<String> {
             2 => format!("plain_c_function_{index}"),
             _ => format!("_ZN3std2io5Write5write17h{index:016x}E"),
         })
+        .map(BString::from)
         .collect()
 }
 
@@ -65,11 +66,11 @@ fn a_deep_name_in_a_split_batch_is_demangled_on_a_pool_thread() {
     let deep = format!("?f@@YAX{}@Z", "P".repeat(1000));
     let over_cap = format!("?g@@YAX{}@Z", "P".repeat(4000));
 
-    let mut names = vec![String::new(); GRAIN * 2];
-    names[0] = "_ZN4core3fmt9Formatter12pad_integral17h0123456789abcdefE".to_owned();
+    let mut names = vec![BString::default(); GRAIN * 2];
+    names[0] = "_ZN4core3fmt9Formatter12pad_integral17h0123456789abcdefE".into();
     // In the last grain, so it is not the first thing the first job does.
-    names[GRAIN * 2 - 1] = deep;
-    names[GRAIN + 1] = over_cap;
+    names[GRAIN * 2 - 1] = deep.into();
+    names[GRAIN + 1] = over_cap.into();
 
     let (_, demangled) = batch(names);
     assert_eq!(
@@ -87,7 +88,14 @@ fn a_batch_with_nothing_in_it_answers_one_none_per_name() {
     assert_eq!(batch(Vec::new()), (Vec::new(), Vec::new()));
     // An empty name is not a name either, and it comes back as it went in.
     assert_eq!(
-        batch(vec![String::new(); 3]),
-        (vec![String::new(); 3], vec![None; 3])
+        batch(vec![BString::default(); 3]),
+        (vec![BString::default(); 3], vec![None; 3])
     );
+}
+
+/// A name that is not UTF-8 is no mangling scheme's, and comes back as it went in.
+#[test]
+fn a_name_that_is_not_utf8_is_not_demangled() {
+    let name = BString::from(&b"_ZN4core3fmt\xff9Formatter12pad_integral17h0123456789abcdefE"[..]);
+    assert_eq!(batch(vec![name.clone()]), (vec![name], vec![None]));
 }

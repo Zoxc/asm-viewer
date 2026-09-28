@@ -8,7 +8,7 @@ mod common;
 
 use object::pe;
 
-use analysis::LoadMessage;
+use analysis::{ByteSlice, LoadMessage};
 use common::{
     arm_pe_dll, arm_thumb_image, at, elf_image, macho_arm_executable, mips_compressed_image, named,
     parse, ppc64_elfv1_image, ppc64_elfv1_object, xcoff_image, ElfImage, ImageSection, ImageSymbol,
@@ -19,7 +19,7 @@ fn sorted_names(object: &analysis::Object) -> Vec<&str> {
     let mut names: Vec<&str> = object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.name.as_str())
+        .map(|symbol| symbol.name.to_str().unwrap())
         .collect();
     names.sort_unstable();
     names
@@ -94,7 +94,7 @@ fn an_imports_tagged_plt_entry_is_cleared_in_either_symbol_table() {
         let imports: Vec<_> = object
             .imports
             .iter()
-            .map(|import| (import.name.as_str(), import.address))
+            .map(|import| (import.name.to_str().unwrap(), import.address))
             .collect();
         assert_eq!(
             imports,
@@ -117,7 +117,7 @@ fn an_fde_with_tagged_ends_is_the_function_they_bound() {
         let function = object
             .symbols_sorted
             .iter()
-            .find(|symbol| symbol.name.starts_with("<function"))
+            .find(|symbol| symbol.name.starts_with(b"<function"))
             .expect("the FDE's function is listed");
         assert_eq!(function.address, at(text + 0x14));
         assert_eq!(function.extent(&object).map(|extent| extent.bytes), Some(4));
@@ -191,7 +191,10 @@ fn a_ppc64_elfv1_function_is_at_the_code_its_descriptor_names() {
     assert_eq!(named(&object, "<entry point>").address, at(PPC64_TEXT + 12));
     for symbol in &object.symbols_sorted {
         assert_eq!(
-            symbol.section.as_ref().map(|section| section.name.as_str()),
+            symbol
+                .section
+                .as_ref()
+                .map(|section| section.name.to_str().unwrap()),
             Some(".text"),
             "{}",
             symbol.name
@@ -260,11 +263,11 @@ fn a_ppc64_elfv1_function_in_two_sections_is_in_the_one_listed_first() {
 
     let object = image([inner(), lower()]);
     assert_eq!(named(&object, "in_both").address, at(PPC64_TEXT + 0xC));
-    assert_eq!(section(&object, "in_both").as_deref(), Some(".text.inner"));
-    assert_eq!(section(&object, "below").as_deref(), Some(".text.lower"));
+    assert_eq!(section(&object, "in_both"), Some(".text.inner".into()));
+    assert_eq!(section(&object, "below"), Some(".text.lower".into()));
 
     let object = image([lower(), inner()]);
-    assert_eq!(section(&object, "in_both").as_deref(), Some(".text.lower"));
+    assert_eq!(section(&object, "in_both"), Some(".text.lower".into()));
 }
 
 #[test]
@@ -274,7 +277,9 @@ fn a_ppc64_elfv1_object_reads_its_descriptor_through_the_relocation_that_fills_i
     let foo = named(&object, "foo");
     assert_eq!(foo.address, at(8));
     assert_eq!(
-        foo.section.as_ref().map(|section| section.name.as_str()),
+        foo.section
+            .as_ref()
+            .map(|section| section.name.to_str().unwrap()),
         Some(".text")
     );
     assert_eq!(object.messages, []);

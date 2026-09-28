@@ -393,8 +393,9 @@ as a path, so a name that is not UTF-8 opens the file it names: the spelling the
 or the project directory joined with a Files row's entries, which is deliberately the same spelling
 and is never canonicalised (`agents/Sidebar.md`). It was a string once, and a path the server
 named by bytes that are not UTF-8 then opened a tab on a file with U+FFFD in its name. The debug
-info names files as text, so where a path meets it (`compiled_from`, the line marks, the recorded
-checksum) it is turned to text there, and a path that is not UTF-8 finds nothing. Two paths
+info names files as bytes, so where a path meets it (`compiled_from`, the line marks, the recorded
+checksum) it is turned to bytes there: exactly on Unix, so a path that is not UTF-8 finds what the
+debug info named, and lossily elsewhere, where a path is not bytes. Two paths
 compare by their components, so `a/./b.rs` and `a/b.rs` are one tab where as text they were two.
 `Document::Code(Arc<Object>)` is **all of one object's code** as one listing
 with the symbols drawn as labels inside it (`agents/Panes.md`). A tab has two sides, assembly and

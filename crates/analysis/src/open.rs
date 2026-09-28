@@ -7,6 +7,7 @@ use crate::{
     open_regular, Compression, Links, LoadMessage, Object, ObjectData, Promised, Regular,
     Unsupported,
 };
+use bstr::{BString, ByteVec};
 use object::read::archive::ArchiveFile;
 use object::FileKind;
 use std::{
@@ -196,7 +197,7 @@ fn open_one_file(
         };
         let expected = not_code(member.name(), data.bytes());
         let kind = unsupported_member(data.bytes());
-        let name = String::from_utf8_lossy(member.name()).into_owned();
+        let name = BString::from(member.name());
         match parse_unshared(data, name, path.to_path_buf()) {
             Ok(object) if wrapped_metadata(&object) => {}
             Ok(object) => {
@@ -543,12 +544,11 @@ fn unsupported_member(bytes: &[u8]) -> Option<Unsupported> {
 }
 
 /// What an object out of `path` is called when it is the whole file: its file name, or the
-/// whole path where it has none.
-pub(crate) fn name_of(path: &Path) -> String {
-    match path.file_name() {
-        Some(name) => name.to_string_lossy().into_owned(),
-        None => path.display().to_string(),
-    }
+/// whole path where it has none. Its bytes on Unix, and a lossy spelling elsewhere, where a
+/// path is not bytes.
+pub(crate) fn name_of(path: &Path) -> BString {
+    let name = path.file_name().unwrap_or(path.as_os_str());
+    Vec::from_os_str_lossy(name).into_owned().into()
 }
 
 /// Whether an archive member that did not parse was never meant to hold code, so leaving it

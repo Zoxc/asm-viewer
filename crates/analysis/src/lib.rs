@@ -16,7 +16,7 @@ mod unwind;
 pub use address::{Bias, PlacedAddress, SectionAddress};
 pub use disasm::{Assembly, BranchEdge, Instruction, Operand, SpanKind, SymbolName};
 pub use extent::Extent;
-pub use line::{LineInfo, LineRow, SourceDigests, SourceHash};
+pub use line::{shared_name, LineInfo, LineRow, SourceDigests, SourceHash};
 pub use listing::{CodeListing, Gap, GapKind, Listing, Placed, Stretch};
 pub use made_up::MadeUp;
 pub use model::{
@@ -26,7 +26,8 @@ pub use model::{
 pub use open::{open_data_streaming, open_files, open_files_streaming, Progress};
 pub use parse::parse_object;
 pub use regular::{open_regular, read_regular, Links, Regular};
-// Re-exported so the viewer needs no `object` dependency of its own.
+// Re-exported so the viewer needs no `object` or `bstr` dependency of its own.
+pub use bstr::{BStr, BString, ByteSlice, ByteVec};
 pub use object::{Architecture, BinaryFormat, Endianness, SectionIndex, SymbolIndex};
 
 /// [`Object`] is shared as an `Arc` and read from worker threads; the others are what a

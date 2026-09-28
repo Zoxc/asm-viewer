@@ -3,7 +3,9 @@
 
 mod common;
 
-use analysis::{parse_object, CodeListing, LoadMessage, Object, Severity};
+use analysis::{
+    parse_object, shared_name, BString, ByteSlice, CodeListing, LoadMessage, Object, Severity,
+};
 use common::{
     at, caller_and_target, committed_fixture, declared_code_images, dwarf_fixture,
     elf_shared_object, elf_unreadable_section_name, elf_with_unreadable_dynamic_name,
@@ -113,7 +115,7 @@ fn corrupted_objects_do_not_panic() {
 fn a_lying_compressed_size_in_a_section_header_costs_nothing() {
     let valid = caller_and_target();
     let baseline = parse_and_walk(&valid).expect("the fixture parses");
-    assert!(section_names(&baseline).contains(&".rela.text".to_owned()));
+    assert!(section_names(&baseline).contains(&".rela.text".into()));
 
     let offset = section_flag_byte(&valid, ".rela.text");
     let mut data = valid.clone();
@@ -186,13 +188,13 @@ fn a_valid_zlib_stream_is_only_decompressed_when_its_declared_size_is_believable
         let data = elf_with_compressed_section(CODE, payload, declared);
         let object = parse_and_walk(&data).expect("the object still parses");
         assert!(
-            !section_names(&object).contains(&".text".to_owned()),
+            !section_names(&object).contains(&".text".into()),
             "a section declaring {declared} bytes was decompressed anyway"
         );
     }
 }
 
-fn section_names(object: &Object) -> Vec<String> {
+fn section_names(object: &Object) -> Vec<BString> {
     object
         .sections
         .iter()
@@ -214,7 +216,7 @@ fn a_zstd_frame_producing_more_than_its_header_declares_is_dropped() {
     let data = elf_with_compression(CODE, object::elf::ELFCOMPRESS_ZSTD, &frame, 1);
     let object = parse_and_walk(&data).expect("the object still parses");
     assert!(
-        !section_names(&object).contains(&".text".to_owned()),
+        !section_names(&object).contains(&".text".into()),
         "a section declaring 1 byte was inflated to {size} anyway"
     );
 
@@ -434,7 +436,7 @@ fn assembly_of_data_ending_mid_instruction_is_partial_not_a_panic() {
     );
 
     let object =
-        parse_object(data[..].into(), "trunc.o".into(), PathBuf::from("/trunc.o")).expect("parses");
+        parse_object(data[..].into(), "trunc.o", PathBuf::from("/trunc.o")).expect("parses");
     let caller = object
         .symbols_sorted
         .iter()
@@ -511,8 +513,7 @@ fn a_symbol_outside_any_section_yields_no_data() {
     });
     let data = obj.write().expect("writing the fixture object");
 
-    let object =
-        parse_object(data[..].into(), "abs.o".into(), PathBuf::from("/abs.o")).expect("parses");
+    let object = parse_object(data[..].into(), "abs.o", PathBuf::from("/abs.o")).expect("parses");
     let symbol = object
         .symbols_sorted
         .iter()
@@ -733,10 +734,10 @@ fn a_walk_that_panics_part_way_keeps_what_it_read_and_says_so() {
 
     // The good unit alone is indexed.
     let alone = parse(&elf_with_hand_written_dwarf(&[good()], &symbols));
-    assert_eq!(alone.source_files(), vec!["good.c".into()]);
+    assert_eq!(alone.source_files(), vec![shared_name(b"good.c")]);
 
     let object = parse(&elf_with_hand_written_dwarf(&[good(), bad], &symbols));
-    assert_eq!(object.source_files(), vec!["good.c".into()]);
+    assert_eq!(object.source_files(), vec![shared_name(b"good.c")]);
     assert_eq!(object.debug_info_skipped(), 1);
 }
 
@@ -771,7 +772,7 @@ fn a_function_past_the_end_of_the_address_space_is_said() {
         object.messages,
         [
             LoadMessage::CodeSectionsOverlap {
-                section: ".text".to_owned(),
+                section: ".text".into(),
                 address: u64::MAX - 1,
             },
             LoadMessage::FunctionsWithoutAddress { count: 1 },
@@ -811,7 +812,7 @@ fn a_relocation_past_the_end_of_the_address_space_is_said() {
         object.messages,
         [
             LoadMessage::CodeSectionsOverlap {
-                section: ".text".to_owned(),
+                section: ".text".into(),
                 address: u64::MAX - 2,
             },
             LoadMessage::RelocationsWithoutAddress { count: 1 },
@@ -840,7 +841,7 @@ fn an_import_whose_name_will_not_read_is_said() {
         let imports: Vec<&str> = object
             .imports
             .iter()
-            .map(|import| import.name.as_str())
+            .map(|import| import.name.to_str().unwrap())
             .collect();
         assert_eq!(imports, [kept]);
         assert_eq!(
@@ -1207,7 +1208,7 @@ fn a_deeply_nested_name_does_not_overflow_the_stack() {
     ];
 
     let data = elf_with_names(&names);
-    let object = parse_object(data[..].into(), "deep.o".into(), PathBuf::from("/deep.o"))
+    let object = parse_object(data[..].into(), "deep.o", PathBuf::from("/deep.o"))
         .expect("the object parses");
 
     assert_eq!(object.symbols_sorted.len(), names.len());
@@ -1220,7 +1221,7 @@ fn a_deeply_nested_name_does_not_overflow_the_stack() {
         object
             .symbols_sorted
             .iter()
-            .find(|symbol| symbol.name.starts_with(name))
+            .find(|symbol| symbol.name.starts_with(name.as_bytes()))
             .unwrap_or_else(|| panic!("{name} is listed"))
             .clone()
     };
@@ -1242,7 +1243,7 @@ fn symbols_of_one_name_are_listed_in_the_files_order() {
     // Twelve: a random order would match the file's once in 12! runs.
     let names = vec![b"f".to_vec(); 12];
     let data = elf_with_names(&names);
-    let object = parse_object(data[..].into(), "same.o".into(), PathBuf::from("/same.o"))
+    let object = parse_object(data[..].into(), "same.o", PathBuf::from("/same.o"))
         .expect("the object parses");
 
     // Each is at an address of its own, so the address says which symbol it is.
@@ -1549,7 +1550,7 @@ fn one_symbol_that_cannot_be_analysed_does_not_take_out_the_others() {
         object
             .symbols_sorted
             .iter()
-            .find(|symbol| symbol.name.starts_with(name))
+            .find(|symbol| symbol.name.starts_with(name.as_bytes()))
             .unwrap_or_else(|| panic!("{name} is listed"))
             .clone()
     };
@@ -1693,7 +1694,7 @@ fn a_symbol_whose_name_will_not_read_is_listed_by_its_address() {
             (
                 stretch.range.start.get(),
                 stretch.range.end.get(),
-                stretch.symbol().map(|symbol| symbol.name.as_str()),
+                stretch.symbol().map(|symbol| symbol.name.to_str().unwrap()),
             )
         })
         .collect();
@@ -1816,7 +1817,7 @@ fn a_code_section_whose_name_will_not_read_is_kept() {
     );
     let f = named(&object, "f");
     let section = f.section.as_ref().expect("f keeps its section");
-    assert!(section.name.starts_with("<section "), "{}", section.name);
+    assert!(section.name.starts_with(b"<section "), "{}", section.name);
     let code: Vec<_> = f
         .assembly(&object)
         .expect("f decodes")

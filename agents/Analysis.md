@@ -303,7 +303,7 @@ declarations, the entry point and an unwind entry, are called `<entry point>` an
 or `<fragment 0x…>`, in angle brackets because no assembler, linker or mangling scheme emits them,
 so none can collide with a real one. The three are one type, `made_up::MadeUp`, whose `Display` is
 the only place they are spelled. The parse carries one as `Name::MadeUp` and renders it once, when
-the symbol is built; the symbol keeps both, the `String` as its `name` and the value as
+the symbol is built; the symbol keeps both, the spelling as its `name` and the value as
 `SymbolData::made_up`. Nothing reads a spelling back: a name is made up because the parse made it,
 so a file symbol spelled like one is still the file's own. The value travels as far as the app's
 *saved* places, which write which name it is and the symbol's address rather than the spelling, so
@@ -513,6 +513,16 @@ MiB, a reservation and not a cost). The exception is an object where every name 
 `SHORT_MANGLED_NAME` (64) and there are no more of them than one grain, which is every fixture in
 the test suite and is the caller's own stack's business. A name no demangler will take is displayed
 exactly as the file wrote it, which is what an unrecognised name already did.
+
+**A name the file states is its bytes** (`bstr::BString`): an object's, a member's, a section's, a
+symbol's and an import's, and a source file's as the debug info names it (`Arc<BStr>`). None of
+them is promised to be UTF-8, and a lossy copy made at the parse lost the one spelling that finds
+the thing again -- a saved place looks its symbol up by name, and a source path is a file to open.
+So the crate keeps the bytes and the app turns them into text where it draws or filters one, and
+into a path where it opens one. What the crate makes itself is text: a demangled name (every
+demangler reads and writes text, and every mangling scheme is ASCII, so a name that is not UTF-8
+is not offered to one), a made-up name, and a formatted instruction, which writes a relocated
+operand's name lossily; `SymbolName::symbol` still has the bytes.
 
 **Demangling is the last of the open-time cost, and it is what this crate parallelises.** After the
 lazy line info, the lazy debug-info backend, the lazy function extents and the worker-thread
@@ -969,8 +979,9 @@ is formatted into a `Formatted`, the backend's own scratch struct implementing
 `iced_x86::FormatterOutput`, capturing `(String, SpanKind)` spans for the UI to colour and the
 spans a link could be made of; the crate's `Instruction` holds no scratch state and implements no
 `iced-x86` trait. `SpanKind` is the backend-independent stand-in for
-`FormatterTextKind`; the app has no `iced-x86` or `object` dependency (`BinaryFormat`,
-`Architecture` and `SectionIndex` are re-exported from `analysis` for that reason). The decode
+`FormatterTextKind`; the app has no `iced-x86`, `object` or `bstr` dependency (`BinaryFormat`,
+`Architecture`, `SectionIndex` and `bstr`'s names are re-exported from `analysis` for that
+reason). The decode
 loop's own arithmetic is checked: the instruction pointer is the symbol's address plus what has been
 decoded, both of them the file's numbers, so a section placed at the end of the address space wraps
 it and the offset derived from it is a slice index. The listing stops at the wrap rather than
