@@ -41,7 +41,8 @@ file keeps the shape of the path it had rather than being flattened into one hea
 destination is claimed through `Store::claim` -- `settings.toml`, then `2-settings.toml` -- which
 is `unsaved_project`'s "a create that fails rather than opens", and for its reason: nothing there
 is ever overwritten, not by an earlier rescue and not by a second copy of the app moving the same
-file at this moment. The original is **removed** rather than copied, since nothing writes over
+file at this moment. The copy is synced before the original goes, for the atomic write's
+reason below. The original is **removed** rather than copied, since nothing writes over
 `settings.toml` until a setting changes and a file left in place would be rescued again on every
 launch.
 

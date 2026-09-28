@@ -338,11 +338,14 @@ impl Store {
                 1 => name.clone(),
                 n => format!("{n}-{name}"),
             },
-            // A copy cut short is removed, so a failed rescue leaves nothing behind.
+            // Synced for `write_atomically`'s reason: the removal below can reach the disk
+            // ahead of the copy's data. A copy cut short is removed, so a failed rescue
+            // leaves nothing behind.
             |path| {
-                File::create_new(path)?
-                    .write_all(data)
-                    .inspect_err(|_| drop(fs::remove_file(path)))
+                let mut file = File::create_new(path)?;
+                let written = file.write_all(data).and_then(|()| file.sync_all());
+                drop(file);
+                written.inspect_err(|_| drop(fs::remove_file(path)))
             },
         )?;
         if let Err(error) = fs::remove_file(path) {
