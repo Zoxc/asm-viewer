@@ -297,7 +297,8 @@ if a network mount ever makes a fold slow. Rows are directories first and then f
 `walk::by_name`, the comparator the walk sorts by too, and hidden entries are shown; `.git` and
 `target` fold away with one click. **A symlink is not a row**, whatever it points at: the kind is
 the one `read_dir` hands back and is never followed, which is what the walk does and what
-`source::showable` answers (`agents/Finding.md`), so a row here is a row a press opens. There is no
+`source::showable` answers (`agents/Finding.md`), so a row here is a row a press opens. Nor is a
+fifo, a socket or a device, for the same reason: a row is a directory or a regular file. There is no
 filter bar: a filter over a lazily read tree can only see what is unfolded, and the search stories
 are the Symbols filter and `notes/Goals.md`'s source search.
 

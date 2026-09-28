@@ -192,8 +192,9 @@ impl Node {
 /// One directory's entries: directories first, then files, each by [`walk::by_name`] --
 /// the walk's own ordering, under a different leading term.
 ///
-/// **A symlink is not an entry**, whatever it points at: the kind is the one the read
-/// hands back, and nothing here follows one. That is [`source::showable`]'s rule and the
+/// **An entry is a directory or a regular file**: a symlink is not one, whatever it
+/// points at, and nor is a fifo, a socket or a device. The kind is the one the read hands
+/// back, and nothing here follows a link. That is [`source::showable`]'s rule and the
 /// walk's (`crate::walk`), so a row here is a row a press opens rather than one drawn
 /// dead. An entry whose kind cannot be read is dropped too: nothing is known of what its
 /// row would open.
@@ -204,7 +205,7 @@ fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
             let kind = entry.file_type().ok()?;
-            if kind.is_symlink() {
+            if !kind.is_dir() && !kind.is_file() {
                 return None;
             }
             let (name, path) = hold(&entry.file_name().to_string_lossy(), entry.path());

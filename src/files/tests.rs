@@ -247,6 +247,21 @@ fn a_symlink_is_not_a_row() {
     assert!(!crate::source::showable(&link));
 }
 
+/// Nor is a fifo, which `source::showable` refuses too: its row would open nothing.
+#[cfg(unix)]
+#[test]
+fn a_fifo_is_not_a_row() {
+    let root = project("fifo");
+    crate::temporary::make_fifo(&root.join("pipe"));
+
+    let tree = FileTree::new(&root).expect("a readable directory");
+    assert_eq!(
+        described(&tree.rows()),
+        ["root/ -", "  src/ +", "  Cargo.toml"]
+    );
+    assert!(!crate::source::showable(&root.join("pipe")));
+}
+
 /// The rows are the nodes' own names and paths and never copies of them. The tree is
 /// flattened again whole on every toggle, over everything the reader has unfolded, so a
 /// rebuild has to allocate nothing (`src/files.rs`).
