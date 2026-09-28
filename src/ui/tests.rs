@@ -10382,6 +10382,25 @@ fn a_pointer_resting_off_every_name_asks_nothing() {
     );
 }
 
+/// **Two waits over one name ask once.** The pointer going to another name and back
+/// arms a second wait while the first is still running, and both run out together.
+#[test]
+fn two_waits_over_one_name_ask_once() {
+    let mut hover = Hover::default();
+    let a = hovered_name(3).at;
+    hover.enter(hovered_name(3));
+    assert!(hover.resting_on(a.clone()));
+    hover.enter(hovered_name(8));
+    assert!(hover.resting_on(hovered_name(8).at));
+    hover.enter(hovered_name(3));
+    assert!(hover.resting_on(a.clone()), "no second wait was armed");
+
+    // The first wait to run out asks, and the second finds it asked.
+    assert!(hover.rested(&a, 1), "the first wait did not ask");
+    hover.asking(ticket(1, 1), a.clone());
+    assert!(!hover.rested(&a, 1), "the second wait asked again");
+}
+
 /// A name for the pointer to be on: the same place drawn in the same box, so two calls
 /// with the same column are the same name.
 fn hovered_name(column: usize) -> Pointed {

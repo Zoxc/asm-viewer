@@ -173,12 +173,16 @@ impl Hover {
         true
     }
 
-    /// Whether the pointer is still on `at` with the wait it armed run out, which is what
-    /// says the question is worth putting now.
-    pub(crate) fn rested(&self, at: &Lookup) -> bool {
-        self.about
+    /// Whether the pointer is still on `at` with the wait it armed run out, and nothing
+    /// asked or answered about it in `run` yet, which is what says the question is worth
+    /// putting now. The last half is for a second wait over the same name: the pointer
+    /// going to another name and back arms one while the first is still running.
+    pub(crate) fn rested(&self, at: &Lookup, run: u64) -> bool {
+        let on = self
+            .about
             .as_ref()
-            .is_some_and(|about| about.on_name && about.resting && about.pointed.at == *at)
+            .is_some_and(|about| about.on_name && about.resting && about.pointed.at == *at);
+        on && self.pending(run) == Some(at)
     }
 
     /// The wait for `at` ran out with the pointer off the name, so nothing was asked. It
@@ -352,12 +356,12 @@ pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs:
                     }
                     Timer::after(left).await;
                 }
-                let started = language.peek().started();
-                let rested = hover.peek().rested(&at);
+                let Some(run) = language.peek().current() else {
+                    return;
+                };
+                let rested = hover.peek().rested(&at, run);
                 if !rested {
                     write_if(hover, |waiting| waiting.gave_up(&at));
-                }
-                if !started || !rested {
                     return;
                 }
                 let Some(ticket) = ask_hover(language, &jobs, at.clone()) else {
