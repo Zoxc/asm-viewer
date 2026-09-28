@@ -237,9 +237,9 @@ fn tier_at(text: &str, start: usize, empty: bool) -> Tier {
     }
 }
 
-/// A word character as regex's `\b` counts them.
+/// A word character as regex's `\b` counts them: its own table, which needs `unicode-perl`.
 fn is_word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    regex_syntax::is_word_character(c)
 }
 
 /// What a filter leaves of a list: the list itself, and where in it the names that

@@ -227,6 +227,18 @@ fn a_word_start_is_the_word_toggles_boundary() {
     assert_eq!(rank(&filter, "iter_mut").tier, Tier::Prefix);
 }
 
+/// The word characters are regex's own, and not `char::is_alphanumeric`: a superscript
+/// digit is not one and a combining accent is.
+#[test]
+fn a_word_start_agrees_with_regex_past_ascii() {
+    let filter = plain("foo");
+    let boundary = regex::Regex::new(r"\bfoo").unwrap();
+    for (name, tier) in [("x²foo", Tier::Word), ("e\u{301}foo", Tier::Inside)] {
+        assert_eq!(rank(&filter, name).tier, tier, "{name:?}");
+        assert_eq!(boundary.is_match(name), tier == Tier::Word, "{name:?}");
+    }
+}
+
 /// A regex ranks by where its first match lands, whatever it matched; one that matches
 /// nothing at all -- an empty match -- starts nowhere and ranks last.
 #[test]
