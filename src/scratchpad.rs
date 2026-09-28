@@ -1124,7 +1124,7 @@ fn check_name(name: &str) -> Result<(), Problem> {
 /// comparators, each an optional operator in front of a version. The *shape* only —
 /// whether it resolves is a question about the registry.
 ///
-/// A wildcard is refused outright though cargo takes it: it is what makes a scratchpad
+/// A wildcard (`*`, `x` or `X`) is refused outright though cargo takes it: it is what makes a scratchpad
 /// build differently on a different day, and it gets its own [`Problem`] so the row can
 /// say that rather than "not a version".
 fn check_version(version: &str) -> Result<(), Problem> {
@@ -1159,6 +1159,10 @@ fn check_comparator(comparator: &str) -> Result<(), Problem> {
     let mut counted = 0;
     for part in core.split('.') {
         counted += 1;
+        // cargo takes `x` and `X` for a number as it takes `*`.
+        if matches!(part, "x" | "X") {
+            return Err(Problem::Wildcard);
+        }
         if counted > 3 || !is_number(part) {
             return Err(Problem::NotAVersion);
         }

@@ -105,7 +105,7 @@ storage, so there is no part of a pad anywhere else. Nothing goes back to the or
 `Order::forget` is about the list on screen, and an id whose directory has gone is one `pads`
 already steps over.
 
-A dependency is a `(name, version)` row and the **version is required**. A `*` is refused with its
+A dependency is a `(name, version)` row and the **version is required**. A wildcard (`*`, `x` or `X`) is refused with its
 own reason, since a requirement whose answer changes with the day is the one thing a scratchpad must
 not have. Rows are checked against two grammars (a possible crate name, a possible version
 requirement) and never against crates.io: whether a crate exists is cargo's answer. Every bad row
