@@ -70,8 +70,9 @@ anywhere but inside the program that is now gone.
 spawn, something taking hold of what was spawned, and a kill. On Unix it is
 `Command::process_group(0)`, std's own, so only the kill needs a crate, and `libc::kill(-pgid,
 SIGKILL)`, the group being the child's own pid and the negative guarded, since `-1` is every process
-this user may signal. On Windows it is a **kill-on-close job object**, created and assigned right
-after the spawn, and closing the app's only handle to it is the kill. The sliver between the spawn
+this user may signal. On Windows the spawn is told `CREATE_NO_WINDOW`: the app is a GUI program
+with no console, so a console program it starts would otherwise open a window of its own. The group
+there is a **kill-on-close job object**, created and assigned right after the spawn, and closing the app's only handle to it is the kill. The sliver between the spawn
 and the assignment is accepted rather than bought back with `CREATE_SUSPENDED` and a `ResumeThread`,
 for a window a scratchpad's program does not use, and a job the system refuses leaves the stop
 exactly what it was. The child's own kill stays, under the same lock and after the group's, as what

@@ -1,3 +1,7 @@
+// A window of its own and no console behind it. Nothing is lost with the console: a panic
+// is shown in a box and written to a file (`src/panics.rs`).
+#![windows_subsystem = "windows"]
+
 mod bookmarks;
 mod cargo;
 mod chars;

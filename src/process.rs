@@ -93,8 +93,15 @@ struct Group(Option<std::os::windows::io::OwnedHandle>);
 
 #[cfg(windows)]
 impl Group {
-    /// Nothing: there is no pre-spawn half here, the job is joined after the fact.
-    fn arrange(_command: &mut Command) {}
+    /// No console window. The app has none to share, being a GUI program, so a console
+    /// program it starts would otherwise open one of its own. The job is joined after the
+    /// fact.
+    fn arrange(command: &mut Command) {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
 
     /// Assign the spawned process to a fresh kill-on-close job.
     ///
