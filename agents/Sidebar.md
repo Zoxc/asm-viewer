@@ -721,7 +721,9 @@ checked, as cargo checks it: a path in it the directory is under passes that roo
 `members` names the directory too, and the walk goes on up. Missing it had the offer rewrite the
 manifest of a workspace the build ignores. When that file is not the project's own, the view
 **names** it, beside the manifest cargo is run over: the offer edits a file outside the project, and
-a write the reader was not told about is the one thing it must not be.
+a write the reader was not told about is the one thing it must not be. cargo's config files and
+`CARGO_PROFILE_*` variables override the manifest and are not read: following cargo's search for
+config files costs more than a setting that rare is worth.
 
 **What a read of the manifest said is one value** (`Manifest`), the same one from the worker's
 answer through `Builds` to the rows: which file cargo is run over, which file the profile comes

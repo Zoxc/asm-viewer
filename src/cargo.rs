@@ -344,11 +344,14 @@ pub fn manifest(directory: &Path) -> Option<PathBuf> {
 /// The manifest cargo takes `[profile.*]` from for a build in `directory`: the workspace
 /// root's, which is the directory's own only when it is not a member of one.
 ///
-/// **cargo reads profiles from the root manifest and nowhere else.** A `[profile]` table in
+/// **Of the manifests, cargo reads profiles from the root's alone.** A `[profile]` table in
 /// a member is ignored, with a warning, so the directory's own file answers about something
 /// the build pays no attention to: a root that already asks for debug information goes
 /// unseen and the offer to add it is made for ever, and taking that offer writes a table
 /// the build ignores while the view says the lines are there.
+///
+/// cargo's config files (`.cargo/config.toml`) and `CARGO_PROFILE_*` variables override the
+/// manifest, and are not read here: a profile set there goes unseen.
 ///
 /// The rules are cargo's. A manifest with a `[workspace]` table **is** a root, which is what
 /// stops this at a package that is its own workspace — a scratchpad's, whose manifest
