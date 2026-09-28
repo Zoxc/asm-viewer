@@ -521,7 +521,7 @@ impl ListPane {
         let plain = modifiers.is_empty();
         let command = modifiers == Modifiers::ctrl_or_meta();
         let moved = match &e.key {
-            Key::Named(NamedKey::Escape) => return self.rows.request_focus(),
+            Key::Named(NamedKey::Escape) if plain => return self.rows.request_focus(),
             Key::Named(NamedKey::Enter) if plain => match submit {
                 Some(submit) => return submit(),
                 None => return picking.entered(keys),

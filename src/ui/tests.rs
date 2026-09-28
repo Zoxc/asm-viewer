@@ -40667,6 +40667,14 @@ fn escape_in_a_filter_box_lands_on_the_list_with_the_pattern_kept() {
     let row = label_area(&test, "sum_to").expect("the row the filter left");
     assert_eq!(drawn_at(&test, row.origin.y), Chosen::Idle);
 
+    // Under its own modifiers and no others, as the list's keys are.
+    key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::SHIFT);
+    assert_eq!(
+        drawn_at(&test, row.origin.y),
+        Chosen::Idle,
+        "Shift+Escape took the keyboard out of the box"
+    );
+
     key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::empty());
     assert!(
         labels(&test).iter().any(|label| label == "sum"),
