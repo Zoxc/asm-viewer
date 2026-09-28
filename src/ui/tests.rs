@@ -2971,7 +2971,7 @@ fn a_guarded_panics_file_is_listed_on_the_debug_page_at_once() {
     assert!(labels(&test).contains(&"Nothing has panicked.".to_owned()));
 
     std::fs::create_dir_all(&panics).expect("the panics directory is writable");
-    std::fs::write(panics.join("2026-09-18_12-00-00.txt"), "a record")
+    std::fs::write(panics.join("2026-09-18-120000.txt"), "a record")
         .expect("writing the panic file");
     let drawn = labels_with_areas(&test);
     let row = drawn
@@ -2992,7 +2992,7 @@ fn a_guarded_panics_file_is_listed_on_the_debug_page_at_once() {
     settle(&mut test);
 
     assert!(
-        labels(&test).contains(&"2026-09-18_12-00-00.txt".to_owned()),
+        labels(&test).contains(&"2026-09-18-120000.txt".to_owned()),
         "the file the press left is not listed: {:?}",
         labels(&test)
     );

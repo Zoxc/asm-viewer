@@ -83,8 +83,9 @@ fn the_panic_files_are_listed_newest_first_and_nothing_else_is() {
     ] {
         fs::write(directory.join(name), b"a record").expect("a panic file");
     }
-    // And three things that are not a run's panics.
+    // And four things that are not a run's panics.
     fs::write(directory.join("notes.md"), b"not ours").expect("a stray file");
+    fs::write(directory.join("README.txt"), b"not ours").expect("a stray file");
     fs::write(directory.join("no-extension"), b"not ours").expect("a stray file");
     fs::create_dir_all(directory.join("a-directory.txt")).expect("a stray directory");
 

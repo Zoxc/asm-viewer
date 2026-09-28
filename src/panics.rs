@@ -330,7 +330,11 @@ pub(crate) fn recorded(store: &Store) -> Vec<PathBuf> {
             let path = entry.ok()?.path();
             // Files only, and only the ones this writes: a directory somebody made in
             // there is not a run's panics, and neither is anything else left lying about.
-            let named = path.extension().is_some_and(|extension| extension == "txt");
+            let named = path.extension().is_some_and(|extension| extension == "txt")
+                && path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(is_file_stamp);
             (named && path.is_file()).then_some(path)
         })
         .collect();
@@ -666,6 +670,16 @@ fn stamp(seconds: u64) -> String {
 /// apart: the space becomes a dash, and the colons go.
 fn file_stamp(seconds: u64) -> String {
     stamp(seconds).replace(' ', "-").replace(':', "")
+}
+
+/// Whether `name` is one [`file_stamp`] could have written: its shape, digit for digit.
+fn is_file_stamp(name: &str) -> bool {
+    const SHAPE: &[u8] = b"0000-00-00-000000";
+    name.len() == SHAPE.len()
+        && name.bytes().zip(SHAPE).all(|(byte, &shape)| match shape {
+            b'0' => byte.is_ascii_digit(),
+            _ => byte == shape,
+        })
 }
 
 /// Seconds since the epoch as a UTC date and time.
