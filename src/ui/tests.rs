@@ -22253,6 +22253,67 @@ fn a_reach_from_the_gutter_takes_whole_rows_either_way() {
     assert_eq!(chars(), whole(10, 7));
 }
 
+/// A Shift+double or triple press reaches the run out to the far side of the word or the
+/// row's text, measured from the anchor, so what was pressed is in the run above the
+/// anchor as below it.
+#[test]
+fn a_reach_by_word_or_row_takes_what_was_pressed_either_way() {
+    let (mut test, marked) = TestingRunner::new(
+        project_harness,
+        (100., 100.).into(),
+        |runner| {
+            runner
+                .provide_root_context(|| Marked(State::create(Marks::default())))
+                .0
+        },
+        1.,
+    );
+    test.sync_and_update();
+    let chars = || marked.peek().assembly.as_ref().unwrap().chars;
+    mark_press(marked, false, Pane::Assembly, None, 5, Some(Press::At(2)));
+    mark_release(marked);
+
+    mark_press(
+        marked,
+        true,
+        Pane::Assembly,
+        None,
+        3,
+        Some(Press::Span(4, 8)),
+    );
+    assert_eq!(
+        chars().of_row(3, 20),
+        Some((4, 20)),
+        "the word above is left out"
+    );
+    mark_press(
+        marked,
+        true,
+        Pane::Assembly,
+        None,
+        3,
+        Some(Press::Span(0, usize::MAX)),
+    );
+    assert_eq!(
+        chars().of_row(3, 20),
+        Some((0, 20)),
+        "the row above is left out"
+    );
+    mark_press(
+        marked,
+        true,
+        Pane::Assembly,
+        None,
+        7,
+        Some(Press::Span(4, 8)),
+    );
+    assert_eq!(
+        chars().of_row(7, 20),
+        Some((0, 8)),
+        "the word below is left out"
+    );
+}
+
 /// A line picked out in the source pane lights, in the listing, every instruction it was
 /// compiled from and nothing else -- and the pointer lights nothing: moving over the rows
 /// leaves the pair as it was and picks nothing out.
