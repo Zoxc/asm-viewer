@@ -13342,6 +13342,45 @@ fn a_companions_name_opens_in_the_tab_the_file_is_already_in() {
     );
 }
 
+/// **The companion's name opens nothing over a file the pane cannot show**, as a Files row
+/// opens nothing: the tab would say only why it is empty, and without Ctrl it would take
+/// the symbol's place on the trail.
+#[test]
+fn a_companions_name_opens_nothing_over_a_missing_file() {
+    let missing: Arc<Path> = Arc::from(Path::new("/nowhere/companion/missing.c"));
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let symbol = Document::Symbol(sum_to.clone());
+    let shown = {
+        let mut studied = Studied::new(sum_to.clone());
+        studied.lines.file = Some(missing.clone());
+        Shown {
+            ask: Ask::Symbol(sum_to.clone()),
+            studied,
+        }
+    };
+    let (mut test, roots) = TestingRunner::new(
+        companion_menu_harness,
+        (500., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let states = roots.states;
+    open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
+    settle(&mut test);
+    assert!(label_area(&test, "Source file not found: /nowhere/companion/missing.c").is_some());
+
+    let name = centre_of(&test, "missing.c");
+    press_at(&mut test, name);
+    settle(&mut test);
+    assert!(
+        open_documents(states.open) == [symbol],
+        "the bar opened a tab for a file the pane cannot show"
+    );
+}
+
 /// A source row inside a function offers that function's instances beside the line's
 /// locations, and choosing them asks for the function's lines from that row, chosen for
 /// the tab; a row outside any function offers the line alone.

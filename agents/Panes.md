@@ -100,7 +100,9 @@ file's row in the Files view does (`agents/Sidebar.md`). A **subject** is that t
 name is a name and nothing to press.
 Both go through `open_source_tab`, which names the document by `spelling` -- what the bar carries
 is the *debug info's* path, and that is exactly the spelling that disagrees with the reader's own,
-so without the rule a file already open opened a second time in a second tab.
+so without the rule a file already open opened a second time in a second tab. And both open nothing
+for a file `source::showable` refuses: over "Source file not found" the name opened a tab that said
+only that, in place of the symbol.
 **The pane a tab is not driven from opens as a tab of its own, from a row's menu.** The second
 thing a tab holds had a door on one side only: pressing a companion's name opened that file, where
 the symbol a source-driven tab's assembly side draws could be reached only through the Symbols

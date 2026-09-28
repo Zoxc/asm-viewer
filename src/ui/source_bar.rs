@@ -3,10 +3,11 @@
 //! built from.
 //!
 //! **A companion's name is a door**: pressing it opens that file as a source-driven tab, as
-//! pressing a source file's row in the Files view does. Both go through
-//! [`open_source_tab`], which names the document by the spelling an open tab already has
-//! for the file: what the bar carries is the debug info's path, which is rarely the
-//! reader's own spelling of it. A **subject** is that tab already, so its name is a name
+//! pressing a source file's row in the Files view does. Both open nothing for a file the
+//! pane cannot show (`source::showable`), and both go through [`open_source_tab`], which
+//! names the document by the spelling an open tab already has for the file: what the bar
+//! carries is the debug info's path, which is rarely the reader's own spelling of it. A
+//! **subject** is that tab already, so its name is a name
 //! and nothing to press. Either way the bar says which file is up, which the tab's own chip
 //! only has room for the last part of. At the end of the bar, where this pane is the one
 //! the tab is driven from, is [`PaneToggle`]; the Assembly pane's own bar carries it under
@@ -68,7 +69,12 @@ pub(crate) fn source_bar(
                         .maybe(opens, |el| {
                             let file = file.clone();
                             el.on_press(move |_| {
-                                open_source_tab(open, visits, &file, Reach::inside(ctrl));
+                                // The Files row's gate: a file the pane would refuse, which
+                                // is what it says under this bar when the file is missing,
+                                // opens nothing.
+                                if showable(&file) {
+                                    open_source_tab(open, visits, &file, Reach::inside(ctrl));
+                                }
                             })
                         })
                         .child(entry_icon(&document))
