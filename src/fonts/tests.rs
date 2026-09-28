@@ -58,6 +58,18 @@ fn pango_style_words_are_not_part_of_the_family() {
 }
 
 #[test]
+fn a_pango_style_word_may_leave_out_its_hyphen() {
+    assert_eq!(
+        pango("'Source Code Pro Semibold 10'"),
+        spec("Source Code Pro", Some(10.0))
+    );
+    assert_eq!(pango("'Cantarell ExtraBold'"), spec("Cantarell", None));
+    assert_eq!(pango("'Foo Ultra-Black 11'"), spec("Foo", Some(11.0)));
+    // Only the table's hyphen is optional: the word's own must be there in it.
+    assert_eq!(pango("'Foo Bo-ld'"), spec("Foo Bo-ld", None));
+}
+
+#[test]
 fn a_pango_description_can_omit_its_size() {
     assert_eq!(pango("'Cantarell'"), spec("Cantarell", None));
     // And a family whose last word merely looks like one is not a size.

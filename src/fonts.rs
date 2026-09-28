@@ -249,13 +249,14 @@ mod desktop_parse {
             "medium",
             "semi-bold",
             "demi-bold",
-            "demibold",
             "bold",
             "ultra-bold",
             "extra-bold",
             "heavy",
             "black",
             "ultra-heavy",
+            "extra-heavy",
+            "ultra-black",
             "extra-black",
             "italic",
             "oblique",
@@ -276,7 +277,23 @@ mod desktop_parse {
             "ultra-expanded",
         ];
 
-        STYLES.iter().any(|style| style.eq_ignore_ascii_case(word))
+        STYLES.iter().any(|style| style_matches(style, word))
+    }
+
+    /// Pango's own comparison: case aside, a `-` in the table may be left out of the
+    /// word, so `Semibold` is `Semi-Bold`.
+    fn style_matches(style: &str, word: &str) -> bool {
+        let mut word = word.bytes().map(|b| b.to_ascii_lowercase()).peekable();
+
+        for b in style.bytes() {
+            if word.peek() == Some(&b) {
+                word.next();
+            } else if b != b'-' {
+                return false;
+            }
+        }
+
+        word.next().is_none()
     }
 
     /// `gsettings get` prints `'Cantarell 11'`. The quote is only stripped when it is on
