@@ -241,22 +241,28 @@ pub(crate) fn build_work(job: BuildJob) -> BuildAnswer {
 /// `directory`, and readable as source. Keyed by cargo's spelling.
 ///
 /// cargo spells a file relative to the workspace root, which is `directory` only when that
-/// is not a member of a larger workspace, so the path is the root joined with it. One
+/// is not a member of a larger workspace, so the path is the root joined with it. A root
+/// above `directory` is spelled as cargo spells it, symlinks resolved, so a file under the
+/// directory is put back under it as the reader spelled it. One
 /// outside `directory` -- a dependency's, out of the registry -- is a file the app has no
 /// business opening, and one the source cache would refuse is a target that would do
 /// nothing when pressed. Both questions are answered here, on the worker, and one `stat`
 /// per **file** however many diagnostics name it.
 fn openable(directory: &Path, diagnostics: &[Diagnostic]) -> HashMap<String, PathBuf> {
     let root = cargo::workspace_root(directory);
-    // The root is found by the text of `directory`, so the two are compared by their text
-    // too, with any `..` the reader typed taken out of both.
+    // Compared by their text, with any `..` the reader typed taken out of both.
     let under = cargo::lexical(directory);
+    let real = cargo::as_cargo_names_it(directory);
     let mut named: HashMap<String, PathBuf> = HashMap::new();
     for span in diagnostics.iter().filter_map(|one| one.span.as_ref()) {
         if named.contains_key(&span.file) {
             continue;
         }
         let file = cargo::lexical(&root.join(&span.file));
+        let file = match file.strip_prefix(&real) {
+            Ok(rest) => under.join(rest),
+            Err(_) => file,
+        };
         if file.starts_with(&under) {
             named.insert(span.file.clone(), file);
         }

@@ -673,9 +673,11 @@ one. Both questions are the worker's (`openable`), asked once per distinct file 
 beside the run as `Builds::sources`, keyed by cargo's spelling so the row joins nothing. Asked at
 the row instead they were a `stat` per diagnostic per frame, for as long as the section was on
 screen, and a build says two hundred things as readily as two. The file and the directory are
-compared by their text, with `..` taken out of both (`cargo::lexical`): the root was found from the
-directory's text, and `canonicalize` would move a directory reached through a symlink out from
-under itself.
+compared by their text, with `..` taken out of both (`cargo::lexical`). The root is found from the
+directory as cargo names it, symlinks resolved, since that is where cargo walks up from: from a
+symlink to a member, the typed path's ancestors never reached the root. A file under the directory
+in that spelling is put back under the typed one, so a directory reached through a symlink keeps
+its files.
 
 **How a place is spelled is a separate question**, and the row's own: a path cargo spelled
 relative is a file of the workspace, short already, and is drawn whole, and an absolute one is

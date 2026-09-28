@@ -317,6 +317,48 @@ fn a_members_diagnostics_are_read_from_the_workspace_root() {
     );
 }
 
+/// From a symlink to a member, the root is found where cargo finds it, and a file under
+/// the member is offered under the directory as the reader spelled it.
+#[cfg(unix)]
+#[test]
+fn a_member_reached_through_a_symlink_has_its_diagnostics_opened() {
+    let root = Temporary::fresh_directory("openable-link");
+    let member = root.join("ws/app");
+    std::fs::create_dir_all(member.join("src")).expect("the directory");
+    std::fs::write(member.join("src/lib.rs"), "\n").expect("the file");
+    std::fs::write(
+        member.join(cargo::MANIFEST),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the member manifest");
+    std::fs::write(
+        root.join("ws").join(cargo::MANIFEST),
+        "[workspace]\nmembers = [\"app\"]\n",
+    )
+    .expect("the root manifest");
+    let link = root.join("link");
+    std::os::unix::fs::symlink(&member, &link).expect("a symlink");
+
+    let named = openable(
+        &link,
+        &[Diagnostic {
+            level: Level::Error,
+            message: "mismatched types".to_owned(),
+            rendered: "error: mismatched types".to_owned(),
+            span: Some(cargo::Span {
+                file: "app/src/lib.rs".to_owned(),
+                line: 1,
+                column: 1,
+            }),
+        }],
+    );
+
+    assert_eq!(
+        named,
+        HashMap::from([("app/src/lib.rs".to_owned(), link.join("src/lib.rs"))]),
+    );
+}
+
 /// The two panes that draw a build say the same words about the same one. Both ask
 /// `cargo::Run` (`agents/Scratchpad.md`), which is the whole of why: a summary written
 /// twice drifts, and these two are meant to be read as the same line in two places.

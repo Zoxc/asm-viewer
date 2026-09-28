@@ -610,6 +610,33 @@ fn a_package_that_is_its_own_workspace_stops_the_walk() {
     assert_eq!(profile_manifest(&named), other.join("Cargo.toml"));
 }
 
+/// cargo walks up from the directory as the kernel names it, symlinks resolved. From a
+/// symlink to a member, the typed path's ancestors never reach the root.
+#[cfg(unix)]
+#[test]
+fn a_member_reached_through_a_symlink_finds_its_root() {
+    let root = Temporary::fresh_directory("cargo-test");
+    let workspace = root.join("ws");
+    let member = workspace.join("member");
+    fs::create_dir_all(&member).expect("the directory");
+    fs::write(
+        workspace.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"member\"]\n\n[profile.release]\ndebug = 1\n",
+    )
+    .expect("the root manifest");
+    fs::write(
+        member.join("Cargo.toml"),
+        "[package]\nname = \"member\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the member manifest");
+    let link = root.join("link");
+    std::os::unix::fs::symlink(&member, &link).expect("a symlink");
+
+    assert_eq!(profile_manifest(&link), workspace.join("Cargo.toml"));
+    assert_eq!(workspace_root(&link), workspace);
+    assert!(debug_lines(&profile_manifest(&link), Profile::Release));
+}
+
 /// A workspace that excludes the package is not its root: cargo passes over it, and the
 /// package is a workspace of its own. Its profiles are its own and its diagnostics are
 /// relative to it, and the offer to add lines must not edit the workspace above it.

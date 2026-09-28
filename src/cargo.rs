@@ -290,7 +290,9 @@ fn outcome(stdout: &str, stderr: &str, success: bool, directory: &Path) -> Run {
 /// `GetFullPathNameW` and answers in exactly that form. `fs::canonicalize` there answers
 /// verbatim (`\\?\C:\work\app`) and resolves the junction cargo kept, so it agrees with
 /// cargo on neither.
-fn as_cargo_names_it(directory: &Path) -> PathBuf {
+///
+/// It is also where cargo starts its walk up to the workspace root ([`profile_manifest`]).
+pub fn as_cargo_names_it(directory: &Path) -> PathBuf {
     #[cfg(windows)]
     let full = std::path::absolute(directory);
     #[cfg(not(windows))]
@@ -360,6 +362,11 @@ pub fn manifest(directory: &Path) -> Option<PathBuf> {
 /// `[workspace]` table that does not exclude the directory ([`excludes`]), and the
 /// directory's own when there is no such ancestor.
 ///
+/// Each is found from the directory as cargo names it ([`as_cargo_names_it`]), not as it was
+/// typed: from a symlink to a member, the typed path's ancestors never reach the root. So a
+/// root above the directory comes back in cargo's spelling, and the directory's own manifest
+/// in the typed one.
+///
 /// What is **not** checked is whether that root's `members` really cover this directory:
 /// cargo refuses to build a package its ancestor workspace neither claims nor excludes, so
 /// there is no build there to ask about.
@@ -368,6 +375,7 @@ pub fn manifest(directory: &Path) -> Option<PathBuf> {
 /// to [`debug_lines`] and [`add_debug_lines`] rather than worked out again by each.
 pub fn profile_manifest(directory: &Path) -> PathBuf {
     let own = directory.join(MANIFEST);
+    let real = as_cargo_names_it(directory);
     if let Some(manifest) = read_manifest(&own) {
         if manifest.contains_key("workspace") {
             return own;
@@ -377,21 +385,21 @@ pub fn profile_manifest(directory: &Path) -> PathBuf {
             .get("package")
             .and_then(|package| package.get("workspace"))
             .and_then(toml::Value::as_str)
-            .map(|root| lexical(&directory.join(root)).join(MANIFEST));
+            .map(|root| lexical(&real.join(root)).join(MANIFEST));
         if let Some(named) = named.filter(|named| named.is_file()) {
             return named;
         }
     }
 
     // Bounded by the path itself, which is what makes the walk up finite.
-    directory
-        .ancestors()
+    let real_own = real.join(MANIFEST);
+    real.ancestors()
         .skip(1)
         .find(|ancestor| {
             read_manifest(&ancestor.join(MANIFEST))
                 .as_ref()
                 .and_then(|read| read.get("workspace"))
-                .is_some_and(|workspace| !excludes(workspace, ancestor, &own))
+                .is_some_and(|workspace| !excludes(workspace, ancestor, &real_own))
         })
         .map_or(own, |ancestor| ancestor.join(MANIFEST))
 }
