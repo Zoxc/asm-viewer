@@ -177,15 +177,11 @@ impl Panic {
     }
 
     /// The record as it is written down: a header line that reads on its own, then the
-    /// backtrace indented under it so one panic is one block.
+    /// message and the backtrace indented under it, every line of both, so one panic is
+    /// one block.
     fn record(&self) -> String {
-        let mut record = format!(
-            "{} {}\n  {}\n",
-            stamp(self.at),
-            self.header(&self.location),
-            self.message
-        );
-        for line in self.backtrace.lines() {
+        let mut record = format!("{} {}\n", stamp(self.at), self.header(&self.location));
+        for line in self.message.lines().chain(self.backtrace.lines()) {
             record.push_str("  ");
             record.push_str(line);
             record.push('\n');

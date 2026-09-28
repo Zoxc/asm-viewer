@@ -52,6 +52,19 @@ fn a_run_s_panics_are_appended_to_one_file() {
     );
 }
 
+/// A message of several lines is indented whole, a blank line in it included, so no line
+/// of it reads as the header of a record or as the gap between two.
+#[test]
+fn every_line_of_a_message_is_indented_under_its_header() {
+    let panic = panic_at(1_757_000_000, "the rules:\n\n1. one");
+
+    assert_eq!(
+        panic.record(),
+        "2025-09-04 15:33:20 the analysis worker panicked at src/ui/analyzed.rs:214:9\n  \
+         the rules:\n  \n  1. one\n  0: one\n  1: two\n\n"
+    );
+}
+
 /// The files a run can be shown, newest first, out of a directory that also holds things
 /// this did not write. By name and not by the filesystem's times: the name is the stamp of
 /// the run's first panic, so it sorts, and it survives a file being copied about.
