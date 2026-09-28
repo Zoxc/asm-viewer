@@ -76,13 +76,18 @@ impl ProjectId {
         }
     }
 
-    /// The id this text spells, or `None` when it is not sixteen hex digits. Strict, since
-    /// what it guards is whether a session is believed: a text this build did not write is
-    /// simply not this project's, which is the answer a mismatch already gets.
+    /// The id this text spells, or `None` when it is not sixteen lowercase hex digits.
+    /// Strict, since what it guards is whether a session is believed: a text this build
+    /// did not write is simply not this project's, which is the answer a mismatch already
+    /// gets. So no sign and no uppercase, both of which `from_str_radix` takes.
     pub(super) fn parse(text: &str) -> Option<ProjectId> {
-        match text.len() {
-            16 => u64::from_str_radix(text, 16).ok().map(ProjectId),
-            _ => None,
+        let digits = text.len() == 16
+            && text
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        match digits {
+            true => u64::from_str_radix(text, 16).ok().map(ProjectId),
+            false => None,
         }
     }
 }

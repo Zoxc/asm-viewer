@@ -546,6 +546,9 @@ fn an_id_is_sixteen_hex_digits() {
         "0123456789abcdefg",
         "0123456789ABCDEF ",
         "zzzzzzzzzzzzzzzz",
+        // What `from_str_radix` takes and this build never writes.
+        "+123456789abcdef",
+        "0123456789ABCDEF",
     ] {
         assert_eq!(ProjectId::parse(bad), None, "{bad}");
     }
