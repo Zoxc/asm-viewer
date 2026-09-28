@@ -162,17 +162,22 @@ impl Linked {
         held
     }
 
-    /// Drop a refusal, so the next turn of [`use_linking`] asks again. Whether anything
-    /// changed, so the caller writes only then.
+    /// Drop a refusal, and the question still in flight, so the next turn of
+    /// [`use_linking`] asks again. Whether anything changed, so the caller writes only
+    /// then.
     ///
     /// Called where the server says it has gone quiet, and not on every word it says: a
     /// server that keeps refusing would otherwise be asked in a tight loop.
+    ///
+    /// **The question in flight goes too**, for [`Linked::forget_answer`]'s reason: the
+    /// server's words and the worker's answers come down two channels, so a refusal can
+    /// land after this and be held until the server next goes quiet.
     pub(crate) fn forget_refusal(&mut self) -> bool {
         let refused = matches!(&self.found, Some((_, _, None)));
         if refused {
             self.found = None;
         }
-        refused
+        refused | self.asked.take().is_some()
     }
 }
 

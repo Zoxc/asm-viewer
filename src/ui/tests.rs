@@ -11129,6 +11129,26 @@ fn a_question_on_its_way_is_not_asked_again() {
     assert!(linked.pending(&Arc::from(Path::new("/p/src/other.rs")), 1));
 }
 
+/// **A refusal that lands after the server went quiet is not held.** The news and the
+/// refusal come down two channels, so the news can land first and find nothing to drop;
+/// the refusal after it would keep the file from being asked until the server next went
+/// quiet.
+#[test]
+fn a_refusal_that_lands_after_the_server_went_quiet_is_not_held() {
+    let file: Arc<Path> = Arc::from(Path::new("/p/src/main.rs"));
+    let mut linked = Linked::default();
+    linked.asking(ticket(1, 1), file.clone());
+    assert!(linked.forget_refusal(), "the question in flight was kept");
+    assert!(
+        !linked.answer_refused(ticket(1, 1), file.clone()),
+        "the late refusal was taken"
+    );
+    assert!(
+        linked.pending(&file, 1),
+        "the file is not asked about again"
+    );
+}
+
 /// **An answer to a question asked before the server settled is not taken**, however late
 /// it arrives. The news that the server has settled and the answer come down two channels
 /// with nothing ordering them, so the news can land first and find nothing to drop; the
