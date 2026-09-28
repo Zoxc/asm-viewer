@@ -1213,11 +1213,12 @@ fn use_kept_place(
             keep_spots(&step, &built, planted, marked, marks_at, &is_open);
 
             let at = At::of(&step, &built, code_at, state.known, top, height);
-            state.known = at.known;
 
             // A move made and not seen arrive: issued again until a run finds the view
             // there, and left where it is on a run that switches tab or counts the rows
-            // afresh, which chooses its own target below.
+            // afresh, which chooses its own target below. The map's place is not taken as
+            // seen on a run that stops here, so one written meanwhile is answered once the
+            // move is done.
             if let Some(mut moving) = state.moving {
                 if moving.arrived(&built, at.top.row) {
                     state.moving = None;
@@ -1231,6 +1232,7 @@ fn use_kept_place(
                 }
             }
 
+            state.known = at.known;
             let target = target_of(&state, &step, &built, &at, code_at, &is_open);
 
             if step.switching {
