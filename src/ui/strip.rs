@@ -577,7 +577,8 @@ impl Component for TabBar {
             // On the global move because the pointer is over a chip, not over the strip's
             // own box, for the whole of the gesture.
             .on_global_pointer_move(move |e: Event<PointerEventData>| {
-                bar.drag_edge(drag.peek().is_some(), e.global_location().x as f32)
+                let at = e.global_location();
+                bar.drag_edge(drag.peek().is_some(), at.x as f32, at.y as f32)
             })
             .child(
                 rect()
@@ -587,7 +588,8 @@ impl Component for TabBar {
                     // the offset below a scroll rather than a row hanging out of the window.
                     .overflow(Overflow::Clip)
                     .on_sized(move |e: Event<SizedEventData>| {
-                        bar.viewport_sized(e.area.min_x(), e.area.max_x())
+                        bar.viewport_sized(e.area.min_x(), e.area.max_x());
+                        bar.band_sized(e.area.min_y(), e.area.max_y());
                     })
                     .on_wheel(move |e: Event<WheelEventData>| {
                         bar.wheel(e.delta_x as f32, e.delta_y as f32)

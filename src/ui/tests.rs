@@ -2504,6 +2504,7 @@ fn bar_rules() -> (TestingRunner, Bar) {
                     Rules(Bar {
                         places: State::create(Chips::default()),
                         viewport: State::create(None),
+                        band: State::create(None),
                         content: State::create(0.0),
                         offset: State::create(0.0),
                         shape: State::create(0),
@@ -2696,17 +2697,18 @@ fn the_wheel_over_the_strip_scrolls_it_on_whichever_axis_it_arrives() {
 fn a_drag_held_near_either_end_scrolls_the_strip_towards_it() {
     let (_test, bar) = bar_rules();
     bar.viewport_sized(0.0, 200.0);
+    bar.band_sized(0.0, 30.0);
     bar.content_sized(500.0);
     bar.scroll_by(-100.0);
 
-    bar.drag_edge(false, DRAG_EDGE / 2.0);
+    bar.drag_edge(false, DRAG_EDGE / 2.0, 10.0);
     assert_eq!(
         *bar.offset.peek(),
         -100.0,
         "a pointer carrying nothing scrolled the strip"
     );
 
-    bar.drag_edge(true, DRAG_EDGE / 2.0);
+    bar.drag_edge(true, DRAG_EDGE / 2.0, 10.0);
     let back = *bar.offset.peek();
     assert!(
         back > -100.0,
@@ -2715,25 +2717,52 @@ fn a_drag_held_near_either_end_scrolls_the_strip_towards_it() {
 
     // Just past that end's own band, and in the middle: each asked on its own, or a rule
     // that scrolled towards whichever half the pointer is in would cancel itself out.
-    bar.drag_edge(true, DRAG_EDGE + 1.0);
+    bar.drag_edge(true, DRAG_EDGE + 1.0, 10.0);
     assert_eq!(
         *bar.offset.peek(),
         back,
         "a drag held just past the near end scrolled the strip"
     );
-    bar.drag_edge(true, 100.0);
+    bar.drag_edge(true, 100.0, 10.0);
     assert_eq!(
         *bar.offset.peek(),
         back,
         "a drag held in the middle scrolled the strip"
     );
 
-    bar.drag_edge(true, 200.0 - DRAG_EDGE / 2.0);
+    bar.drag_edge(true, 200.0 - DRAG_EDGE / 2.0, 10.0);
     let on = *bar.offset.peek();
     assert!(
         on < back,
         "a drag held at the far end did not scroll the strip on: {back} to {on}"
     );
+}
+
+/// Only a drag held inside the strip scrolls it: the sidebar to its left, whatever is to
+/// its right and the panes under it are all nearer one end than the other.
+///
+/// Fails with the strip's box left out of `drag_edge`.
+#[test]
+fn a_drag_held_outside_the_strip_does_not_scroll_it() {
+    let (_test, bar) = bar_rules();
+    bar.viewport_sized(300.0, 500.0);
+    bar.band_sized(0.0, 30.0);
+    bar.content_sized(800.0);
+    bar.scroll_by(-100.0);
+
+    for (x, y, place) in [
+        (10.0, 10.0, "left of the strip"),
+        (890.0, 10.0, "right of the strip"),
+        (300.0 + DRAG_EDGE / 2.0, 200.0, "under the strip's start"),
+        (500.0 - DRAG_EDGE / 2.0, 200.0, "under the strip's end"),
+    ] {
+        bar.drag_edge(true, x, y);
+        assert_eq!(
+            *bar.offset.peek(),
+            -100.0,
+            "a drag held {place} scrolled the strip"
+        );
+    }
 }
 
 /// How many chips draw the rule saying a drop would land there.

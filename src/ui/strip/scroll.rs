@@ -25,6 +25,7 @@ pub(super) fn use_bar() -> Bar {
     Bar {
         places: use_consume::<Chipped>().0,
         viewport: use_state(|| None),
+        band: use_state(|| None),
         content: use_state(|| 0.0f32),
         // Read as well as written: the row of chips is drawn at this offset, so the bar
         // has to be woken when it changes.
@@ -57,6 +58,8 @@ pub(crate) struct Bar {
     pub(crate) places: State<Chips>,
     /// The two sides of the strip: what a chip has to be inside to be in view.
     pub(crate) viewport: State<Option<(f32, f32)>>,
+    /// The top and bottom of the strip, which a drag has to be between to scroll it.
+    pub(crate) band: State<Option<(f32, f32)>>,
     /// How wide the chips are altogether.
     pub(crate) content: State<f32>,
     /// How far the row of chips is slid to the left, which is never positive.
@@ -108,6 +111,12 @@ impl Bar {
         self.reshaped();
     }
 
+    /// Where the strip's top and bottom are in the window: what [`Bar::drag_edge`] asks.
+    pub(crate) fn band_sized(self, min_y: f32, max_y: f32) {
+        let mut band = self.band;
+        band.set_if_modified(Some((min_y, max_y)));
+    }
+
     /// How wide the chips are altogether, which is what says how far the strip may be
     /// scrolled. A bar that has lost a chip may now fit the window: a scroll of nothing
     /// puts the offset back inside the new floor, which [`Bar::scroll_by`] clamps against
@@ -133,16 +142,21 @@ impl Bar {
         self.scroll_by(by);
     }
 
-    /// A drag held near either end of the strip scrolls it towards that end, `x` being
-    /// where the pointer is in the window. It is the only way to reach the far end while
-    /// carrying a tab, and a pointer held anywhere else moves nothing.
-    pub(crate) fn drag_edge(self, dragging: bool, x: f32) {
+    /// A drag held inside the strip near either end scrolls it towards that end, `x` and
+    /// `y` being where the pointer is in the window. It is the only way to reach the far
+    /// end while carrying a tab, and a pointer held anywhere else moves nothing: the
+    /// sidebar left of the strip and the panes under it included.
+    pub(crate) fn drag_edge(self, dragging: bool, x: f32, y: f32) {
         if !dragging {
             return;
         }
-        let Some((left, right)) = *self.viewport.peek() else {
+        let (Some((left, right)), Some((top, bottom))) = (*self.viewport.peek(), *self.band.peek())
+        else {
             return;
         };
+        if !(left..=right).contains(&x) || !(top..=bottom).contains(&y) {
+            return;
+        }
         if x < left + DRAG_EDGE {
             self.scroll_by(DRAG_STEP);
         } else if x > right - DRAG_EDGE {

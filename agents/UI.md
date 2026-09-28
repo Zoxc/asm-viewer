@@ -773,7 +773,9 @@ where that row has been slid to, and three things move it. The **wheel** over th
 axis it comes on -- a bar has no second one, and freya's own view reads a plain wheel as vertical.
 **The tab on screen**, brought into view when it changes and when the bar takes a new shape
 (`use_reveal`). And a **drag held near either end**, which is the only way to reach the far end while
-carrying a tab.
+carrying a tab. It is asked on the global move, the pointer being over a chip rather than the
+strip's own box, so the strip's box is checked by hand: held over the sidebar to its left, the
+drag was nearer the start than the end too.
 
 Three things about that are worth keeping. Where the chips are is **measured** (`on_sized` per chip,
 per strip, per row) and not worked out, a chip being as wide as its name. Those measurements are
