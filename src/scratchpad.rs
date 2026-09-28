@@ -955,12 +955,21 @@ pub fn flush() {
 /// the process's.
 fn flush_where(under: impl Fn(&Path) -> bool) {
     let _writing = writing();
-    let mut owed = owed();
-    for (directory, owing) in owed.iter_mut().filter(|(directory, _)| under(directory)) {
-        let Owed::Due(scratchpad) = std::mem::replace(owing, Owed::Written) else {
-            continue;
-        };
-        if let Err(failure) = scratchpad.write_package(directory) {
+    // Taken out of `OWED` and written once it is let go: the UI thread takes it to owe a
+    // package and must not wait on a write. Each is marked written as it is taken, so what
+    // is owed meanwhile is not written over it.
+    let due: Vec<(PathBuf, Scratchpad)> = owed()
+        .iter_mut()
+        .filter(|(directory, _)| under(directory))
+        .filter_map(
+            |(directory, owing)| match std::mem::replace(owing, Owed::Written) {
+                Owed::Due(scratchpad) => Some((directory.clone(), scratchpad)),
+                Owed::Written => None,
+            },
+        )
+        .collect();
+    for (directory, scratchpad) in due {
+        if let Err(failure) = scratchpad.write_package(&directory) {
             log::warn!("could not save {}: {failure}", directory.display());
         }
     }
