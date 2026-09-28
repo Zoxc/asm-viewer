@@ -242,8 +242,8 @@ pub(crate) const NOTICE_PAD: f32 = 8.0;
 /// A `const` and not a function of the font, unlike [`field_label_width`] above it:
 /// six times the size *is* that column's 72, where this is 76 and the one under it 52,
 /// neither of which is a whole share of the 12 px the interface font starts at. They are
-/// fitted to what is drawn in them, the way [`LINE_NUMBER_WIDTH`] is, so a multiplier here
-/// would be invented rather than read off.
+/// fitted to what is drawn in them, so a multiplier here would be invented rather than
+/// read off.
 pub(crate) const CLEAR_CELL_WIDTH: f32 = 76.0;
 
 /// The column the font size is written in, between the stepper's two buttons. Fixed, so
@@ -291,9 +291,15 @@ pub(crate) fn source_line_number_width() -> f32 {
 /// nobody has asked to be able to drag.
 pub(crate) const PAD_LIST_WIDTH: f32 = 150.0;
 
-/// The column a Search hit's line number is written in, so the lines under one file start
-/// at the same x whether the number has two digits or five.
-pub(crate) const LINE_NUMBER_WIDTH: f32 = 38.0;
+/// The column a Search or Locations hit's line number is written in, so the lines under
+/// one file start at the same x whether the number has two digits or five.
+///
+/// [`field_label_width`]'s reasoning: the number is drawn in the interface font, so the
+/// column follows it. Five digits of about 0.55 of the size each, with some air to their
+/// left. It was a fixed 38 px, which is what this comes to at the 12 px the font starts at.
+pub(crate) fn line_number_width() -> f32 {
+    (fonts().ui.size() * 3.2).round()
+}
 
 /// The size the short format tag is drawn at: the interface font, a sixth smaller, so the
 /// tag recedes behind the name beside it.

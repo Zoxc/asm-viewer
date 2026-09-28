@@ -243,7 +243,7 @@ fn row_children<T: Place>(row: &Row<T>) -> Vec<Element> {
         Row::Item { item, .. } => vec![
             label()
                 .text(item.line().to_string())
-                .width(Size::px(LINE_NUMBER_WIDTH))
+                .width(Size::px(line_number_width()))
                 .text_align(TextAlign::Right)
                 .color(palette().address_fg)
                 .max_lines(1)
