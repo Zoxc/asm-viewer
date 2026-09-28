@@ -39465,6 +39465,39 @@ fn a_push_onto_one_trail_draws_no_other_chip() {
     );
 }
 
+/// **A tab moved along the bar draws no chip.** freya pairs children by key only among
+/// siblings, so the key has to be on the outermost element a chip is wrapped in: on the
+/// chip inside it, every chip past the first moved place was dropped and mounted again.
+///
+/// Fails with the key put back on `TabHeader`.
+#[test]
+fn a_tab_moved_along_the_bar_draws_no_chip() {
+    let (mut test, states) = TestingRunner::new(
+        bar_harness,
+        (900., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let file = |name: &str| Document::Source(Arc::from(Path::new(&format!("/src/{name}.rs"))));
+    for name in ["a", "b", "c", "d"] {
+        open_document(states.open, states.visits, file(name), Reach::NewTab);
+    }
+    let ids = states.open.ids();
+    let mut strip = states.open.strip;
+    // The tab on screen stays where it is, so no chip's mark changes.
+    strip.write().raise(Tab::Document(ids[0]));
+    settle(&mut test);
+
+    let before = strip::chips_drawn();
+    strip.write().move_to(Tab::Document(ids[3]), 1);
+    settle(&mut test);
+    assert_eq!(
+        strip::chips_drawn() - before,
+        0,
+        "a move drew again the chips it shifted"
+    );
+}
+
 /// **An ask for the keyboard draws no chip.** The chip on screen reads the boxes the
 /// keyboard can be in, to mark whether it is in the tab; the ask made by every chip pressed
 /// and every row that opens a tab is a state of its own, so making one and dropping it

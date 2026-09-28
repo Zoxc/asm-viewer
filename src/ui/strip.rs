@@ -535,15 +535,15 @@ impl Component for TabBar {
             .enumerate()
             .map(|(index, tab)| {
                 let tab = *tab;
-                // Keyed by the tab, so a tab that moves takes its hover, its tooltip and
-                // its open menu with it instead of leaving them on whatever took its place.
                 let header = TabHeader {
                     tab,
                     active: Some(tab) == active,
                     landing: over == Some(index),
                     key: DiffKey::None,
-                }
-                .key(tab);
+                };
+                // Keyed by the tab, so a tab that moves takes its hover, its tooltip and
+                // its open menu with it instead of leaving them on whatever took its place.
+                // On the zone, the outermost element: freya pairs keys among siblings only.
                 drop_zone(
                     strip,
                     drag,
@@ -559,6 +559,8 @@ impl Component for TabBar {
                         )
                         .into_element(),
                 )
+                .key(tab)
+                .into_element()
             })
             .collect();
 
@@ -611,7 +613,8 @@ impl Component for TabBar {
                                         .width(Size::px(PAST_LAST_TAB))
                                         .height(Size::fill())
                                         .into_element(),
-                                ),
+                                )
+                                .into_element(),
                             )
                             .into_element(),
                     ),
@@ -635,7 +638,7 @@ fn drop_zone(
     landing: State<Option<usize>>,
     position: usize,
     children: Element,
-) -> Element {
+) -> Rect {
     let mut strip = strip;
     let mut landing = landing;
     rect()
@@ -655,7 +658,6 @@ fn drop_zone(
             landing.set_if_modified(None);
             strip.write().move_to(tab, position);
         }))
-        .into_element()
 }
 
 /// The copy of a chip that follows the cursor while it is being dragged: the chip itself,

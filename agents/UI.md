@@ -591,8 +591,10 @@ is `Copy` -- a list's key, a menu row's capture -- and a `Document` is not. A cl
 bar through intermediate states: `Strip::close` takes the predicate, works the landing out with
 `tabs::landing` before anything is removed, and leaves the tab on screen alone when it survives.
 
-A tab's header is `chip`, hover state and × included, wrapped in a `TabHeader` that owns the hover
-and is keyed by its tab. **One `chip` draws every one of them**, the copy that follows the cursor
+A tab's header is `chip`, hover state and × included, wrapped in a `TabHeader` that owns the hover.
+The key is the tab's, on the drop zone around it: freya pairs keys among siblings only, so a key on
+the header itself, under unkeyed wrappers, remounted every chip a move shifted
+(`a_tab_moved_along_the_bar_draws_no_chip`). **One `chip` draws every one of them**, the copy that follows the cursor
 while a tab is dragged included: what varies is a `Mark` -- a chip like any other, the tab on screen
 with whether the keyboard is inside it, or that copy -- so `DraggedChip` wraps `chip` rather than
 spelling the frame a second time, as `dock.rs` draws a panel's from `panel_label`. Where a drop
