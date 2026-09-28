@@ -448,7 +448,8 @@ fn a_project_file_moved_with_its_tree_points_at_the_new_one() {
 }
 
 /// A project file linked in from elsewhere is about the tree its target sits in, not the
-/// link's: a save through the link and a read of the target agree on every path.
+/// link's: a save through the link and a read of the target agree on every path. So is one
+/// linked by a relative target that climbs out with `..`, as `ln -s ../repo/...` makes.
 #[test]
 fn a_linked_project_file_is_relative_to_its_target() {
     let repo = directory();
@@ -456,23 +457,28 @@ fn a_linked_project_file_is_relative_to_its_target() {
     fs::create_dir_all(&repo).expect("creating the test directory");
     fs::create_dir_all(&elsewhere).expect("creating the second test directory");
     let target = repo.join("kernel.avproj");
-    let link = elsewhere.join("kernel.avproj");
-    std::os::unix::fs::symlink(&target, &link).expect("a symlink");
+    let climbing = Path::new("..")
+        .join(repo.file_name().expect("the directory's name"))
+        .join("kernel.avproj");
 
-    let project = Project {
-        details: Details {
-            directory: Some(repo.to_path_buf()),
-            ..Details::default()
-        },
-        binaries: vec![repo.join("target/debug/vmlinux")],
-        ..Project::default()
-    };
-    project.save_to(&anywhere(), &link).expect("saving");
+    for (n, linked) in [target.clone(), climbing].into_iter().enumerate() {
+        let link = elsewhere.join(format!("{n}.avproj"));
+        std::os::unix::fs::symlink(&linked, &link).expect("a symlink");
+        let project = Project {
+            details: Details {
+                directory: Some(repo.to_path_buf()),
+                ..Details::default()
+            },
+            binaries: vec![repo.join("target/debug/vmlinux")],
+            ..Project::default()
+        };
+        project.save_to(&anywhere(), &link).expect("saving");
 
-    let text = fs::read_to_string(&target).expect("reading");
-    assert!(text.contains(r#""target/debug/vmlinux""#), "{text}");
-    assert_eq!(Project::load_from(&target), Ok(project.clone()));
-    assert_eq!(Project::load_from(&link), Ok(project));
+        let text = fs::read_to_string(&target).expect("reading");
+        assert!(text.contains(r#""target/debug/vmlinux""#), "{text}");
+        assert_eq!(Project::load_from(&target), Ok(project.clone()));
+        assert_eq!(Project::load_from(&link), Ok(project));
+    }
 }
 
 /// The split seen from the disk: each half in its own file, neither holding a word of the

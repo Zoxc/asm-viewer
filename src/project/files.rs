@@ -220,7 +220,7 @@ impl Project {
         let text = std::str::from_utf8(&data).map_err(|_| Reason::NotText)?;
         let mut project: Project =
             toml::from_str(text).map_err(|error| Reason::of(&error, text))?;
-        if let Some(directory) = crate::store::through_links(path).parent() {
+        if let Some(directory) = spelled_against(path).parent() {
             project.against(directory, Spelling::Working);
         }
         Ok(project)
@@ -230,11 +230,19 @@ impl Project {
     /// spells them. A copy, since what the app goes on holding is the absolute form.
     pub(super) fn save_to(&self, store: &Store, path: &Path) -> std::io::Result<()> {
         let mut stored = self.clone();
-        if let Some(directory) = crate::store::through_links(path).parent() {
+        if let Some(directory) = spelled_against(path).parent() {
             stored.against(directory, Spelling::Stored);
         }
         store.write_toml(path, &stored)
     }
+}
+
+/// The file a project file's paths are spelled against: the one its links name, with the
+/// `..` a relative link leaves taken out by text, as the project's own paths have theirs.
+/// Kept in, `other/../repo` shares no prefix with `repo`, so nothing under it was spelled
+/// relative.
+fn spelled_against(path: &Path) -> PathBuf {
+    crate::cargo::lexical(&crate::store::through_links(path))
 }
 
 /// A project that would not open: the file the reader asked for, and what was wrong with
