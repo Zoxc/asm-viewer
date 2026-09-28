@@ -544,11 +544,12 @@ pub(crate) fn copy_text(
     text: impl Fn(usize) -> Line,
 ) -> Option<String> {
     let picked = marks.of(pane).as_ref()?;
-    if picked.chars.is_empty() {
+    let chars = picked.chars.clamped(|row| text(row).len());
+    if chars.is_empty() {
         // Nothing selected is a caret, and the run of a caret is its own row.
-        Some(line(picked.chars.lead().row))
+        Some(line(chars.lead().row))
     } else {
-        Some(picked.chars.copy(text))
+        Some(chars.copy(text))
     }
 }
 
@@ -701,7 +702,7 @@ fn on_listing_key(
                     });
                 }
             }
-            Key::Named(NamedKey::Escape) => peel(marked, pane, &*file),
+            Key::Named(NamedKey::Escape) => peel(marked, pane, &*text, &*file),
             _ => {}
         }
     }
@@ -770,15 +771,22 @@ pub(crate) fn carried(picked: &Picked, map: impl Fn(usize) -> Option<usize>) -> 
 /// caret's row with it, and otherwise drop the run: Escape peels the selection back a
 /// layer at a time, as an editor's does, and the second press takes the place the panes
 /// point at each other through. The caret left is the anchor now, so the run is read in
-/// its row's file, which `file` answers.
-fn peel(marked: State<Marks>, pane: Pane, file: impl Fn(usize) -> Option<Arc<Path>>) {
+/// its row's file, which `file` answers. `text` is a row's text as it is drawn, which
+/// says whether a run past a row's end has anything in it.
+fn peel(
+    marked: State<Marks>,
+    pane: Pane,
+    text: impl Fn(usize) -> Line,
+    file: impl Fn(usize) -> Option<Arc<Path>>,
+) {
     let Some(picked) = marked.peek().of(pane).clone() else {
         return;
     };
-    let collapsed = picked.chars.collapsed();
+    let chars = picked.chars.clamped(|row| text(row).len());
+    let collapsed = chars.collapsed();
     let file = file(collapsed.anchor().row);
     update(marked, |marks| {
         *marks.of_mut(pane) =
-            (!picked.chars.is_empty()).then(|| Picked::settled(collapsed, file, picked.owed));
+            (!chars.is_empty()).then(|| Picked::settled(collapsed, file, picked.owed));
     });
 }

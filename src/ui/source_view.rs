@@ -223,6 +223,14 @@ impl Component for SourceList {
         // drives: a companion file beside a symbol drives none.
         let drives = (self.owner.driven_from() == Pane::Source).then_some(self.tab);
 
+        // A row's text as it is drawn: what the run's columns count through.
+        let text: Rc<dyn Fn(usize) -> Line> = Rc::new({
+            let drawn = self.source.clone();
+            move |index| source_line(&drawn, index)
+        });
+        // The run as the rows draw it: a column past a row's end is its end.
+        let chars = chars.map(|run| run.clamped(|row| text(row).len()));
+
         // The bar's chords, the step it asks for and the listing's own keys, all of it
         // wired once (`use_listing_keys`).
         let keys = use_listing_keys(
@@ -241,10 +249,7 @@ impl Component for SourceList {
                         source.0.line(index).to_owned()
                     }
                 }),
-                text: Rc::new({
-                    let drawn = self.source.clone();
-                    move |index| source_line(&drawn, index)
-                }),
+                text,
                 // Every run of this pane is a run of the file it is showing.
                 file: Rc::new({
                     let file = self.file.clone();

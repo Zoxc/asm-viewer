@@ -1446,10 +1446,23 @@ impl Component for InstructionList {
             .map(|run| data.studied.touching(run.rows(), 0))
             .unwrap_or_default();
 
+        // A row's text as it is drawn: what the run's columns count through. A separator
+        // is the blank line it is drawn as, so a run lifted out of the listing keeps the
+        // blocks apart on the way to the clipboard.
+        let text: Rc<dyn Fn(usize) -> Line> = Rc::new({
+            let (assembly, lanes) = (data.assembly().clone(), data.lanes().clone());
+            move |row| {
+                lanes
+                    .instruction_at(row)
+                    .map(|index| instruction_line(&assembly, index))
+                    .unwrap_or_default()
+            }
+        });
+        // The run as the rows draw it: a column past a row's end is its end.
+        let chars = chars.map(|run| run.clamped(|row| text(row).len()));
+
         // The bar's chords, the step it asks for and the listing's own keys, all of it
-        // wired once (`use_listing_keys`). A separator copies as the blank line it is
-        // drawn as, so a run lifted out of the listing keeps the blocks apart on the way
-        // to the clipboard.
+        // wired once (`use_listing_keys`).
         let on_key_down = use_listing_keys(
             at,
             marked,
@@ -1469,15 +1482,7 @@ impl Component for InstructionList {
                             .unwrap_or_default()
                     }
                 }),
-                text: Rc::new({
-                    let (assembly, lanes) = (data.assembly().clone(), data.lanes().clone());
-                    move |row| {
-                        lanes
-                            .instruction_at(row)
-                            .map(|index| instruction_line(&assembly, index))
-                            .unwrap_or_default()
-                    }
-                }),
+                text,
                 // The file the row's instruction was compiled from, as a press takes it.
                 file: Rc::new({
                     let (data, lanes) = (data.clone(), data.lanes().clone());

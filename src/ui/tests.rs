@@ -28837,6 +28837,73 @@ fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
     );
 }
 
+/// A run from the end of a row's text to [`END`] is a caret, the two being one place once
+/// clamped: Ctrl+C copies the caret's row, the row wears the caret's wash, and one Escape
+/// drops the run. A Shift+click in the gutter after a click past the text makes one.
+#[test]
+fn a_run_from_a_rows_end_to_end_is_a_caret() {
+    let picked = |chars: CharSelection| Picked {
+        chars,
+        dragging: false,
+        by_rows: false,
+        file: None,
+        owed: Owed::default(),
+    };
+    let at_end = |len: usize| {
+        CharSelection::at(Caret { row: 0, col: len }).extended(Caret {
+            row: 0,
+            col: crate::chars::END,
+        })
+    };
+    let marks = Marks {
+        assembly: Some(picked(at_end(10))),
+        source: None,
+    };
+    assert_eq!(
+        copy_text(
+            &marks,
+            Pane::Assembly,
+            |_| "0x10 mov eax, 1".to_owned(),
+            |_| Line::text("mov eax, 1")
+        )
+        .as_deref(),
+        Some("0x10 mov eax, 1")
+    );
+
+    let shown = shown_sum_to();
+    let (mut test, roots) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let mut marked = roots.doors.marked;
+    settle(&mut test);
+    // The press gives the box the keyboard.
+    let first = paragraphs(&test)[0].clone();
+    test.move_cursor(left_of(&first.0));
+    test.press_cursor(left_of(&first.0));
+    test.release_cursor(left_of(&first.0));
+    settle(&mut test);
+    marked.set(Marks {
+        assembly: Some(picked(at_end(first.1.len()))),
+        source: None,
+    });
+    settle(&mut test);
+    assert_eq!(
+        rects_with(&test, palette().cursor_row_bg).len(),
+        1,
+        "the caret's row is not washed"
+    );
+
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+    assert!(
+        marked.peek().assembly.is_none(),
+        "one Escape did not drop the caret"
+    );
+}
+
 /// A relocation link is a run of the row's own text: a sweep that crosses it selects it
 /// character by character, as it selects any other text, and a press on it still opens
 /// the target's tab.

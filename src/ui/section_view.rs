@@ -834,6 +834,17 @@ impl Component for SectionList {
             );
         }
 
+        // A row's text as it is drawn: what the run's columns count through.
+        let text: Rc<dyn Fn(usize) -> Line> = Rc::new({
+            let rows = built.clone();
+            move |row| {
+                rows.as_ref()
+                    .map(|built| code_line(built, row))
+                    .unwrap_or_default()
+            }
+        });
+        // The run as the rows draw it: a column past a row's end is its end.
+        let chars = chars.map(|run| run.clamped(|row| text(row).len()));
         // The bar's chords, the step it asks for and the listing's own keys, all of it
         // wired once (`use_listing_keys`). The step over an object's code is the walk
         // above's and not the hook's: `use_find_steps` leaves a bar with no listing alone.
@@ -852,14 +863,7 @@ impl Component for SectionList {
                             .unwrap_or_default()
                     }
                 }),
-                text: Rc::new({
-                    let rows = built.clone();
-                    move |row| {
-                        rows.as_ref()
-                            .map(|built| code_line(built, row))
-                            .unwrap_or_default()
-                    }
-                }),
+                text,
                 file: Rc::new({
                     let rows = built.clone();
                     move |row| rows.as_ref().and_then(|built| file_at(built, row))

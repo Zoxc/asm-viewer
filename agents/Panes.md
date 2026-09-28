@@ -1362,9 +1362,13 @@ Ctrl+C copies the characters where any are selected and otherwise the rows: the 
 own line, address and all, as an editor copies the line under a caret with nothing selected
 (`copy_text`, pure, so the rule is tested without a clipboard). Escape collapses the selection to
 its caret, and so the lit rows to the caret's row, and drops the run on a second press (`peel`);
-everything that drops a run drops its caret with it. Each row is handed what it draws of the run by
-its list (`RowChars::of`, which asks `CharSelection::of_row` with no width, so a row's prop changes
-only when an end moves on it), which is the reason `chars` is a row prop. The tests press on the
+everything that drops a run drops its caret with it. All three ask of the run **clamped** to its
+rows' text (`CharSelection::clamped`): a gutter Shift+click, Ctrl+A, a triple press and a sweep past
+the rows put an end at `END`, and against a caret at the text's end that is an empty run, which raw
+columns called a selection -- a copy of nothing, no caret wash, and an Escape that took two. Each
+row is handed what it draws of the run by its list, which clamps it first (`RowChars::of`, which
+asks `CharSelection::of_row` with no width, so a row's prop changes only when an end moves on it),
+which is the reason `chars` is a row prop. The tests press on the
 ends of a row's text so none measures a font.
 
 **The keyboard moves the caret** (`Motion`, `CharSelection::moved`, `src/chars.rs`; `move_caret` in

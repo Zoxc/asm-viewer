@@ -239,9 +239,25 @@ impl CharSelection {
     }
 
     /// Whether nothing is between the ends, which is what a click without a sweep leaves:
-    /// nothing to draw, and nothing to copy.
+    /// nothing to draw, and nothing to copy. Asked of a run [`clamped`](Self::clamped) to
+    /// its rows' text, where a column past the end is the end itself.
     pub fn is_empty(self) -> bool {
         self.anchor == self.lead
+    }
+
+    /// The run with each end's column clamped to its row's text, which `len` answers the
+    /// byte length of: a caret at a row's end and one at [`END`] are then the same caret,
+    /// so a run between the two is empty.
+    pub fn clamped(self, len: impl Fn(usize) -> usize) -> Self {
+        let clamp = |caret: Caret| Caret {
+            col: caret.col.min(len(caret.row)),
+            ..caret
+        };
+        CharSelection {
+            anchor: clamp(self.anchor),
+            lead: clamp(self.lead),
+            ..self
+        }
     }
 
     /// Where the run has got to: the end the caret is drawn at.
