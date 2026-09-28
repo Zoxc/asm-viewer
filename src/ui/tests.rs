@@ -43140,3 +43140,74 @@ fn call_row(symbol: &Symbol) -> usize {
         .expect("the symbol calls something");
     studied.lanes.row_of(call)
 }
+
+/// Directory A's build is nothing to say under directory B's manifest: neither one held
+/// when the box changes, nor one that lands after it. The binaries it wrote are its own
+/// business, and the rows would offer them as B's.
+#[test]
+fn a_build_of_another_directory_is_not_drawn_under_this_one() {
+    let (release, gate) = async_channel::unbounded::<()>();
+    let answer = move |job: BuildJob| match job.what {
+        BuildWhat::Build => {
+            let _ = gate.recv_blocking();
+            done(&job, built(&[job.directory.join("target/debug/olda")]))
+        }
+        _ => BuildAnswer::Read(Manifest {
+            path: Some(job.directory.join("Cargo.toml")),
+            profiles: None,
+            debug_lines: true,
+            edit_refused: None,
+        }),
+    };
+    let (mut test, roots, asking, _asks) = mount_project(answer);
+    let states = roots.states;
+    let mut proj = states.proj;
+    let reads = |directory: &'static str| {
+        move |_: &TestingRunner| {
+            states.build.peek().manifest.path == Some(Path::new(directory).join("Cargo.toml"))
+        }
+    };
+    let drawn_a = |test: &TestingRunner| {
+        labels(test)
+            .iter()
+            .any(|text| text.contains("/work/a/target/debug/olda"))
+    };
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+
+    // Held when the box changes.
+    proj.write().workspace_text = "/work/a".to_owned();
+    pump(&mut test, reads("/work/a"));
+    start_build(
+        states.build,
+        &jobs,
+        PathBuf::from("/work/a"),
+        Profile::Debug,
+    );
+    release.send_blocking(()).expect("the worker");
+    pump(&mut test, |_| !states.build.peek().building);
+    assert!(drawn_a(&test));
+    proj.write().workspace_text = "/work/b".to_owned();
+    pump(&mut test, reads("/work/b"));
+    settle(&mut test);
+    assert!(!drawn_a(&test), "{:?}", labels(&test));
+    assert!(states.build.peek().built.is_none());
+
+    // Landing after it. The read of B waits behind the build on the one worker.
+    proj.write().workspace_text = "/work/a".to_owned();
+    pump(&mut test, reads("/work/a"));
+    start_build(
+        states.build,
+        &jobs,
+        PathBuf::from("/work/a"),
+        Profile::Debug,
+    );
+    proj.write().workspace_text = "/work/b".to_owned();
+    settle(&mut test);
+    release.send_blocking(()).expect("the worker");
+    pump(&mut test, |test| {
+        !states.build.peek().building && reads("/work/b")(test)
+    });
+    settle(&mut test);
+    assert!(!drawn_a(&test), "{:?}", labels(&test));
+    assert!(states.build.peek().built.is_none());
+}

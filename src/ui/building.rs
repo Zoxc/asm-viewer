@@ -50,6 +50,9 @@ pub(crate) struct Builds {
     /// build says two hundred things as readily as two, each with the text the compiler
     /// rendered for it. [`Builds::finished`] wraps it once.
     pub(crate) built: Option<Arc<cargo::Run>>,
+    /// The directory [`Builds::built`] ran in. The Directory box can change after a build,
+    /// or while it runs, and one directory's build is nothing to say under another's.
+    pub(crate) ran_in: Option<PathBuf>,
     /// What the worker's last read of the manifest came back with.
     pub(crate) manifest: Manifest,
     /// What the build before this one produced. **The set a build replaces**, which is why
@@ -99,6 +102,20 @@ impl Builds {
             return false;
         }
         self.manifest = said;
+        true
+    }
+
+    /// Drop the last build where it ran in some other directory than `directory`: its
+    /// verdict, artifacts and diagnostics are not this one's. Whether it did, so the caller
+    /// writes only then ([`write_if`]). What it replaces next time is kept: that is the
+    /// project's, whichever directory the box names.
+    pub(crate) fn keep_only(&mut self, directory: Option<&Path>) -> bool {
+        if self.built.is_none() || self.ran_in.as_deref() == directory {
+            return false;
+        }
+        self.built = None;
+        self.ran_in = None;
+        self.sources = Arc::default();
         true
     }
 
@@ -198,7 +215,8 @@ pub(crate) enum BuildAnswer {
         run: cargo::Run,
         sources: HashMap<String, PathBuf>,
         /// The directory the build ran in. The Directory box can change while cargo runs,
-        /// so the box is not where the taker learns which files the build rewrote.
+        /// so the box is not where the taker learns which files the build rewrote, nor
+        /// which directory the build is about.
         directory: PathBuf,
     },
 }
@@ -403,6 +421,10 @@ fn finished(
     let open = project::binaries(&states.objects.peek());
     let mut next = build.peek().clone();
     let reopening = next.finished(run, sources, &open);
+    next.ran_in = Some(directory.to_owned());
+    // The binaries it wrote over are reopened all the same, below: they are stale
+    // whichever directory the box names now.
+    next.keep_only(states.proj.peek().workspace().as_deref());
     build.set(next);
 
     if reopening.is_empty() {

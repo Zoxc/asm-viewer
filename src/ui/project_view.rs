@@ -469,10 +469,11 @@ impl Component for CargoSection {
         // empties `Builds` and drops a read still on its way, and the page can stay up
         // across one to a project over the same directory.
         // A box emptied asks nothing, and what the last directory's manifest said goes: it
-        // is no longer about this project.
+        // is no longer about this project. So does the last build of another directory.
         use_side_effect_with_deps(&(directory.clone(), profile, stay), {
             let jobs = jobs.clone();
             move |(directory, profile, _): &(Option<PathBuf>, Profile, Stay)| {
+                write_if(build, |next| next.keep_only(directory.as_deref()));
                 let Some(directory) = directory.clone() else {
                     // Asked before it is written: a write notifies whether or not it
                     // changes anything.

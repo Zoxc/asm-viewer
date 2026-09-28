@@ -607,7 +607,10 @@ the same directory, and was left saying there was no `Cargo.toml`. A box emptied
 nothing, so the section sets the manifest back to the default itself: it went on naming the last
 directory's `Cargo.toml` under a project with none. For the same reason a read is taken only while
 the directory it read is still the project's: one queued behind a build lands long after the box
-was emptied or changed, and put the old manifest back.
+was emptied or changed, and put the old manifest back. The last build goes the same way: it is held
+with the directory it ran in and dropped when the box names another, whether the box changed after
+it or while it ran. Kept, one directory's verdict, artifacts and diagnostics were drawn under the
+next one's manifest. The binaries it wrote over are reopened all the same.
 
 **One worker thread, for the scratchpad's reason.** The work blocks, and it is one thread rather
 than several so the project's directory has a single writer -- the debug-lines edit cannot land
